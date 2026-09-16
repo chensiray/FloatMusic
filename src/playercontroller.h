@@ -6,6 +6,8 @@
 #include <QTimer>
 #include <QMediaDevices>
 #include <QVariantList>
+#include "playliststore.h"
+#include "musicapi.h"
 
 class PlayerController : public QObject {
     Q_OBJECT
@@ -24,6 +26,14 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList audioOutputs READ audioOutputs NOTIFY audioSettingsChanged)
     Q_PROPERTY(QString selectedOutput READ selectedOutput NOTIFY audioSettingsChanged)
     Q_PROPERTY(QString outputName READ outputName NOTIFY audioSettingsChanged)
+    Q_PROPERTY(QVariantList playlists READ playlists NOTIFY libraryChanged)
+    Q_PROPERTY(QVariantList tracks READ tracks NOTIFY libraryChanged)
+    Q_PROPERTY(QString activePlaylist READ activePlaylist NOTIFY libraryChanged)
+    Q_PROPERTY(QString currentTrack READ currentTrack NOTIFY changed)
+    Q_PROPERTY(QVariantList searchResults READ searchResults NOTIFY searchChanged)
+    Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
+    Q_PROPERTY(QString searchMessage READ searchMessage NOTIFY searchChanged)
+    Q_PROPERTY(QString apiBase READ apiBase NOTIFY searchChanged)
 public:
     explicit PlayerController(QObject *parent = nullptr);
     ~PlayerController() override;
@@ -42,6 +52,25 @@ public:
     QVariantList audioOutputs() const { return m_audioOutputs; }
     QString selectedOutput() const { return m_selectedOutput; }
     QString outputName() const { return m_outputName; }
+    QVariantList playlists() const { return m_library.playlists(); }
+    QVariantList tracks() const { return m_library.tracks(); }
+    QString activePlaylist() const { return m_library.activeId(); }
+    QString currentTrack() const { return m_currentTrack; }
+    QVariantList searchResults() const { return m_searchResults; }
+    bool searching() const { return m_searching; }
+    QString searchMessage() const { return m_searchMessage; }
+    QString apiBase() const { return m_api.baseUrl(); }
+    Q_INVOKABLE void setApiBase(const QString &url);
+    Q_INVOKABLE void search(const QString &keywords);
+    Q_INVOKABLE void addSearchResult(int index);
+    Q_INVOKABLE void createPlaylist(const QString &name);
+    Q_INVOKABLE void renamePlaylist(const QString &name);
+    Q_INVOKABLE void deletePlaylist();
+    Q_INVOKABLE void selectPlaylist(const QString &id);
+    Q_INVOKABLE void removeTrack(const QString &id);
+    Q_INVOKABLE void playTrack(const QString &id);
+    Q_INVOKABLE void previous();
+    Q_INVOKABLE void next();
     Q_INVOKABLE void setVolume(int volume);
     Q_INVOKABLE void selectOutput(const QString &id);
     Q_INVOKABLE void refreshOutputs();
@@ -55,7 +84,18 @@ public:
 signals:
     void changed();
     void audioSettingsChanged();
+    void libraryChanged();
+    void searchChanged();
 private:
+    void loadTrack(const QVariantMap &track, bool autoplay);
+    void step(int delta, bool automatic = false);
+    void syncQueue();
+    PlaylistStore m_library;
+    MusicApi m_api;
+    QVariantList m_searchResults;
+    QString m_currentTrack, m_searchMessage;
+    bool m_searching = false, m_autoplay = false, m_resolving = false, m_importing = false, m_online = false;
+    int m_loadGeneration = 0;
     void sync();
     void androidCommand(const QString &command, const QString &value = {});
     QMediaPlayer m_player;

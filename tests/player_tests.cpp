@@ -6,11 +6,13 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QQuickItem>
 #include <QQuickStyle>
 #include <QFontDatabase>
 #include <QMimeData>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QProcess>
 #include "playercontroller.h"
 
 class PlayerTests : public QObject {
@@ -18,6 +20,7 @@ class PlayerTests : public QObject {
 private slots:
     void initTestCase() {
         QStandardPaths::setTestModeEnabled(true);
+        QCoreApplication::setApplicationName("ui-tests-"+QUuid::createUuid().toString(QUuid::WithoutBraces));
         QQuickStyle::setStyle("Basic");
         // The headless plugin does not enumerate Windows system fonts.
         QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");
@@ -91,6 +94,16 @@ private slots:
         QVERIFY(controller.error().contains("30 MiB"));
         QVERIFY(controller.ready());
     }
+    void exitTerminatesProcess() {
+        for (const auto &action : {"--close-child", "--exit-button-child"}) {
+            QProcess child;
+            child.start(QCoreApplication::applicationFilePath(), {"-platform", "offscreen", action});
+            QVERIFY(child.waitForStarted());
+            QVERIFY(child.waitForFinished(10000));
+            QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+            QCOMPARE(child.exitCode(), 0);
+        }
+    }
     void qmlWindow() {
         PlayerController controller;
         QQmlApplicationEngine engine;
@@ -119,6 +132,15 @@ private slots:
         QTest::qWait(200);
         QVERIFY(window->height() > 500);
         if (!artifactDir.isEmpty()) QVERIFY(window->grabWindow().save(artifactDir + "/windows-expanded.png"));
+        QObject *tabBar = nullptr;
+        for (auto *object : window->findChildren<QObject *>())
+            if (QString::fromLatin1(object->metaObject()->className()).contains("TabBar")) { tabBar = object; break; }
+        QVERIFY(tabBar);
+        QVERIFY(tabBar->setProperty("currentIndex", 1));
+        QTest::qWait(100);
+        QVERIFY(window->findChild<QQuickItem *>("searchInput")->isVisible());
+        if (!artifactDir.isEmpty()) QVERIFY(window->grabWindow().save(artifactDir + "/windows-search.png"));
+        tabBar->setProperty("currentIndex", 0);
         QTemporaryDir files;
         QFile bogus(files.filePath("dragged.mp3"));
         QVERIFY(bogus.open(QIODevice::WriteOnly)); bogus.write("This is not music."); bogus.close();
@@ -130,8 +152,30 @@ private slots:
         QCoreApplication::sendEvent(window, &drop);
         QTRY_VERIFY(!controller.error().isEmpty());
         QCOMPARE(warnings.size(), 0);
+        QVERIFY(window->findChild<QObject *>("exitButton"));
+        // A window close must be accepted, not hidden into the icon as in 0.2.
+        QVERIFY(window->close());
+        QVERIFY(!window->isVisible());
     }
 };
-QTEST_MAIN(PlayerTests)
+int main(int argc, char **argv) {
+    QGuiApplication app(argc, argv);
+    if (app.arguments().contains("--close-child") || app.arguments().contains("--exit-button-child")) {
+        QStandardPaths::setTestModeEnabled(true); QCoreApplication::setApplicationName("exit-child");
+        QQuickStyle::setStyle("Basic");
+        PlayerController player; QQmlApplicationEngine engine; engine.rootContext()->setContextProperty("player", &player);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        if(engine.rootObjects().isEmpty())return 8;
+        auto *window=qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QTimer::singleShot(0,window,[window]{window->show();});
+        QTimer::singleShot(200,window,[window,&app]{
+            if(app.arguments().contains("--close-child"))window->close();
+            else {auto *button=window->findChild<QObject *>("exitButton");if(!button||!QMetaObject::invokeMethod(button,"clicked"))QCoreApplication::exit(7);}
+        });
+        QTimer::singleShot(5000,&app,[]{QCoreApplication::exit(9);});
+        return app.exec();
+    }
+    PlayerTests tests; return QTest::qExec(&tests,argc,argv);
+}
 #include "player_tests.moc"
 

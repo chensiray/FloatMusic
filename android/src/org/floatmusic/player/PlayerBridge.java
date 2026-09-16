@@ -37,7 +37,7 @@ public final class PlayerBridge {
                 if (service == null && a != null && command.equals("volume")) {
                     a.getSharedPreferences("audio", 0).edit().putInt("volume", Integer.parseInt(value)).apply(); idle(""); return;
                 }
-                if (service == null && a != null && (command.equals("outputs") || command.equals("output"))) { a.send(command, value); return; }
+                if (service == null && a != null && (command.equals("outputs") || command.equals("output") || command.equals("queue") || command.equals("track"))) { a.send(command, value); return; }
                 if (service != null) service.dispatch(command, value);
             } catch (Exception e) {
                 if (service != null) service.report("系统操作失败：" + e.getMessage());
