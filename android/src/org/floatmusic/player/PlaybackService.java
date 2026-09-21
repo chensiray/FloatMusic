@@ -46,7 +46,8 @@ public class PlaybackService extends Service {
     private Button overlayPlay;
     private SeekBar overlayProgress;
     private JSONArray queue = new JSONArray();
-    private JSONObject importedTrack = null;
+    private JSONObject importedTrack = null, loadedTrack = null;
+    private String quality = "standard", loadedQuality = "standard", actualFormat = "等待音频信息";
     private String currentTrack = "", apiBase = "";
     private int volume = 70;
     private boolean ducked = false;
@@ -70,7 +71,7 @@ public class PlaybackService extends Service {
         try {
             JSONObject saved = new JSONObject(getSharedPreferences("queue",MODE_PRIVATE).getString("data","{}"));
             queue = saved.optJSONArray("tracks"); if (queue == null) queue = new JSONArray();
-            apiBase = saved.optString("api");
+            apiBase = saved.optString("api"); quality = saved.optString("quality","standard");
             String imported=getSharedPreferences("queue",MODE_PRIVATE).getString("imported","");
             if(!imported.isEmpty())importedTrack=new JSONObject(imported);
         } catch (Exception ignored) { queue = new JSONArray(); }
@@ -119,10 +120,14 @@ public class PlaybackService extends Service {
             case "output": selectedOutput=value; refreshOutputs(); break;
             case "outputs": refreshOutputs(); break;
             case "queue":
-                try { JSONObject data = new JSONObject(value); queue = data.getJSONArray("tracks"); apiBase = data.optString("api");
+                try { JSONObject data = new JSONObject(value); queue = data.getJSONArray("tracks"); apiBase = data.optString("api"); quality = data.optString("quality","standard");
                     getSharedPreferences("queue",MODE_PRIVATE).edit().putString("data",value).apply();
                 } catch (Exception e) { report("歌单同步失败。"); } break;
             case "track": playTrack(value); break;
+            case "play":
+                try { JSONObject request = new JSONObject(value); playTrack(request.getJSONObject("track"), request.optBoolean("autoplay",true), request.optBoolean("preserve",false)); }
+                catch(Exception e) { report("播放请求无效："+e.getMessage()); } break;
+            case "theme": refreshOverlayTheme(); break;
             case "previous": step(-1, false); break;
             case "next": step(1, false); break;
             case "ackImport": importedTrack = null; getSharedPreferences("queue",MODE_PRIVATE).edit().remove("imported").apply(); break;
@@ -236,39 +241,57 @@ public class PlaybackService extends Service {
         });
     }
     private void playTrack(String id) {
-        if (busy) return;
-        for (int i=0;i<queue.length();i++) {
+        for(int i=0;i<queue.length();i++) {
             JSONObject track=queue.optJSONObject(i);
-            if (track != null && id.equals(track.optString("id"))) {
-                busy=true; error=""; int ticket=++generation; update();
-                if (!"netease".equals(track.optString("source"))) { prepare(track.optString("path"),track,true,false); return; }
-                final String endpoint=apiBase;
-                importer.execute(() -> {
-                    String address="", failure="";
-                    HttpURLConnection connection=null;
-                    try {
-                        if (endpoint.isEmpty()) throw new IOException("请先设置网易云 API 地址。");
-                        connection=(HttpURLConnection)new URL(endpoint+"/song/url/v1?id="+java.net.URLEncoder.encode(track.optString("songId"),"UTF-8")+"&level=standard").openConnection();
-                        connection.setConnectTimeout(15000); connection.setReadTimeout(15000);
-                        try(InputStream input=connection.getInputStream(); ByteArrayOutputStream output=new ByteArrayOutputStream()) {
-                            byte[] buffer=new byte[8192]; int n;
-                            while((n=input.read(buffer))!=-1) { output.write(buffer,0,n); if(output.size()>2*1024*1024) throw new IOException("API 响应过大。"); }
-                            JSONObject response=new JSONObject(output.toString("UTF-8"));
-                            if(response.optInt("code")!=200) throw new IOException("API 请求失败。");
-                            JSONObject song=response.getJSONArray("data").getJSONObject(0);
-                            address=song.isNull("url") ? "" : song.optString("url");
-                            if(!(address.startsWith("https://")||address.startsWith("http://"))) throw new IOException("歌曲暂无播放地址，可能受版权或账号权限限制。");
-                        }
-                    } catch(Exception e) { failure=e.getMessage(); }
-                    finally { if(connection!=null) connection.disconnect(); }
-                    final String result=address, message=failure;
-                    handler.post(() -> { if(destroyed||ticket!=generation)return;
-                        if(!message.isEmpty()) { busy=false; report(message); }
-                        else prepare(result,track,true,false);
-                    });
-                }); return;
-            }
+            if(track!=null && id.equals(track.optString("id"))) {playTrack(track,true,false);return;}
         }
+    }
+    private void playTrack(JSONObject track, boolean autoplay, boolean preserve) {
+        if(busy)return;
+        if(!java.util.Arrays.asList("standard","higher","exhigh","lossless","hires").contains(quality)) quality="standard";
+        busy=true; error=""; final int ticket=++generation; update();
+        final String requestedQuality=quality;
+        if(!"netease".equals(track.optString("source"))) {prepare(track.optString("path"),track,autoplay,false,preserve,requestedQuality);return;}
+        final String endpoint=apiBase;
+        // Bound the complete request, even if the server keeps sending tiny chunks.
+        handler.postDelayed(() -> {if(!destroyed && ticket==generation && busy && pending==null){generation++;busy=false;report("获取音频地址超时，请重试或更换音质。");}},16000);
+        importer.execute(() -> {
+            String address="", failure=""; HttpURLConnection connection=null;
+            try {
+                String songId=track.optString("songId");
+                if(!songId.matches("[0-9]+"))throw new IOException("歌曲编号无效。");
+                String request=endpoint.isEmpty() ? "https://www.byfuns.top/api/1/?id="+songId+"&level="+requestedQuality
+                    : endpoint+"/song/url/v1?id="+songId+"&level="+requestedQuality;
+                connection=(HttpURLConnection)new URL(request).openConnection();
+                connection.setConnectTimeout(15000);connection.setReadTimeout(15000);
+                int code=connection.getResponseCode();
+                if(code<200||code>=300)throw new IOException("音频接口 HTTP "+code+"，请稍后重试。");
+                try(InputStream input=connection.getInputStream();ByteArrayOutputStream output=new ByteArrayOutputStream()) {
+                    byte[] buffer=new byte[8192];int n;long deadline=SystemClock.elapsedRealtime()+15000;
+                    while((n=input.read(buffer))!=-1){output.write(buffer,0,n);if(output.size()>2*1024*1024)throw new IOException("API 响应过大。");if(SystemClock.elapsedRealtime()>deadline)throw new IOException("API 响应超时。");}
+                    String body=output.toString("UTF-8").trim();
+                    if(endpoint.isEmpty())address=body;
+                    else {
+                        JSONObject response=new JSONObject(body);
+                        if(response.optInt("code")!=200)throw new IOException("音频接口错误 "+response.optInt("code")+"。");
+                        JSONObject song=response.getJSONArray("data").getJSONObject(0);
+                        address=song.isNull("url")?"":song.optString("url");
+                    }
+                    java.net.URI uri=new java.net.URI(address);
+                    if(address.length()>8192||uri.getHost()==null||uri.getRawUserInfo()!=null||!("http".equalsIgnoreCase(uri.getScheme())||"https".equalsIgnoreCase(uri.getScheme())))
+                        throw new IOException("歌曲暂无有效播放地址，可能受服务或版权限制。");
+                }
+            } catch(javax.net.ssl.SSLException e){failure="音频接口 TLS 连接失败："+e.getMessage();}
+              catch(java.net.SocketTimeoutException e){failure="音频接口连接超时，请检查网络。";}
+              catch(java.net.UnknownHostException e){failure="音频接口域名无法解析，请检查网络。";}
+              catch(Exception e){failure="获取音频地址失败："+e.getMessage();}
+            finally{if(connection!=null)connection.disconnect();}
+            final String result=address,message=failure;
+            handler.post(() -> {if(destroyed||ticket!=generation)return;
+                if(!message.isEmpty()){busy=false;report(message);}
+                else prepare(result,track,autoplay,false,preserve,requestedQuality);
+            });
+        });
     }
     private void step(int delta, boolean automatic) {
         if(busy||queue.length()==0)return;
@@ -279,6 +302,9 @@ public class PlaybackService extends Service {
         playTrack(queue.optJSONObject(next).optString("id"));
     }
     private void prepare(String source, JSONObject track, boolean autoplay, boolean importing) {
+        prepare(source,track,autoplay,importing,false,quality);
+    }
+    private void prepare(String source, JSONObject track, boolean autoplay, boolean importing, boolean preserve, String requestedQuality) {
         try {
             pending = new MediaPlayer(); pendingFile=importing?new File(source):null;
             pending.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build());
@@ -293,18 +319,32 @@ public class PlaybackService extends Service {
                     hasVideo |= mediaTrack.getTrackType() == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_VIDEO;
                 }
                 if (!hasAudio || hasVideo) { cancelPending(); report("请选择纯音频文件，不支持视频。"); return; }
+                final int resume=preserve ? position() : 0;
                 if (player != null) player.release();
                 abandonFocus(); player = mp; pending = null; pendingFile = null;
-                currentTrack=track.optString("id");
+                currentTrack=track.optString("id"); loadedTrack=track; loadedQuality=requestedQuality;
+                actualFormat="系统解码";
+                for(MediaPlayer.TrackInfo info:mp.getTrackInfo()) {
+                    if(info.getTrackType()==MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO && info.getFormat()!=null) {
+                        MediaFormat format=info.getFormat();
+                        if(format.containsKey(MediaFormat.KEY_MIME))actualFormat=format.getString(MediaFormat.KEY_MIME);
+                        if(format.containsKey(MediaFormat.KEY_SAMPLE_RATE))actualFormat+=" · "+format.getInteger(MediaFormat.KEY_SAMPLE_RATE)+" Hz";
+                    }
+                }
                 if(importing) { importedTrack=track; queue.put(track); getSharedPreferences("queue",MODE_PRIVATE).edit().putString("imported",track.toString()).apply(); }
                 title = track.optString("name"); ready = true; busy = false; ended = false; error = ""; applyVolume(); refreshOutputs();
                 player.setOnCompletionListener(p -> { ended = true; abandonFocus(); refreshNotification(); update(); step(1,true); });
-                player.setOnErrorListener((p, what, extra) -> { ready = false; abandonFocus(); report("音频解码失败，请换一个文件。"); refreshNotification(); return true; });
+                player.setOnErrorListener((p, what, extra) -> { ready = false; abandonFocus(); report("音频播放失败（"+what+"/"+extra+"），请重试或更换音质。"); refreshNotification(); return true; });
                 session.setMetadata(new MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, title).putLong(MediaMetadata.METADATA_KEY_DURATION, duration()).build());
                 refreshNotification(); update();
-                if(autoplay)play();
+                if(resume>0) {
+                    player.setOnSeekCompleteListener(p -> {p.setOnSeekCompleteListener(null);if(p==player){if(autoplay)play();else update();}});
+                    player.seekTo(Math.min(resume,Math.max(0,duration()-1)),MediaPlayer.SEEK_CLOSEST);
+                } else if(autoplay)play();
             });
-            pending.setOnErrorListener((mp, what, extra) -> { cancelPending(); report("无法解码此音频，请尝试其他文件。"); return true; });
+            pending.setOnErrorListener((mp, what, extra) -> { cancelPending(); report("无法加载音频（"+what+"/"+extra+"），请检查网络、重试或更换音质。"); return true; });
+            final MediaPlayer preparing=pending;
+            handler.postDelayed(() -> {if(pending==preparing){cancelPending();report("音频加载超时，请重试或更换音质。");}},20000);
             pending.prepareAsync();
         } catch (Exception e) { cancelPending(); report("无法加载音频：" + e.getMessage()); }
     }
@@ -343,7 +383,9 @@ public class PlaybackService extends Service {
             JSONObject o = new JSONObject(); o.put("title", title); o.put("status", status); o.put("error", error);
             o.put("position", pos); o.put("duration", length); o.put("playing", playing); o.put("ready", ready); o.put("busy", busy); o.put("overlayAllowed", Settings.canDrawOverlays(this));
             o.put("volume", volume); o.put("selectedOutput", selectedOutput);
-            o.put("currentTrack",currentTrack); if(importedTrack!=null)o.put("importedTrack",importedTrack);
+            o.put("currentTrack",currentTrack);o.put("loadedTrack",loadedTrack);o.put("loadedQuality",loadedQuality);
+            String qualityName = "hires".equals(loadedQuality) ? "Hi-Res" : "lossless".equals(loadedQuality) ? "无损" : "exhigh".equals(loadedQuality) ? "极高" : "higher".equals(loadedQuality) ? "较高" : "标准";
+            o.put("qualityInfo","当前音源请求："+qualityName+" · "+actualFormat); if(importedTrack!=null)o.put("importedTrack",importedTrack);
             org.json.JSONArray outputs = new org.json.JSONArray();
             outputs.put(new JSONObject().put("id", "").put("name", "跟随系统默认"));
             for (AudioDeviceInfo device : audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
@@ -370,9 +412,9 @@ public class PlaybackService extends Service {
         if (!Settings.canDrawOverlays(this)) { report("请先在应用内授予悬浮窗权限。"); return; }
         getSharedPreferences("window",MODE_PRIVATE).edit().putBoolean("enabled",true).apply();
         if (panel != null) { syncOverlay(); return; }
-        TextView icon = new TextView(this); icon.setText("♪"); icon.setTextSize(30); icon.setTextColor(Color.rgb(24,44,39)); icon.setGravity(Gravity.CENTER); panel=icon; expanded=false;
+        TextView icon = new TextView(this); icon.setText("♪"); icon.setTextSize(30); icon.setTextColor(darkTheme()?Color.parseColor("#101722"):Color.WHITE); icon.setGravity(Gravity.CENTER); panel=icon; expanded=false;
         panel.setContentDescription("浮音悬浮图标，点击打开，长按拖动");
-        GradientDrawable background = new GradientDrawable(); background.setColor(Color.rgb(152,228,194)); background.setCornerRadius(dp(28)); panel.setBackground(background);
+        GradientDrawable background = new GradientDrawable(); background.setColor(accent()); background.setCornerRadius(dp(28)); panel.setBackground(background);
         windowParams = new WindowManager.LayoutParams(dp(56), dp(56), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
         windowParams.gravity = Gravity.TOP | Gravity.LEFT;
@@ -383,10 +425,19 @@ public class PlaybackService extends Service {
         try { clampWindow(); windows.addView(panel,windowParams); syncOverlay(); }
         catch (Exception e) { panel=null; report("无法显示悬浮图标："+e.getMessage()); }
     }
-    private TextView label(String text) {
-        TextView view=new TextView(this); view.setText(text); view.setTextColor(Color.WHITE); view.setTextSize(14); return view;
+    private boolean darkTheme() {return getSharedPreferences("appearance",0).getBoolean("dark",false);}
+    private int ink() {return Color.parseColor(darkTheme()?"#EDF2FA":"#182338");}
+    private int surface() {return Color.parseColor(darkTheme()?"#192333":"#FFFFFF");}
+    private int accent() {return Color.parseColor(darkTheme()?"#83ABFF":"#2458D3");}
+    private void refreshOverlayTheme() {
+        if(panel==null)return;
+        boolean reopen=expanded;windows.removeView(panel);panel=null;expanded=false;showOverlay();
+        if(reopen && panel!=null)expandOverlay();
     }
-    private Button button(String text, Runnable action) { Button b=new Button(this); b.setText(text); b.setTextSize(12); b.setOnClickListener(v->action.run()); return b; }
+    private TextView label(String text) {
+        TextView view=new TextView(this); view.setText(text); view.setTextColor(ink()); view.setTextSize(14); return view;
+    }
+    private Button button(String text, Runnable action) { Button b=new Button(this); b.setText(text); b.setTextSize(14); b.setTextColor(ink());b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(darkTheme()?Color.parseColor("#243B60"):Color.parseColor("#E8EFFF"))); b.setOnClickListener(v->action.run()); return b; }
     private void openMain(boolean pick) {
         try { startActivity(new Intent(this,PlayerActivity.class).putExtra("pickFromOverlay",pick).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP)); }
         catch(Exception e) { report("请从通知打开应用。"); }
@@ -395,7 +446,7 @@ public class PlaybackService extends Service {
         if(panel!=null)windows.removeView(panel);
         expanded=true;
         LinearLayout content=new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(10),dp(8),dp(10),dp(8));
-        GradientDrawable bg=new GradientDrawable(); bg.setColor(Color.rgb(24,31,43)); bg.setCornerRadius(dp(16)); content.setBackground(bg);
+        GradientDrawable bg=new GradientDrawable(); bg.setColor(surface()); bg.setCornerRadius(dp(16)); content.setBackground(bg);
         TextView handle=label("浮音 · 拖动这里移动"); handle.setPadding(0,dp(8),0,dp(8)); content.addView(handle); installDrag(handle);
         LinearLayout top=new LinearLayout(this);
         top.addView(button("主界面",()->openMain(false)),new LinearLayout.LayoutParams(0,dp(44),1));
@@ -427,12 +478,17 @@ public class PlaybackService extends Service {
             public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){getSharedPreferences("window",0).edit().putInt("opacity",40+b.getProgress()).apply();}
             public void onProgressChanged(SeekBar b,int v,boolean user){if(user){windowParams.alpha=(40+v)/100f;moveWindow();}}
         });
-        overlayError=label(error);overlayError.setTextColor(Color.rgb(255,181,170));content.addView(overlayError);
+        overlayError=label(error);overlayError.setTextColor(Color.parseColor(darkTheme()?"#FF9B93":"#B42318"));content.addView(overlayError);
+        tintSliders(content);
         ScrollView scroll=new ScrollView(this);scroll.addView(content);panel=scroll;
         windowParams.width=Math.min(dp(getSharedPreferences("window",0).getInt("width",320)),getResources().getDisplayMetrics().widthPixels);
         windowParams.height=Math.min(dp(560),getResources().getDisplayMetrics().heightPixels-dp(100));
         windowParams.alpha=getSharedPreferences("window",0).getInt("opacity",100)/100f;
         try {clampWindow();windows.addView(panel,windowParams);syncOverlay();update();}catch(Exception e){panel=null;expanded=false;report("无法打开悬浮页面。");}
+    }
+    private void tintSliders(View view) {
+        if(view instanceof SeekBar) {SeekBar b=(SeekBar)view;b.setProgressTintList(android.content.res.ColorStateList.valueOf(accent()));b.setThumbTintList(android.content.res.ColorStateList.valueOf(accent()));b.setMinimumHeight(dp(48));}
+        if(view instanceof android.view.ViewGroup){android.view.ViewGroup group=(android.view.ViewGroup)view;for(int i=0;i<group.getChildCount();i++)tintSliders(group.getChildAt(i));}
     }
     private void installDrag(View handle) {
         handle.setOnTouchListener(new View.OnTouchListener() {

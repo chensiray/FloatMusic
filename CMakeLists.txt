@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
-project(FloatMusic VERSION 0.3.0 LANGUAGES CXX)
+project(FloatMusic VERSION 0.4.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Concurrent Network)
 qt_standard_project_setup(REQUIRES 6.8)
 set(PLAYER_SOURCES src/playercontroller.cpp src/playercontroller.h src/audiofilepolicy.cpp src/audiofilepolicy.h src/playliststore.cpp src/playliststore.h src/musicapi.cpp src/musicapi.h)
 qt_add_executable(FloatMusic src/main.cpp src/singleinstance.cpp src/singleinstance.h ${PLAYER_SOURCES})
-qt_add_qml_module(FloatMusic URI FloatMusic QML_FILES qml/Main.qml)
+qt_add_qml_module(FloatMusic URI FloatMusic QML_FILES qml/Main.qml qml/AndroidMain.qml)
 target_link_libraries(FloatMusic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Concurrent Qt6::Network)
 set_target_properties(FloatMusic PROPERTIES WIN32_EXECUTABLE TRUE QT_QML_ROOT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/qml")
 if(ANDROID)
@@ -20,8 +20,8 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
         QT_ANDROID_MIN_SDK_VERSION 28
         QT_ANDROID_TARGET_SDK_VERSION 36
-        QT_ANDROID_VERSION_CODE 3
-        QT_ANDROID_VERSION_NAME "0.3.0"
+        QT_ANDROID_VERSION_CODE 4
+        QT_ANDROID_VERSION_NAME "0.4.0"
         QT_ANDROID_APP_NAME "浮音 · 功能验证")
 endif()
 option(FLOATMUSIC_TESTS "Build import policy tests (desktop only)" OFF)
@@ -36,7 +36,7 @@ if(FLOATMUSIC_TESTS AND NOT ANDROID)
     target_include_directories(player_tests PRIVATE src)
     target_compile_definitions(player_tests PRIVATE FLOATMUSIC_QML_FILE="${CMAKE_CURRENT_SOURCE_DIR}/qml/Main.qml")
     target_link_libraries(player_tests PRIVATE Qt6::Test Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Concurrent Qt6::Network)
-    add_test(NAME player_integration COMMAND player_tests -platform offscreen)
+    add_test(NAME player_integration COMMAND player_tests -platform offscreen -o player-tests.txt,txt)
     set_target_properties(policy_tests player_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     set_tests_properties(player_integration PROPERTIES ENVIRONMENT "QT_QUICK_BACKEND=software")
     qt_add_executable(library_tests tests/library_tests.cpp ${PLAYER_SOURCES})

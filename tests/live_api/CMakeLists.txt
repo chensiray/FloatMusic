@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(FloatMusicLiveApiProbe LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network Multimedia)
+add_executable(live_api_probe main.cpp)
+target_link_libraries(live_api_probe PRIVATE Qt6::Core Qt6::Network Qt6::Multimedia)

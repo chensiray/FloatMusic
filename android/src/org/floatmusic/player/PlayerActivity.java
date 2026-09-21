@@ -23,7 +23,7 @@ public class PlayerActivity extends QtActivity {
         PlayerBridge.activity = new WeakReference<>(this);
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> moveTaskToBack(true));
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
         }
         if (saved != null) { waitingOverlay = saved.getBoolean("overlay"); returnToOverlay = saved.getBoolean("return"); picking = saved.getBoolean("picking"); }
         handle(getIntent());
@@ -37,12 +37,28 @@ public class PlayerActivity extends QtActivity {
     // Back means background; the explicit close button remains the way to quit.
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            if (event.getAction() == KeyEvent.ACTION_UP) moveTaskToBack(true);
+            if (event.getAction() == KeyEvent.ACTION_UP) handleBack();
             return true;
         }
         return super.dispatchKeyEvent(event);
     }
-    @Override public void onBackPressed() { moveTaskToBack(true); }
+    @Override public void onBackPressed() { handleBack(); }
+    private void handleBack() {
+        android.view.View decor = getWindow().getDecorView();
+        boolean keyboardVisible;
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsets insets = decor.getRootWindowInsets();
+            keyboardVisible = insets != null && insets.isVisible(android.view.WindowInsets.Type.ime());
+        } else {
+            android.graphics.Rect visible = new android.graphics.Rect();
+            decor.getWindowVisibleDisplayFrame(visible);
+            keyboardVisible = decor.getRootView().getHeight() - visible.bottom > 150 * getResources().getDisplayMetrics().density;
+        }
+        if (keyboardVisible) {
+            ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE))
+                    .hideSoftInputFromWindow(decor.getWindowToken(), 0);
+        } else moveTaskToBack(true);
+    }
     private void handle(Intent intent) {
         if (intent != null && intent.getBooleanExtra("pickFromOverlay", false)) {
             intent.removeExtra("pickFromOverlay"); PlayerBridge.main.post(() -> pickMusic(true));
@@ -50,6 +66,7 @@ public class PlayerActivity extends QtActivity {
     }
     @Override public void onResume() {
         super.onResume(); PlayerBridge.activity = new WeakReference<>(this); PlayerBridge.foreground = true;
+        getWindow().getDecorView().post(this::applySystemBarTheme);
         if (PlaybackService.instance != null) PlaybackService.instance.syncOverlay();
         if (PlaybackService.instance != null) PlaybackService.instance.update(); else PlayerBridge.idle("");
         // Restore the already-authorized icon after a cold launch; keep it hidden in the activity.
@@ -65,6 +82,21 @@ public class PlayerActivity extends QtActivity {
         PlayerBridge.foreground = false;
         if (PlaybackService.instance != null) PlaybackService.instance.syncOverlay();
         super.onStop();
+    }
+    void applySystemBarTheme() {
+        boolean dark = getSharedPreferences("appearance", 0).getBoolean("dark", false);
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                int mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                controller.setSystemBarsAppearance(dark ? 0 : mask, mask);
+            }
+        } else {
+            android.view.View decor = getWindow().getDecorView();
+            int mask = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decor.setSystemUiVisibility(dark ? decor.getSystemUiVisibility() & ~mask : decor.getSystemUiVisibility() | mask);
+        }
     }
     void send(String command, String value) {
         Intent intent = new Intent(this, PlaybackService.class).setAction(command).putExtra("value", value);

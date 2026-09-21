@@ -16,6 +16,7 @@ Set-Location -LiteralPath $stageRoot
 $buildDir = Join-Path $stageRoot "build/$Target"
 if ($Target -eq 'windows') {
     $env:QT_PLUGIN_PATH = 'C:\Qt\6.11.2\mingw_64\plugins'
+    $env:QML_IMPORT_PATH = 'C:\Qt\6.11.2\mingw_64\qml'
     & $cmake -S $stageRoot -B $buildDir -G Ninja '-DCMAKE_BUILD_TYPE=Debug' '-DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/mingw_64' '-DCMAKE_CXX_COMPILER=C:/Qt/Tools/mingw1310_64/bin/g++.exe' '-DCMAKE_C_COMPILER=C:/Qt/Tools/mingw1310_64/bin/gcc.exe' '-DFLOATMUSIC_TESTS=ON'
 } else {
     & $cmake --fresh -S $stageRoot -B $buildDir -G Ninja '-DCMAKE_BUILD_TYPE=Debug' '-DCMAKE_TOOLCHAIN_FILE=C:/Android/Sdk/ndk/27.2.12479018/build/cmake/android.toolchain.cmake' '-DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/android_arm64_v8a' '-DQT_HOST_PATH=C:/Qt/6.11.2/mingw_64' '-DANDROID_SDK_ROOT=C:/Android/Sdk' '-DANDROID_NDK=C:/Android/Sdk/ndk/27.2.12479018' '-DCMAKE_FIND_ROOT_PATH=C:/Qt/6.11.2/android_arm64_v8a' '-DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF' '-DANDROID_ABI=arm64-v8a' '-DANDROID_PLATFORM=android-28' '-DCMAKE_MAKE_PROGRAM=C:/Qt/Tools/Ninja/ninja.exe' '-DFLOATMUSIC_ANDROID_OPENSSL=C:/Android/Sdk/android_openssl'

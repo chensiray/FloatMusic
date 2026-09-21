@@ -34,8 +34,17 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
     Q_PROPERTY(QString searchMessage READ searchMessage NOTIFY searchChanged)
     Q_PROPERTY(QString apiBase READ apiBase NOTIFY searchChanged)
+    Q_PROPERTY(QString quality READ quality NOTIFY changed)
+    Q_PROPERTY(QString qualityInfo READ qualityInfo NOTIFY changed)
+    Q_PROPERTY(QString lyrics READ lyrics NOTIFY lyricsChanged)
+    Q_PROPERTY(QString translation READ translation NOTIFY lyricsChanged)
+    Q_PROPERTY(QString lyricsMessage READ lyricsMessage NOTIFY lyricsChanged)
+    Q_PROPERTY(bool lyricsLoading READ lyricsLoading NOTIFY lyricsChanged)
+    Q_PROPERTY(bool lyricsFailed READ lyricsFailed NOTIFY lyricsChanged)
+    Q_PROPERTY(bool online READ online NOTIFY changed)
 public:
     explicit PlayerController(QObject *parent = nullptr);
+    explicit PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent = nullptr);
     ~PlayerController() override;
     QString title() const { return m_title; }
     QString status() const { return m_status; }
@@ -60,6 +69,18 @@ public:
     bool searching() const { return m_searching; }
     QString searchMessage() const { return m_searchMessage; }
     QString apiBase() const { return m_api.baseUrl(); }
+    QString quality() const { return m_quality; }
+    QString qualityInfo() const;
+    QString lyrics() const { return m_lyrics; }
+    QString translation() const { return m_translation; }
+    QString lyricsMessage() const { return m_lyricsMessage; }
+    bool lyricsLoading() const { return m_lyricsLoading; }
+    bool lyricsFailed() const { return m_lyricsFailed; }
+    bool online() const { return m_online; }
+    Q_INVOKABLE void setQuality(const QString &quality);
+    Q_INVOKABLE void playSearchResult(int index);
+    Q_INVOKABLE void retryPlayback();
+    Q_INVOKABLE void retryLyrics();
     Q_INVOKABLE void setApiBase(const QString &url);
     Q_INVOKABLE void search(const QString &keywords);
     Q_INVOKABLE void addSearchResult(int index);
@@ -79,6 +100,7 @@ public:
     Q_INVOKABLE void toggle();
     Q_INVOKABLE void seek(qint64 milliseconds);
     Q_INVOKABLE void showFloating();
+    Q_INVOKABLE void setDarkTheme(bool dark);
     Q_INVOKABLE void quit();
     Q_INVOKABLE void rejectDrop();
 signals:
@@ -86,8 +108,9 @@ signals:
     void audioSettingsChanged();
     void libraryChanged();
     void searchChanged();
+    void lyricsChanged();
 private:
-    void loadTrack(const QVariantMap &track, bool autoplay);
+    void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false);
     void step(int delta, bool automatic = false);
     void syncQueue();
     PlaylistStore m_library;
@@ -96,6 +119,14 @@ private:
     QString m_currentTrack, m_searchMessage;
     bool m_searching = false, m_autoplay = false, m_resolving = false, m_importing = false, m_online = false;
     int m_loadGeneration = 0;
+    int m_lyricsGeneration = 0;
+    QString m_quality = "standard", m_loadedQuality;
+    QString m_androidQualityInfo;
+    QString m_lyrics, m_translation, m_lyricsMessage = QStringLiteral("播放在线歌曲后显示歌词。");
+    bool m_lyricsLoading = false, m_lyricsFailed = false;
+    QVariantMap m_loadedTrack, m_requestedTrack;
+    qint64 m_pendingPosition = -1;
+    QTimer m_mediaTimeout;
     void sync();
     void androidCommand(const QString &command, const QString &value = {});
     QMediaPlayer m_player;
@@ -105,8 +136,8 @@ private:
     QVariantList m_audioOutputs;
     QString m_selectedOutput, m_outputName;
     QTimer m_timer;
-    QString m_title = QStringLiteral("还没有导入音乐");
-    QString m_status = QStringLiteral("选择一首本地音频，开始试听");
+    QString m_title = QStringLiteral("还没有选择音乐");
+    QString m_status = QStringLiteral("导入本地音频，或按歌名搜索试听");
     QString m_error;
     QString m_cachedFile;
     qint64 m_position = 0, m_duration = 0;
