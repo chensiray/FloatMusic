@@ -16,8 +16,10 @@ import java.lang.ref.WeakReference;
 public class PlayerActivity extends QtActivity {
     private static final int PICK_AUDIO = 7101;
     private boolean waitingOverlay = false;
+    private boolean overlayRequested = false;
     private boolean returnToOverlay = false;
     private boolean picking = false;
+    private boolean pendingPick = false;
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
         PlayerBridge.activity = new WeakReference<>(this);
@@ -25,11 +27,12 @@ public class PlayerActivity extends QtActivity {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                 OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
         }
-        if (saved != null) { waitingOverlay = saved.getBoolean("overlay"); returnToOverlay = saved.getBoolean("return"); picking = saved.getBoolean("picking"); }
+        if (saved != null) { waitingOverlay = saved.getBoolean("overlay"); overlayRequested = saved.getBoolean("overlayRequested"); returnToOverlay = saved.getBoolean("return"); picking = saved.getBoolean("picking"); }
         handle(getIntent());
     }
     @Override protected void onSaveInstanceState(Bundle out) {
         out.putBoolean("overlay", waitingOverlay); out.putBoolean("return", returnToOverlay); out.putBoolean("picking", picking);
+        out.putBoolean("overlayRequested", overlayRequested);
         super.onSaveInstanceState(out);
     }
     @Override public void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handle(intent); }
@@ -61,7 +64,7 @@ public class PlayerActivity extends QtActivity {
     }
     private void handle(Intent intent) {
         if (intent != null && intent.getBooleanExtra("pickFromOverlay", false)) {
-            intent.removeExtra("pickFromOverlay"); PlayerBridge.main.post(() -> pickMusic(true));
+            intent.removeExtra("pickFromOverlay"); pendingPick=true; PlayerBridge.main.post(() -> { pendingPick=false; pickMusic(true); });
         }
     }
     @Override public void onResume() {
@@ -69,14 +72,24 @@ public class PlayerActivity extends QtActivity {
         getWindow().getDecorView().post(this::applySystemBarTheme);
         if (PlaybackService.instance != null) PlaybackService.instance.syncOverlay();
         if (PlaybackService.instance != null) PlaybackService.instance.update(); else PlayerBridge.idle("");
-        // Restore the already-authorized icon after a cold launch; keep it hidden in the activity.
-        if (PlaybackService.instance == null && Settings.canDrawOverlays(this) && !waitingOverlay)
-            send("float", "");
         if (waitingOverlay) {
-            waitingOverlay = false;
-            if (Settings.canDrawOverlays(this)) startOverlay();
-            else Toast.makeText(this, "尚未授予悬浮窗权限，仍可在应用内播放", Toast.LENGTH_LONG).show();
+            waitingOverlay=false;
+            if(!Settings.canDrawOverlays(this)) {
+                overlayRequested=false;
+                Toast.makeText(this,"允许悬浮权限后，即可在图标中使用浮音",Toast.LENGTH_LONG).show();
+            } else completeOverlayRequest();
         }
+    }
+    // Only a tap on the welcome page may start this flow. Resuming the app must stay visible.
+    public void completeOverlayRequest() {
+        if(!overlayRequested || picking || pendingPick || waitingOverlay || !PlayerBridge.qtReady)return;
+        if(!Settings.canDrawOverlays(this)){PlayerBridge.idle("");return;}
+        if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED
+                && !getPreferences(MODE_PRIVATE).getBoolean("notificationAsked",false)) {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("notificationAsked",true).apply();
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},7103);return;
+        }
+        startOverlay();
     }
     @Override public void onStop() {
         PlayerBridge.foreground = false;
@@ -84,7 +97,7 @@ public class PlayerActivity extends QtActivity {
         super.onStop();
     }
     void applySystemBarTheme() {
-        boolean dark = getSharedPreferences("appearance", 0).getBoolean("dark", false);
+        boolean dark = PlayerBridge.isDark(this);
         if (Build.VERSION.SDK_INT >= 30) {
             android.view.WindowInsetsController controller = getWindow().getInsetsController();
             if (controller != null) {
@@ -103,12 +116,14 @@ public class PlayerActivity extends QtActivity {
         startForegroundService(intent);
     }
     public void enableOverlay() {
+        if (waitingOverlay) return;
+        overlayRequested = true;
         if (!Settings.canDrawOverlays(this)) {
             waitingOverlay = true;
             startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
-        } else startOverlay();
+        } else completeOverlayRequest();
     }
-    private void startOverlay() { send("float", ""); moveTaskToBack(true); }
+    private void startOverlay() { overlayRequested=false; send("float", ""); moveTaskToBack(true); }
     public void pickMusic(boolean fromOverlay) {
         if (picking) return;
         returnToOverlay = fromOverlay;
@@ -123,6 +138,7 @@ public class PlayerActivity extends QtActivity {
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
         if (request == 7102 && picking) openPicker();
+        if (request == 7103) completeOverlayRequest();
     }
     private void openPicker() {
         Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*");
@@ -135,6 +151,7 @@ public class PlayerActivity extends QtActivity {
         if (request == PICK_AUDIO) {
             picking = false;
             PlayerBridge.picking = false;
+            if (PlaybackService.instance != null) PlaybackService.instance.syncOverlay();
             if (result == RESULT_OK && data != null && data.getData() != null) {
                 try { send("import", data.getData().toString()); }
                 catch (Exception e) { Toast.makeText(this, "无法启动播放服务：" + e.getMessage(), Toast.LENGTH_LONG).show(); }

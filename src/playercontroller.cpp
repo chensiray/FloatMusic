@@ -13,6 +13,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSettings>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QAudioDevice>
 #include <QMediaMetaData>
 #ifdef Q_OS_ANDROID
@@ -49,6 +51,7 @@ ImportResult copyAudio(const QUrl &url) {
 
 PlayerController::PlayerController(QObject *parent) : PlayerController(MusicApi::Endpoints{}, parent) {}
 PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent) : QObject(parent), m_api(endpoints) {
+    m_favorites = QJsonDocument::fromJson(QSettings().value("library/favorites").toByteArray()).array().toVariantList();
     const QString savedQuality = QSettings().value("netease/quality", "standard").toString();
     if (MusicApi::validQuality(savedQuality)) m_quality = savedQuality;
     connect(&m_library, &PlaylistStore::changed, this, [this] {
@@ -177,6 +180,44 @@ void PlayerController::deletePlaylist() {
 }
 void PlayerController::selectPlaylist(const QString &id) { m_library.select(id); }
 void PlayerController::removeTrack(const QString &id) { m_library.removeTrack(id); }
+QVariantMap PlayerController::favoriteTrack(const QString &id) const {
+    for (const auto &entry : m_favorites) if (entry.toMap().value("id").toString() == id) return entry.toMap();
+    return {};
+}
+bool PlayerController::currentFavorite() const { return !favoriteTrack(m_loadedTrack.value("id").toString()).isEmpty(); }
+void PlayerController::saveFavorites() {
+    QSettings settings;
+    settings.setValue("library/favorites", QJsonDocument(QJsonArray::fromVariantList(m_favorites)).toJson(QJsonDocument::Compact));
+    settings.sync();
+    if (settings.status() != QSettings::NoError) m_favoriteMessage = QStringLiteral("收藏保存失败，请检查存储空间。");
+    emit favoritesChanged(); emit changed();
+}
+void PlayerController::toggleFavorite() {
+    if (m_loadedTrack.isEmpty()) {
+        m_favoriteMessage = QStringLiteral("先播放一首歌曲，再收藏。"); emit favoritesChanged(); return;
+    }
+    if (currentFavorite()) { removeFavorite(m_loadedTrack.value("id").toString()); return; }
+    m_favorites.append(m_loadedTrack); m_favoriteMessage = QStringLiteral("已收藏到本机"); saveFavorites();
+}
+void PlayerController::removeFavorite(const QString &id) {
+    for (qsizetype i = 0; i < m_favorites.size(); ++i) if (m_favorites[i].toMap().value("id").toString() == id) {
+        m_favorites.removeAt(i); m_favoriteMessage = QStringLiteral("已取消收藏"); saveFavorites(); return;
+    }
+}
+void PlayerController::playFavorite(const QString &id) {
+    const auto track = favoriteTrack(id);
+    if (!m_busy && !track.isEmpty()) loadTrack(track, true);
+}
+void PlayerController::addFavorite(const QString &id) {
+    const auto track = favoriteTrack(id); if (track.isEmpty()) return;
+    m_favoriteMessage = m_library.add(track) ? QStringLiteral("已加入当前歌单") : m_library.error();
+    emit favoritesChanged();
+}
+QRect PlayerController::desktopWorkArea(int x, int y) const {
+    auto *screen = QGuiApplication::screenAt(QPoint(x, y));
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    return screen ? screen->availableGeometry() : QRect(0, 0, 1280, 720);
+}
 void PlayerController::syncQueue() {
 #ifdef Q_OS_ANDROID
     androidCommand("queue", QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap({{"tracks", tracks()}, {"api", apiBase()}, {"quality", m_quality}})).toJson(QJsonDocument::Compact)));
@@ -340,6 +381,14 @@ void PlayerController::seek(qint64 milliseconds) {
 #endif
 }
 void PlayerController::showFloating() { androidCommand("float"); }
+void PlayerController::initializeAndroidUi() { androidCommand("ready"); }
+int PlayerController::androidThemeMode() const {
+#ifdef Q_OS_ANDROID
+    return QJniObject::callStaticMethod<jint>("org/floatmusic/player/PlayerBridge", "themeMode", "()I");
+#else
+    return 0;
+#endif
+}
 void PlayerController::setDarkTheme(bool dark) { androidCommand("theme", dark ? "dark" : "light"); }
 void PlayerController::quit() { ++m_loadGeneration; ++m_lyricsGeneration; m_mediaTimeout.stop(); androidCommand("stop"); m_player.stop(); QCoreApplication::quit(); }
 void PlayerController::rejectDrop() { m_error = QStringLiteral("请一次拖入一首本地音频。"); emit changed(); }
@@ -356,6 +405,7 @@ void PlayerController::sync() {
     m_androidQualityInfo = o.value("qualityInfo").toString();
     if (loaded != m_loadedTrack && !loaded.isEmpty()) {
         m_loadedTrack = loaded;
+        m_requestedTrack = loaded;
         m_online = loaded.value("source").toString() == "netease";
         ++m_lyricsGeneration; m_lyricsLoading = false; m_lyricsFailed = false;
         m_lyrics.clear(); m_translation.clear();
@@ -374,6 +424,8 @@ void PlayerController::sync() {
     m_position = o.value("position").toInteger(); m_duration = o.value("duration").toInteger();
     m_playing = o.value("playing").toBool(); m_ready = o.value("ready").toBool(); m_busy = o.value("busy").toBool();
     m_seekable = m_ready && m_duration > 0; m_overlayAllowed = o.value("overlayAllowed").toBool();
+    processOverlayEvents();
+    publishOverlayUi();
 #else
     m_position = m_player.position(); m_duration = m_player.duration();
     m_playing = m_player.playbackState() == QMediaPlayer::PlayingState;
@@ -382,3 +434,58 @@ void PlayerController::sync() {
 #endif
     emit changed();
 }
+
+#ifdef Q_OS_ANDROID
+void PlayerController::processOverlayEvents() {
+    const auto raw = QJniObject::callStaticObjectMethod("org/floatmusic/player/PlayerBridge", "takeEvents", "()Ljava/lang/String;");
+    const auto events = QJsonDocument::fromJson(raw.toString().toUtf8()).array();
+    auto findTrack = [](const QVariantList &list, const QString &id) {
+        for (const auto &item : list) if (item.toMap().value("id").toString() == id) return item.toMap();
+        return QVariantMap{};
+    };
+    for (const auto &entry : events) {
+        const auto event = entry.toObject();
+        const auto action = event.value("action").toString(), value = event.value("value").toString();
+        m_overlayMessage.clear();
+        if (action == "search") search(value);
+        else if (action == "playResult" || action == "addResult") {
+            const auto track = findTrack(m_searchResults, value);
+            if (track.isEmpty()) continue;
+            if (action == "playResult") { if(!m_busy)loadTrack(track,true); }
+            else m_overlayMessage = m_library.add(track) ? QStringLiteral("已加入当前歌单") : m_library.error();
+        } else if (action == "playTrack") playTrack(value);
+        else if (action == "selectPlaylist") selectPlaylist(value);
+        else if (action == "createPlaylist" || action == "renamePlaylist") {
+            const bool ok = action == "createPlaylist" ? m_library.create(value) : m_library.rename(value);
+            m_overlayMessage = ok ? QStringLiteral("歌单已保存") : QStringLiteral("保存失败：歌单名称需为 1–60 个字符，并确保存储可写。");
+        } else if (action == "deletePlaylist") {
+            m_overlayMessage = m_library.removePlaylist() ? QStringLiteral("歌单已删除") : QStringLiteral("至少保留一个歌单。");
+        } else if (action == "removeTrack") removeTrack(value);
+        else if (action == "quality") { setQuality(value); syncQueue(); }
+        else if (action == "api") { setApiBase(value); m_overlayMessage=m_searchMessage; }
+        else if (action == "retryLyrics") retryLyrics();
+        else if (action == "retryPlayback") retryPlayback();
+        else if (action == "quit") { quit(); return; }
+        else if (action == "favoriteCurrent") {
+            toggleFavorite(); m_overlayMessage=m_favoriteMessage;
+        } else if (action == "playFavorite" || action == "addFavorite" || action == "removeFavorite") {
+            if(action=="playFavorite")playFavorite(value);
+            else if(action=="addFavorite"){addFavorite(value);m_overlayMessage=m_favoriteMessage;}
+            else {removeFavorite(value);m_overlayMessage=m_favoriteMessage;}
+        }
+    }
+}
+void PlayerController::publishOverlayUi() {
+    const QVariantMap data{{"results",m_searchResults},{"searching",m_searching},{"searchMessage",m_searchMessage},
+        {"playlists",playlists()},{"tracks",tracks()},{"activePlaylist",activePlaylist()},
+        {"lyrics",m_lyrics},{"translation",m_translation},{"lyricsMessage",m_lyricsMessage},
+        {"lyricsLoading",m_lyricsLoading},{"lyricsFailed",m_lyricsFailed},{"online",m_online},
+        {"quality",m_quality},{"qualityInfo",qualityInfo()},{"api",apiBase()},
+        {"favorites",m_favorites},{"message",m_overlayMessage}};
+    const auto json=QJsonDocument(QJsonObject::fromVariantMap(data)).toJson(QJsonDocument::Compact);
+    if(json==m_overlayUi)return;
+    m_overlayUi=json;
+    const auto value=QJniObject::fromString(QString::fromUtf8(json));
+    QJniObject::callStaticMethod<void>("org/floatmusic/player/PlayerBridge","updateUi","(Ljava/lang/String;)V",value.object<jstring>());
+}
+#endif

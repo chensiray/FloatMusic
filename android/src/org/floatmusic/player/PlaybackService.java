@@ -38,13 +38,7 @@ public class PlaybackService extends Service {
     private boolean hasFocus = false, resumeOnFocus = false, ready = false, busy = false, ended = false, destroyed = false;
     private String title = "还没有导入音乐", error = "";
     private File pendingFile;
-    private WindowManager windows;
-    private WindowManager.LayoutParams windowParams;
-    private View panel;
-    private boolean expanded = false;
-    private TextView overlayTitle, overlayTime, overlayError;
-    private Button overlayPlay;
-    private SeekBar overlayProgress;
+    private OverlayWindow overlay;
     private JSONArray queue = new JSONArray();
     private JSONObject importedTrack = null, loadedTrack = null;
     private String quality = "standard", loadedQuality = "standard", actualFormat = "等待音频信息";
@@ -67,7 +61,7 @@ public class PlaybackService extends Service {
         super.onCreate(); instance = this;
         audio = (AudioManager)getSystemService(AUDIO_SERVICE);
         volume = getSharedPreferences("audio",MODE_PRIVATE).getInt("volume",70);
-        windows = (WindowManager)getSystemService(WINDOW_SERVICE);
+        overlay = new OverlayWindow(this);
         try {
             JSONObject saved = new JSONObject(getSharedPreferences("queue",MODE_PRIVATE).getString("data","{}"));
             queue = saved.optJSONArray("tracks"); if (queue == null) queue = new JSONArray();
@@ -105,7 +99,6 @@ public class PlaybackService extends Service {
         IntentFilter filter = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(noisy, filter, Context.RECEIVER_NOT_EXPORTED); else registerReceiver(noisy, filter);
         audio.registerAudioDeviceCallback(deviceCallback, handler);
-        if (getSharedPreferences("window",MODE_PRIVATE).getBoolean("enabled",true) && Settings.canDrawOverlays(this)) showOverlay();
         handler.post(ticker);
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -127,7 +120,7 @@ public class PlaybackService extends Service {
             case "play":
                 try { JSONObject request = new JSONObject(value); playTrack(request.getJSONObject("track"), request.optBoolean("autoplay",true), request.optBoolean("preserve",false)); }
                 catch(Exception e) { report("播放请求无效："+e.getMessage()); } break;
-            case "theme": refreshOverlayTheme(); break;
+            case "theme": if(overlay!=null)overlay.configurationChanged(); break;
             case "previous": step(-1, false); break;
             case "next": step(1, false); break;
             case "ackImport": importedTrack = null; getSharedPreferences("queue",MODE_PRIVATE).edit().remove("imported").apply(); break;
@@ -135,7 +128,7 @@ public class PlaybackService extends Service {
             case "import": importAudio(Uri.parse(value)); break;
             case "toggle": if (isPlaying()) pause(true); else play(); break;
             case "seek": try { seek(Long.parseLong(value)); } catch (Exception ignored) {} break;
-            case "stop": stopSelf(); break;
+            case "stop": PlayerBridge.event("quit", ""); stopSelf(); break;
         }
     }
     private boolean isPlaying() { try { return ready && player != null && player.isPlaying(); } catch (IllegalStateException e) { return false; } }
@@ -394,134 +387,30 @@ public class PlaybackService extends Service {
             AudioDeviceInfo routed = player != null && ready ? player.getRoutedDevice() : null;
             o.put("outputName", routed == null ? "待播放后确认实际输出" : routed.getProductName().toString());
             PlayerBridge.publish(o);
+            if(overlay!=null)overlay.update(o);
         } catch (Exception ignored) {}
-        if(expanded && overlayTitle!=null) {
-            overlayTitle.setText(title); overlayTime.setText(clock(pos)+" / "+clock(length)); overlayError.setText(error);
-            overlayPlay.setText(playing?"暂停":"播放"); overlayPlay.setEnabled(ready);
-            overlayProgress.setMax(Math.max(1,length)); if(!overlayProgress.isPressed())overlayProgress.setProgress(pos);
-        }
         if (session != null) session.setPlaybackState(new PlaybackState.Builder().setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SEEK_TO | PlaybackState.ACTION_STOP | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS)
             .setState(playing ? PlaybackState.STATE_PLAYING : ready ? PlaybackState.STATE_PAUSED : PlaybackState.STATE_NONE, pos, playing ? 1f : 0f).build());
     }
-    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
-    void syncOverlay() {
-        if (panel == null) return;
-        panel.setVisibility(PlayerBridge.foreground || PlayerBridge.picking ? View.GONE : View.VISIBLE);
-    }
+    void syncOverlay() { if(overlay!=null)overlay.syncVisibility(); }
+    void refreshOverlayData() { if(overlay!=null)overlay.refreshData(PlayerBridge.uiData()); }
     private void showOverlay() {
-        if (!Settings.canDrawOverlays(this)) { report("请先在应用内授予悬浮窗权限。"); return; }
+        if(!Settings.canDrawOverlays(this)){report("请先允许浮音显示悬浮窗。");return;}
         getSharedPreferences("window",MODE_PRIVATE).edit().putBoolean("enabled",true).apply();
-        if (panel != null) { syncOverlay(); return; }
-        TextView icon = new TextView(this); icon.setText("♪"); icon.setTextSize(30); icon.setTextColor(darkTheme()?Color.parseColor("#101722"):Color.WHITE); icon.setGravity(Gravity.CENTER); panel=icon; expanded=false;
-        panel.setContentDescription("浮音悬浮图标，点击打开，长按拖动");
-        GradientDrawable background = new GradientDrawable(); background.setColor(accent()); background.setCornerRadius(dp(28)); panel.setBackground(background);
-        windowParams = new WindowManager.LayoutParams(dp(56), dp(56), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
-        windowParams.gravity = Gravity.TOP | Gravity.LEFT;
-        android.content.SharedPreferences prefs = getSharedPreferences("window", MODE_PRIVATE);
-        windowParams.x = prefs.getInt("x", dp(12)); windowParams.y = prefs.getInt("y", dp(80));
-        panel.setOnClickListener(v -> expandOverlay());
-        installDrag(panel);
-        try { clampWindow(); windows.addView(panel,windowParams); syncOverlay(); }
-        catch (Exception e) { panel=null; report("无法显示悬浮图标："+e.getMessage()); }
+        if(overlay!=null)overlay.show();
     }
-    private boolean darkTheme() {return getSharedPreferences("appearance",0).getBoolean("dark",false);}
-    private int ink() {return Color.parseColor(darkTheme()?"#EDF2FA":"#182338");}
-    private int surface() {return Color.parseColor(darkTheme()?"#192333":"#FFFFFF");}
-    private int accent() {return Color.parseColor(darkTheme()?"#83ABFF":"#2458D3");}
-    private void refreshOverlayTheme() {
-        if(panel==null)return;
-        boolean reopen=expanded;windows.removeView(panel);panel=null;expanded=false;showOverlay();
-        if(reopen && panel!=null)expandOverlay();
+    void openPicker() {
+        PlayerBridge.picking=true;syncOverlay();
+        try {startActivity(new Intent(this,PlayerActivity.class).putExtra("pickFromOverlay",true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP));}
+        catch(Exception e){PlayerBridge.picking=false;syncOverlay();report("无法打开文件选择器，请重新打开浮音后再试。");}
     }
-    private TextView label(String text) {
-        TextView view=new TextView(this); view.setText(text); view.setTextColor(ink()); view.setTextSize(14); return view;
-    }
-    private Button button(String text, Runnable action) { Button b=new Button(this); b.setText(text); b.setTextSize(14); b.setTextColor(ink());b.setBackgroundTintList(android.content.res.ColorStateList.valueOf(darkTheme()?Color.parseColor("#243B60"):Color.parseColor("#E8EFFF"))); b.setOnClickListener(v->action.run()); return b; }
-    private void openMain(boolean pick) {
-        try { startActivity(new Intent(this,PlayerActivity.class).putExtra("pickFromOverlay",pick).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP)); }
-        catch(Exception e) { report("请从通知打开应用。"); }
-    }
-    private void expandOverlay() {
-        if(panel!=null)windows.removeView(panel);
-        expanded=true;
-        LinearLayout content=new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(10),dp(8),dp(10),dp(8));
-        GradientDrawable bg=new GradientDrawable(); bg.setColor(surface()); bg.setCornerRadius(dp(16)); content.setBackground(bg);
-        TextView handle=label("浮音 · 拖动这里移动"); handle.setPadding(0,dp(8),0,dp(8)); content.addView(handle); installDrag(handle);
-        LinearLayout top=new LinearLayout(this);
-        top.addView(button("主界面",()->openMain(false)),new LinearLayout.LayoutParams(0,dp(44),1));
-        top.addView(button("收起",()->{ windows.removeView(panel); panel=null; expanded=false; showOverlay(); }),new LinearLayout.LayoutParams(0,dp(44),1));
-        top.addView(button("退出",()->stopSelf()),new LinearLayout.LayoutParams(0,dp(44),1)); content.addView(top);
-        overlayTitle=label(title); overlayTitle.setMaxLines(2); content.addView(overlayTitle);
-        overlayProgress=new SeekBar(this); content.addView(overlayProgress); overlayTime=label("");content.addView(overlayTime);
-        overlayProgress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            public void onStartTrackingTouch(SeekBar b){} public void onProgressChanged(SeekBar b,int v,boolean user){}
-            public void onStopTrackingTouch(SeekBar b){seek(b.getProgress());}
-        });
-        LinearLayout controls=new LinearLayout(this);
-        controls.addView(button("上一首",()->step(-1,false)),new LinearLayout.LayoutParams(0,dp(48),1));
-        overlayPlay=button("播放",()->dispatch("toggle","")); controls.addView(overlayPlay,new LinearLayout.LayoutParams(0,dp(48),1));
-        controls.addView(button("下一首",()->step(1,false)),new LinearLayout.LayoutParams(0,dp(48),1));content.addView(controls);
-        content.addView(button("导入音乐",()->openMain(true)));
-        content.addView(label("音量")); SeekBar gain=new SeekBar(this); gain.setMax(100);gain.setProgress(volume);content.addView(gain);
-        gain.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){}
-            public void onProgressChanged(SeekBar b,int v,boolean user){if(user)dispatch("volume",Integer.toString(v));}
-        });
-        content.addView(label("悬浮页面大小")); SeekBar size=new SeekBar(this);size.setMax(120);size.setProgress(getSharedPreferences("window",0).getInt("width",320)-260);content.addView(size);
-        size.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){getSharedPreferences("window",0).edit().putInt("width",260+b.getProgress()).apply();}
-            public void onProgressChanged(SeekBar b,int v,boolean user){if(user){windowParams.width=Math.min(dp(260+v),getResources().getDisplayMetrics().widthPixels);clampWindow();moveWindow();}}
-        });
-        content.addView(label("不透明度"));SeekBar opacity=new SeekBar(this);opacity.setMax(60);opacity.setProgress(getSharedPreferences("window",0).getInt("opacity",100)-40);content.addView(opacity);
-        opacity.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){getSharedPreferences("window",0).edit().putInt("opacity",40+b.getProgress()).apply();}
-            public void onProgressChanged(SeekBar b,int v,boolean user){if(user){windowParams.alpha=(40+v)/100f;moveWindow();}}
-        });
-        overlayError=label(error);overlayError.setTextColor(Color.parseColor(darkTheme()?"#FF9B93":"#B42318"));content.addView(overlayError);
-        tintSliders(content);
-        ScrollView scroll=new ScrollView(this);scroll.addView(content);panel=scroll;
-        windowParams.width=Math.min(dp(getSharedPreferences("window",0).getInt("width",320)),getResources().getDisplayMetrics().widthPixels);
-        windowParams.height=Math.min(dp(560),getResources().getDisplayMetrics().heightPixels-dp(100));
-        windowParams.alpha=getSharedPreferences("window",0).getInt("opacity",100)/100f;
-        try {clampWindow();windows.addView(panel,windowParams);syncOverlay();update();}catch(Exception e){panel=null;expanded=false;report("无法打开悬浮页面。");}
-    }
-    private void tintSliders(View view) {
-        if(view instanceof SeekBar) {SeekBar b=(SeekBar)view;b.setProgressTintList(android.content.res.ColorStateList.valueOf(accent()));b.setThumbTintList(android.content.res.ColorStateList.valueOf(accent()));b.setMinimumHeight(dp(48));}
-        if(view instanceof android.view.ViewGroup){android.view.ViewGroup group=(android.view.ViewGroup)view;for(int i=0;i<group.getChildCount();i++)tintSliders(group.getChildAt(i));}
-    }
-    private void installDrag(View handle) {
-        handle.setOnTouchListener(new View.OnTouchListener() {
-            float startX, startY; int x, y; boolean moved;
-            @Override public boolean onTouch(View v, MotionEvent event) {
-                if (event.getAction() == MotionEvent.ACTION_DOWN) { startX=event.getRawX(); startY=event.getRawY(); x=windowParams.x; y=windowParams.y; moved=false; return true; }
-                if (event.getAction() == MotionEvent.ACTION_MOVE) {
-                    float dx=event.getRawX()-startX, dy=event.getRawY()-startY;
-                    if (Math.abs(dx)+Math.abs(dy)>ViewConfiguration.get(PlaybackService.this).getScaledTouchSlop()) moved=true;
-                    if (moved) { windowParams.x=x+(int)dx; windowParams.y=y+(int)dy; clampWindow(); moveWindow(); } return true;
-                }
-                if (event.getAction() == MotionEvent.ACTION_UP) {
-                    if (!moved) v.performClick();
-                    else getSharedPreferences("window",MODE_PRIVATE).edit().putInt("x",windowParams.x).putInt("y",windowParams.y).apply();
-                    return true;
-                }
-                return event.getAction() == MotionEvent.ACTION_CANCEL;
-            }
-        });
-    }
-    private void clampWindow() {
-        int width=getResources().getDisplayMetrics().widthPixels, height=getResources().getDisplayMetrics().heightPixels;
-        windowParams.x=Math.max(0,Math.min(windowParams.x,width-windowParams.width));
-        windowParams.y=Math.max(0,Math.min(windowParams.y,height-windowParams.height-dp(48)));
-    }
-    private void moveWindow() { if(panel != null) try { windows.updateViewLayout(panel,windowParams); } catch(Exception e) { report("悬浮窗权限可能已被撤销。"); } }
     @Override public void onConfigurationChanged(android.content.res.Configuration config) {
         super.onConfigurationChanged(config);
-        if(panel != null) { clampWindow(); moveWindow(); }
+        if(overlay!=null)overlay.configurationChanged();
     }
     @Override public void onDestroy() {
         destroyed=true; audio.unregisterAudioDeviceCallback(deviceCallback); generation++; importer.shutdownNow(); handler.removeCallbacks(ticker);
-        if(panel != null) { try { windows.removeView(panel); } catch(Exception ignored) {} panel=null; }
+        if(overlay!=null){overlay.close();overlay=null;}
         if(player != null) { player.release(); player=null; }
         cancelPending(); abandonFocus();
         if(session != null) session.release(); try { unregisterReceiver(noisy); } catch(Exception ignored) {}

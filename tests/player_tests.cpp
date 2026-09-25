@@ -132,20 +132,21 @@ private slots:
         }
         window->hide(); QTRY_VERIFY(icon->isVisible()); window->show();
         QTest::qWait(200);
-        QVERIFY(window->height() > 500);
+        QVERIFY(window->height() < 500); // Card without an expanded section.
         if (!artifactDir.isEmpty()) QVERIFY(window->grabWindow().save(artifactDir + "/windows-expanded.png"));
-        QVERIFY(window->setProperty("currentPage", 0));
+        QVERIFY(window->setProperty("section", "more"));
+        QVERIFY(window->setProperty("detail", "search"));
         QTest::qWait(100);
         QVERIFY(window->findChild<QQuickItem *>("searchInput")->isVisible());
         auto *quality = window->findChild<QObject *>("qualitySelector"); QVERIFY(quality);
         QVERIFY(QMetaObject::invokeMethod(quality, "activated", Q_ARG(int, 2)));
         QCOMPARE(controller.quality(), QString("exhigh"));
         if (!artifactDir.isEmpty()) QVERIFY(window->grabWindow().save(artifactDir + "/windows-search.png"));
-        window->setProperty("currentPage", 3); QTest::qWait(100);
+        window->setProperty("section", "lyrics"); QTest::qWait(100);
         QVERIFY(window->findChild<QQuickItem *>("lyricsText")->isVisible());
         QVERIFY(window->findChild<QObject *>("lyricsText")->property("readOnly").toBool());
         if (!artifactDir.isEmpty()) QVERIFY(window->grabWindow().save(artifactDir + "/windows-lyrics.png"));
-        window->setProperty("currentPage", 2);
+        window->setProperty("section", "playlist");
         QTemporaryDir files;
         QFile bogus(files.filePath("dragged.mp3"));
         QVERIFY(bogus.open(QIODevice::WriteOnly)); bogus.write("This is not music."); bogus.close();
@@ -182,6 +183,7 @@ private slots:
         QCOMPARE(engine.rootObjects().size(), 1);
         auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
         QVERIFY(window); window->show();
+        window->setProperty("section", "more"); window->setProperty("detail", "search");
         QVERIFY(QTest::qWaitForWindowExposed(window));
         auto *theme = window->findChild<QObject *>("themeSelector");
         QVERIFY2(theme, "Appearance settings must offer system, light and dark themes");
@@ -189,14 +191,14 @@ private slots:
         const auto barY = bar->mapToScene(QPointF()).y();
         auto *input = window->findChild<QObject *>("searchInput"); QVERIFY(input);
         auto *searchField = qobject_cast<QQuickItem *>(input); QVERIFY(searchField);
-        QVERIFY2(searchField->width() > 300, "Navigation must leave room for the search content");
+        QVERIFY2(searchField->width() > 180, "The compact search field must remain usable");
         QVERIFY(searchField->mapToScene(QPointF(searchField->width(), 0)).x() < window->width());
         input->setProperty("text", QStringLiteral("保留搜索内容"));
         for (int mode : {1, 2}) {
             QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, mode)));
             QTRY_COMPARE(window->property("darkMode").toBool(), mode == 2);
-            for (int page : {1, 2, 3, 4, 0}) {
-                QVERIFY(window->setProperty("currentPage", page));
+            for (const auto &section : {"lyrics", "playlist", "more"}) {
+                QVERIFY(window->setProperty("section", section));
                 QTest::qWait(30);
                 QVERIFY(bar->isVisible());
                 QCOMPARE(bar->mapToScene(QPointF()).y(), barY);
@@ -214,14 +216,14 @@ private slots:
             if (!artifacts.isEmpty()) {
                 QDir().mkpath(artifacts);
                 QVERIFY(window->grabWindow().save(artifacts + (mode == 1 ? "/theme-light.png" : "/theme-dark.png")));
-                window->setProperty("currentPage", 4); QTest::qWait(50);
+                window->setProperty("section", "more"); window->setProperty("detail", "settings"); QTest::qWait(50);
                 QVERIFY(window->grabWindow().save(artifacts + (mode == 1 ? "/settings-light.png" : "/settings-dark.png")));
                 auto *themeItem = qobject_cast<QQuickItem *>(theme); QVERIFY(themeItem);
                 QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, themeItem->mapToScene(QPointF(themeItem->width()/2, themeItem->height()/2)).toPoint());
                 QTest::qWait(150);
                 QVERIFY(window->grabWindow().save(artifacts + (mode == 1 ? "/dropdown-light.png" : "/dropdown-dark.png")));
                 QTest::keyClick(window, Qt::Key_Escape);
-                window->setProperty("currentPage", 0);
+                window->setProperty("section", "more"); window->setProperty("detail", "search");
             }
         }
         controller.toggle(); QTRY_VERIFY(!controller.playing());
@@ -240,17 +242,23 @@ private slots:
         auto *volume = window->findChild<QQuickItem *>("volumeSlider"); QVERIFY(volume);
         QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, volume->mapToScene(QPointF(volume->width()/2,volume->height()/2)).toPoint());
         QVERIFY(qAbs(controller.volume() - 50) < 3);
-        auto *sound = window->findChild<QQuickItem *>("soundButton"); QVERIFY(sound);
-        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, sound->mapToScene(QPointF(sound->width()/2,sound->height()/2)).toPoint());
-        QTRY_VERIFY(window->findChild<QQuickItem *>("outputSelector")->isVisible());
-        QTest::keyClick(window, Qt::Key_Escape);
-        QVERIFY(window->findChild<QObject *>("localSongs")->property("count").toInt() > 0);
-        window->resize(820, 620); QTest::qWait(100);
-        QVERIFY(searchField->width() > 250);
-        QVERIFY(searchField->mapToScene(QPointF(searchField->width(),0)).x() < window->width());
+        window->setProperty("section", "more"); window->setProperty("detail", "settings");
+        QTest::qWait(100);
+        QVERIFY(window->findChild<QQuickItem *>("outputSelector")->isVisible());
+        QVERIFY(window->findChild<QObject *>("playlistView")->property("count").toInt() > 0);
+        auto *size = window->findChild<QObject *>("windowScaleSlider"); QVERIFY(size);
+        const int originalWidth = window->width();
+        const double originalScale = window->property("contentScale").toDouble();
+        size->setProperty("value", 120.0);
+        QVERIFY(QMetaObject::invokeMethod(size, "moved"));
+        QTest::qWait(100);
+        QVERIFY(window->width() >= originalWidth);
+        QVERIFY(window->property("contentScale").toDouble() >= originalScale);
+        auto *opacity = window->findChild<QObject *>("backgroundOpacitySlider"); QVERIFY(opacity);
+        opacity->setProperty("value", 20.0);
+        QVERIFY(QMetaObject::invokeMethod(opacity, "moved"));
+        QCOMPARE(window->opacity(), 1.0); // The native window must remain interactive.
         QVERIFY(bar->mapToScene(QPointF(0,bar->height())).y() <= window->height());
-        const auto artifacts = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
-        if (!artifacts.isEmpty()) QVERIFY(window->grabWindow().save(artifacts + "/minimum-window.png"));
         // Reopening the application must retain the selected appearance.
         QQmlApplicationEngine reopened;
         reopened.rootContext()->setContextProperty("player", &controller);
@@ -267,6 +275,7 @@ private slots:
         engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
         QCOMPARE(engine.rootObjects().size(), 1);
         auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        window->setProperty("section", "more"); window->setProperty("detail", "search");
         window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
         auto *input = window->findChild<QObject *>("searchInput"); QVERIFY(input);
         input->setProperty("text", QStringLiteral("海阔天空"));
@@ -297,42 +306,32 @@ private slots:
                 QVERIFY(window->grabWindow().save(artifactDir + (mode == 1 ? "/live-search-light.png" : "/live-search-dark.png")));
             }
         }
-        window->setProperty("currentPage", 3); QTest::qWait(150);
+        window->setProperty("section", "lyrics"); QTest::qWait(150);
         auto *text = window->findChild<QQuickItem *>("lyricsText"); QVERIFY(text); QVERIFY(text->isVisible());
         QVERIFY(!text->property("text").toString().trimmed().isEmpty());
         if (!artifactDir.isEmpty()) QVERIFY(window->grabWindow().save(artifactDir + "/live-lyrics.png"));
         QCOMPARE(warnings.size(), 0);
         controller.toggle();
     }
-    void mobileLayout() {
+    void androidWelcomeLayout() {
+        // Android now has a dedicated QML welcome page; the overlay is native Java.
         PlayerController controller;
-        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlEngine::warnings);
         engine.rootContext()->setContextProperty("player", &controller);
-        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        const auto page = QFileInfo(QStringLiteral(FLOATMUSIC_QML_FILE)).dir().filePath("AndroidMain.qml");
+        engine.load(QUrl::fromLocalFile(page));
         QCOMPARE(engine.rootObjects().size(), 1);
         auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
-        QVERIFY2(window->setProperty("mobile", true), "Shared UI must have a phone layout");
-        window->resize(360, 780); window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
-        QTest::qWait(100);
-        auto *input = window->findChild<QQuickItem *>("searchInput"); QVERIFY(input);
-        QVERIFY(input->width() > 180);
-        QVERIFY(input->mapToScene(QPointF(input->width(), 0)).x() <= 360);
-        auto *navigation = window->findChild<QQuickItem *>("mobileNavigation"); QVERIFY(navigation); QVERIFY(navigation->isVisible());
-        for (int mode : {1,2}) {
-            auto *theme = window->findChild<QObject *>("themeSelector"); QVERIFY(theme);
-            QMetaObject::invokeMethod(theme, "activated", Q_ARG(int,mode));
-            for (int page : {0,1,2,3,4}) {
-                window->setProperty("currentPage", page); QTest::qWait(50);
-                auto *bar = window->findChild<QQuickItem *>("playerBar"); QVERIFY(bar->isVisible());
-                QVERIFY(bar->mapToScene(QPointF(0,bar->height())).y() <= navigation->mapToScene(QPointF()).y());
-                const auto dir = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
-                if (!dir.isEmpty()) QVERIFY(window->grabWindow().save(dir + QString("/mobile-%1-%2.png").arg(mode).arg(page)));
-            }
+        for (const auto size : {QSize(360,780), QSize(780,360)}) {
+            window->resize(size); window->show();
+            QVERIFY(QTest::qWaitForWindowExposed(window));
+            QTest::qWait(100);
+            QVERIFY(window->isVisible()); // Launch must not hide the activity page.
         }
-        window->resize(780,360); window->setProperty("currentPage",0); QTest::qWait(80);
-        QVERIFY(navigation->isVisible());
-        QCOMPARE(warnings.size(),0);
+        QCOMPARE(warnings.size(), 0);
     }
+
 };
 int main(int argc, char **argv) {
     QGuiApplication app(argc, argv);

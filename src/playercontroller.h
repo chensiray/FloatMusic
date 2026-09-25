@@ -6,6 +6,7 @@
 #include <QTimer>
 #include <QMediaDevices>
 #include <QVariantList>
+#include <QRect>
 #include "playliststore.h"
 #include "musicapi.h"
 
@@ -42,6 +43,10 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool lyricsLoading READ lyricsLoading NOTIFY lyricsChanged)
     Q_PROPERTY(bool lyricsFailed READ lyricsFailed NOTIFY lyricsChanged)
     Q_PROPERTY(bool online READ online NOTIFY changed)
+    Q_PROPERTY(QString artist READ artist NOTIFY changed)
+    Q_PROPERTY(QVariantList favorites READ favorites NOTIFY favoritesChanged)
+    Q_PROPERTY(bool currentFavorite READ currentFavorite NOTIFY changed)
+    Q_PROPERTY(QString favoriteMessage READ favoriteMessage NOTIFY favoritesChanged)
 public:
     explicit PlayerController(QObject *parent = nullptr);
     explicit PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent = nullptr);
@@ -77,6 +82,15 @@ public:
     bool lyricsLoading() const { return m_lyricsLoading; }
     bool lyricsFailed() const { return m_lyricsFailed; }
     bool online() const { return m_online; }
+    QString artist() const { return m_loadedTrack.value("artist").toString(); }
+    QVariantList favorites() const { return m_favorites; }
+    bool currentFavorite() const;
+    QString favoriteMessage() const { return m_favoriteMessage; }
+    Q_INVOKABLE void toggleFavorite();
+    Q_INVOKABLE void playFavorite(const QString &id);
+    Q_INVOKABLE void addFavorite(const QString &id);
+    Q_INVOKABLE void removeFavorite(const QString &id);
+    Q_INVOKABLE QRect desktopWorkArea(int x, int y) const;
     Q_INVOKABLE void setQuality(const QString &quality);
     Q_INVOKABLE void playSearchResult(int index);
     Q_INVOKABLE void retryPlayback();
@@ -100,6 +114,8 @@ public:
     Q_INVOKABLE void toggle();
     Q_INVOKABLE void seek(qint64 milliseconds);
     Q_INVOKABLE void showFloating();
+    Q_INVOKABLE void initializeAndroidUi();
+    Q_INVOKABLE int androidThemeMode() const;
     Q_INVOKABLE void setDarkTheme(bool dark);
     Q_INVOKABLE void quit();
     Q_INVOKABLE void rejectDrop();
@@ -109,10 +125,21 @@ signals:
     void libraryChanged();
     void searchChanged();
     void lyricsChanged();
+    void favoritesChanged();
 private:
     void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false);
     void step(int delta, bool automatic = false);
     void syncQueue();
+    void saveFavorites();
+    QVariantMap favoriteTrack(const QString &id) const;
+    QVariantList m_favorites;
+    QString m_favoriteMessage;
+#ifdef Q_OS_ANDROID
+    void processOverlayEvents();
+    void publishOverlayUi();
+    QByteArray m_overlayUi;
+    QString m_overlayMessage;
+#endif
     PlaylistStore m_library;
     MusicApi m_api;
     QVariantList m_searchResults;
