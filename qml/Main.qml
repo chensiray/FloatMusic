@@ -9,6 +9,13 @@ ApplicationWindow {
     property bool quitting: false
     property string section: ""
     property string detail: ""
+    readonly property var playbackModes: [
+        { key: "sequential", name: "顺序播放", icon: "sequential" },
+        { key: "loop", name: "列表循环", icon: "loop" },
+        { key: "single", name: "单曲循环", icon: "single" },
+        { key: "shuffle", name: "随机播放", icon: "shuffle" }
+    ]
+    readonly property string playbackModeName: playbackModes.filter(function(mode) { return mode.key === player.playbackMode })[0].name
     readonly property int baseWidth: 380
     property rect workArea: Qt.rect(0, 0, 1280, 720)
     readonly property real contentScale: Math.min(Math.max(0.9, Math.min(1.4, appearance.windowScale)), Math.max(0.4, (workArea.width - 16) / baseWidth))
@@ -35,7 +42,7 @@ ApplicationWindow {
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: "浮音 0.5"
+    title: "浮音 0.6 · 桌面预览"
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -60,6 +67,7 @@ ApplicationWindow {
         fitWindow(root); root.showNormal(); root.raise(); root.requestActivate()
     }
     function collapse() {
+        playbackMenu.close(); lyricTiming.close()
         floating.x = root.x; floating.y = root.y
         section = ""; detail = ""; root.hide(); fitWindow(floating); saveIconPosition()
     }
@@ -85,7 +93,7 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Ctrl+F"; enabled: root.visible; onActivated: {root.openDetail("search");keywords.forceActiveFocus()} }
     Shortcut { sequence: "Ctrl+O"; enabled: root.visible; onActivated: root.chooseMusic() }
-    Shortcut { sequence: "Escape"; enabled: root.visible; onActivated: {if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
+    Shortcut { sequence: "Escape"; enabled: root.visible && !playbackMenu.opened && !lyricTiming.opened; onActivated: {if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
     component Glyph: Canvas {
         id: glyph
         property string kind: "music"
@@ -107,6 +115,14 @@ ApplicationWindow {
             else if (kind === "back") path([[15,5],[8,12],[15,19]])
             else if (kind === "chevron") path([[7,10],[12,15],[17,10]])
             else if (kind === "check") path([[5,12],[10,17],[19,7]])
+            else if (kind === "up" || kind === "down") { if(kind === "down"){c.translate(0,24);c.scale(1,-1)} path([[12,20],[12,4]]);path([[6,10],[12,4],[18,10]]) }
+            else if (kind === "sequential") {path([[4,6],[20,6]]);path([[4,12],[20,12]]);path([[4,18],[20,18],[16,14]]);path([[20,18],[16,22]])}
+            else if (kind === "loop" || kind === "single") {
+                path([[5,10],[5,6],[20,6],[17,3]]);path([[20,6],[17,9]]);
+                path([[19,14],[19,18],[4,18],[7,21]]);path([[4,18],[7,15]]);
+                if(kind === "single")path([[10,11],[12,9],[12,15]])
+            }
+            else if (kind === "shuffle") {path([[3,6],[7,6],[17,18],[21,18],[18,15]]);path([[21,18],[18,21]]);path([[3,18],[7,18],[17,6],[21,6],[18,3]]);path([[21,6],[18,9]])}
             else if (kind === "folder") path([[3,7],[10,7],[12,9],[21,9],[21,20],[3,20],[3,7],[3,4],[10,4],[12,7]])
             else if (kind === "list") { for(var y=6;y<=18;y+=6){path([[9,y],[21,y]]);c.fillRect(3,y-1,2,2)} }
             else if (kind === "heart") { c.beginPath();c.moveTo(12,20);c.bezierCurveTo(-4,10,5,-1,12,7);c.bezierCurveTo(19,-1,28,10,12,20);c.stroke() }
@@ -199,6 +215,65 @@ ApplicationWindow {
         primary: root.section === sectionName
         onClicked: root.toggleSection(sectionName)
         Accessible.description: primary ? "已展开，再次点击收起" : "点击展开"
+    }
+    // Keep popups in the card's overlay: native popup windows can fall behind
+    // the always-on-top Windows card after focus/activation changes.
+    component UpPopup: Popup {
+        id: upPopup
+        required property Item anchorItem
+        parent: Overlay.overlay
+        popupType: Popup.Item
+        z: 1000
+        property point origin: Qt.point(0, 0)
+        onAboutToShow: origin = anchorItem.mapToItem(Overlay.overlay, anchorItem.width, 0)
+        x: Math.max(8, Math.min(origin.x - width * root.contentScale, root.width - width * root.contentScale - 8))
+        y: Math.max(8, origin.y - (height + 8) * root.contentScale)
+        scale: root.contentScale; transformOrigin: Popup.TopLeft
+        margins: 8; padding: 8; focus: true; modal: true; dim: false
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { radius: 12; color: root.elevated; border.color: root.fieldBorder }
+        onClosed: if (root.visible) anchorItem.forceActiveFocus()
+    }
+    UpPopup {
+        id: playbackMenu; objectName: "playbackModePopup"; anchorItem: modeButton
+        width: 176; height: 192
+        contentItem: Column {
+            Repeater {
+                model: root.playbackModes
+                delegate: ItemDelegate {
+                    id: modeOption
+                    required property var modelData
+                    width: 160; height: 44
+                    Accessible.name: modelData.name
+                    Accessible.role: Accessible.RadioButton
+                    Accessible.checked: player.playbackMode === modelData.key
+                    onClicked: { player.setPlaybackMode(modelData.key); playbackMenu.close() }
+                    contentItem: RowLayout {
+                        spacing: 10
+                        Glyph { kind: modeOption.modelData.icon; tint: root.accent; implicitWidth: 18; implicitHeight: 18 }
+                        Copy { text: modeOption.modelData.name; Layout.fillWidth: true }
+                        Glyph { kind: "check"; visible: player.playbackMode === modeOption.modelData.key; tint: root.accent; implicitWidth: 16; implicitHeight: 16 }
+                    }
+                    background: Rectangle {
+                        radius: 8; color: modeOption.hovered || modeOption.down || player.playbackMode === modeOption.modelData.key ? root.selection : "transparent"
+                        border.width: modeOption.activeFocus ? 2 : 0; border.color: root.accent
+                    }
+                }
+            }
+        }
+    }
+    UpPopup {
+        id: lyricTiming; anchorItem: timingButton; width: 264; height: 146
+        contentItem: ColumnLayout {
+            spacing: 6
+            Copy { text: "歌词时间微调"; font.weight: Font.DemiBold }
+            Hint { text: "仅此歌曲 · 正值让歌词提前" }
+            RowLayout {
+                Action { text: "−0.5s"; Accessible.name: "歌词延后半秒"; enabled: player.lyricOffset > -10000; onClicked: player.setLyricOffset(player.lyricOffset - 500) }
+                Action { text: (player.lyricOffset > 0 ? "+" : "") + (player.lyricOffset / 1000).toFixed(1) + "s"; Layout.fillWidth: true; ToolTip.text: "点击归零"; Accessible.name: "歌词偏移，点击归零"; onClicked: player.setLyricOffset(0) }
+                Action { text: "+0.5s"; Accessible.name: "歌词提前半秒"; enabled: player.lyricOffset < 10000; onClicked: player.setLyricOffset(player.lyricOffset + 500) }
+            }
+        }
     }
     component Hint: Copy {
         Layout.fillWidth: true; color: root.muted; font.pixelSize: 12
@@ -340,11 +415,17 @@ ApplicationWindow {
                         Copy { text: root.clock(player.duration); color: root.muted; font.pixelSize: 12 }
                     }
                     RowLayout {
-                        Layout.fillWidth: true; spacing: 16
+                        Layout.fillWidth: true; spacing: 12
                         Item { Layout.fillWidth: true }
                         Action { objectName: "previousButton"; glyph: "previous"; quiet: true; Accessible.name: "上一首"; ToolTip.text: "上一首"; enabled: !player.busy&&player.tracks.length>0; onClicked: player.previous() }
                         Action { objectName: "playPauseButton"; glyph: player.playing ? "pause" : "play"; primary: true; implicitWidth: 72; implicitHeight: 48; Accessible.name: player.playing ? "暂停" : "播放"; ToolTip.text: Accessible.name; enabled: player.ready&&!player.busy; onClicked: player.toggle() }
                         Action { objectName: "nextButton"; glyph: "next"; quiet: true; Accessible.name: "下一首"; ToolTip.text: "下一首"; enabled: !player.busy&&player.tracks.length>0; onClicked: player.next() }
+                        Action {
+                            id: modeButton; objectName: "playbackModeButton"; glyph: player.playbackMode; quiet: true
+                            Accessible.name: "播放模式：" + root.playbackModeName
+                            ToolTip.text: Accessible.name
+                            onClicked: playbackMenu.opened ? playbackMenu.close() : playbackMenu.open()
+                        }
                         Item { Layout.fillWidth: true }
                     }
                     RowLayout {
@@ -384,17 +465,109 @@ ApplicationWindow {
                             spacing: 12
                             RowLayout {
                                 Layout.fillWidth: true
-                                Choice { id: lyricMode; Layout.fillWidth: true; model: ["原文", "译文", "原文与译文"]; Accessible.name: "歌词显示方式" }
-                                Action { objectName: "retryLyrics"; text: "重新获取"; quiet: true; enabled: player.online&&!player.lyricsLoading; onClicked: player.retryLyrics() }
+                                Choice { id: lyricMode; Layout.fillWidth: true; implicitWidth: 150; model: ["原文", "译文", "原文与译文"]; Accessible.name: "歌词显示方式"; onCurrentIndexChanged: Qt.callLater(lyricView.followCurrent) }
+                                Action { objectName: "retryLyrics"; text: "刷新"; quiet: true; Accessible.name: "重新获取歌词"; enabled: player.online&&!player.lyricsLoading; onClicked: player.retryLyrics() }
+                                Action { id: timingButton; glyph: "settings"; quiet: true; enabled: player.lyricLines.length > 0; Accessible.name: "歌词时间微调"; ToolTip.text: Accessible.name; onClicked: lyricTiming.open() }
                             }
                             Hint { text: player.lyricsMessage; color: player.lyricsFailed ? root.danger : root.muted }
-                            ScrollView {
-                                Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
-                                TextArea {
-                                    objectName: "lyricsText"; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
-                                    textFormat: TextEdit.PlainText; font.pixelSize: 18; color: root.ink
-                                    selectionColor: root.accent; selectedTextColor: root.accentInk; background: null; padding: 8
-                                    text: lyricMode.currentIndex===0 ? root.lyricText(player.lyrics) : lyricMode.currentIndex===1 ? (root.lyricText(player.translation)||"暂无译文") : root.lyricText(player.lyrics)+(player.translation.length>0 ? "\n\n—— 译文 ——\n\n"+root.lyricText(player.translation) : "\n\n暂无译文")
+                            Item {
+                                Layout.fillWidth: true; Layout.fillHeight: true
+                                ListView {
+                                    id: lyricView; objectName: "timedLyrics"
+                                    anchors.fill: parent; clip: true
+                                    visible: count > 0
+                                    model: player.lyricLines
+                                    currentIndex: player.currentLyricIndex
+                                    property bool manualBrowsing: false
+                                    // The current item remains instantiated even when scrolled out of view.
+                                    readonly property bool currentAbove: currentItem ? currentItem.y + currentItem.height / 2 < contentY + height / 2 : currentIndex < 0
+                                    highlightFollowsCurrentItem: false
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    spacing: 10; cacheBuffer: height
+                                    header: Item { width: 1; height: lyricView.height * 0.3 }
+                                    footer: Item { width: 1; height: lyricView.height * 0.5 }
+                                    function followCurrent() {
+                                        if (!manualBrowsing && visible && count > 0) {
+                                            // Apply freshly delivered delegates before computing their positions.
+                                            forceLayout()
+                                            positionViewAtIndex(Math.max(0, player.currentLyricIndex), ListView.Center)
+                                        }
+                                    }
+                                    function returnToCurrent() { cancelFlick(); manualBrowsing = false; followCurrent() }
+                                    onCurrentIndexChanged: Qt.callLater(followCurrent)
+                                    onModelChanged: Qt.callLater(followCurrent)
+                                    onCountChanged: Qt.callLater(followCurrent)
+                                    onHeightChanged: Qt.callLater(followCurrent)
+                                    onVisibleChanged: if (visible) Qt.callLater(followCurrent)
+                                    onDraggingChanged: if (dragging) manualBrowsing = true
+                                    Keys.onPressed: function(event) {
+                                        if (event.key === Qt.Key_Up || event.key === Qt.Key_Down || event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown) {
+                                            manualBrowsing = true
+                                            var delta = event.key === Qt.Key_Up ? -48 : event.key === Qt.Key_Down ? 48 : event.key === Qt.Key_PageUp ? -height : height
+                                            contentY = Math.max(originY, Math.min(originY + Math.max(0, contentHeight - height), contentY + delta))
+                                            event.accepted = true
+                                        }
+                                    }
+                                    activeFocusOnTab: true
+                                    Accessible.name: "逐句歌词，使用上下方向键翻看"
+                                    ScrollBar.vertical: ScrollBar { onPressedChanged: if (pressed) lyricView.manualBrowsing = true }
+                                    MouseArea {
+                                        anchors.fill: parent; acceptedButtons: Qt.NoButton
+                                        onWheel: function(wheel) { lyricView.manualBrowsing = true; wheel.accepted = false }
+                                    }
+                                    delegate: Item {
+                                        id: lyricRow
+                                        required property var modelData
+                                        required property int index
+                                        readonly property bool active: index === player.currentLyricIndex
+                                        width: lyricView.width - 14
+                                        height: Math.max(36, lyricWords.implicitHeight + 16)
+                                        Rectangle { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; width: 3; height: 20; radius: 1.5; color: root.accent; visible: lyricRow.active }
+                                        Column {
+                                            id: lyricWords; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 14; anchors.verticalCenter: parent.verticalCenter; spacing: 6
+                                            Text {
+                                                width: parent.width; textFormat: Text.PlainText; wrapMode: Text.Wrap
+                                                text: lyricMode.currentIndex === 1 ? (lyricRow.modelData.translation || (lyricRow.modelData.original ? "暂无该句译文" : "♪")) : (lyricRow.modelData.original || "♪")
+                                                font.family: root.font.family; font.pixelSize: 20; font.weight: lyricRow.active ? Font.DemiBold : Font.Normal
+                                                // Stable line layout; enlarging the active line does not move adjacent rows.
+                                                scale: lyricRow.active ? 1 : 0.9; transformOrigin: Item.Left
+                                                color: lyricRow.active ? root.accent : root.muted
+                                            }
+                                            Text {
+                                                width: parent.width; visible: lyricMode.currentIndex === 2 && text.length > 0
+                                                text: lyricRow.modelData.translation; textFormat: Text.PlainText; wrapMode: Text.Wrap
+                                                font.family: root.font.family; font.pixelSize: 14; color: lyricRow.active ? root.ink : root.muted
+                                            }
+                                        }
+                                    }
+                                    Connections {
+                                        target: player
+                                        property string lastTrack: ""
+                                        function onChanged() {
+                                            if (lastTrack !== player.currentTrack) {
+                                                lastTrack = player.currentTrack
+                                                lyricView.manualBrowsing = false
+                                                Qt.callLater(lyricView.followCurrent)
+                                            }
+                                        }
+                                    }
+                                }
+                                ScrollView {
+                                    anchors.fill: parent; visible: player.lyricLines.length === 0; clip: true; contentWidth: availableWidth
+                                    TextArea {
+                                        objectName: "lyricsText"; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
+                                        textFormat: TextEdit.PlainText; font.pixelSize: 18; color: root.ink
+                                        selectionColor: root.accent; selectedTextColor: root.accentInk; background: null; padding: 8
+                                        text: lyricMode.currentIndex===0 ? root.lyricText(player.lyrics) : lyricMode.currentIndex===1 ? (root.lyricText(player.translation)||"暂无译文") : root.lyricText(player.lyrics)+(player.translation.length>0 ? "\n\n—— 译文 ——\n\n"+root.lyricText(player.translation) : "")
+                                    }
+                                }
+                                Action {
+                                    objectName: "returnToCurrentLyric"
+                                    anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 8
+                                    visible: lyricView.visible && lyricView.manualBrowsing && player.currentLyricIndex >= 0
+                                    primary: true; glyph: lyricView.currentAbove ? "up" : "down"
+                                    Accessible.name: "回到当前歌词并恢复跟随"; ToolTip.text: Accessible.name
+                                    onClicked: lyricView.returnToCurrent()
                                 }
                             }
                         }
@@ -427,7 +600,7 @@ ApplicationWindow {
                                 }
                                 Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: songs.count===0; text: "暂无歌曲，去“更多”搜索或导入" }
                             }
-                            Hint { text: player.tracks.length+" 首 · 自动播放到末尾停止" }
+                            Hint { text: player.tracks.length+" 首 · " + root.playbackModeName }
                         }
                         ColumnLayout {
                             spacing: 10

@@ -47,6 +47,10 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList favorites READ favorites NOTIFY favoritesChanged)
     Q_PROPERTY(bool currentFavorite READ currentFavorite NOTIFY changed)
     Q_PROPERTY(QString favoriteMessage READ favoriteMessage NOTIFY favoritesChanged)
+    Q_PROPERTY(QString playbackMode READ playbackMode WRITE setPlaybackMode NOTIFY playbackModeChanged)
+    Q_PROPERTY(QVariantList lyricLines READ lyricLines NOTIFY lyricLinesChanged)
+    Q_PROPERTY(int currentLyricIndex READ currentLyricIndex NOTIFY currentLyricChanged)
+    Q_PROPERTY(int lyricOffset READ lyricOffset WRITE setLyricOffset NOTIFY lyricOffsetChanged)
 public:
     explicit PlayerController(QObject *parent = nullptr);
     explicit PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent = nullptr);
@@ -86,6 +90,12 @@ public:
     QVariantList favorites() const { return m_favorites; }
     bool currentFavorite() const;
     QString favoriteMessage() const { return m_favoriteMessage; }
+    QString playbackMode() const { return m_playbackMode; }
+    QVariantList lyricLines() const { return m_lyricLines; }
+    int currentLyricIndex() const { return m_currentLyricIndex; }
+    int lyricOffset() const { return m_lyricOffset; }
+    Q_INVOKABLE void setPlaybackMode(const QString &mode);
+    Q_INVOKABLE void setLyricOffset(int milliseconds);
     Q_INVOKABLE void toggleFavorite();
     Q_INVOKABLE void playFavorite(const QString &id);
     Q_INVOKABLE void addFavorite(const QString &id);
@@ -125,9 +135,22 @@ signals:
     void libraryChanged();
     void searchChanged();
     void lyricsChanged();
+    void lyricLinesChanged();
     void favoritesChanged();
+    void playbackModeChanged();
+    void currentLyricChanged();
+    void lyricOffsetChanged();
 private:
-    void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false);
+    void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false, qint64 resumePosition = -1);
+    void rebuildLyrics();
+    void updateCurrentLyric();
+    void saveSession();
+    void restoreSession();
+    QString m_playbackMode = "sequential";
+    QVariantList m_lyricLines;
+    int m_currentLyricIndex = -1, m_lyricOffset = 0;
+    bool m_sessionDeferred = false, m_shuttingDown = false;
+    QTimer m_sessionTimer;
     void step(int delta, bool automatic = false);
     void syncQueue();
     void saveFavorites();

@@ -43,6 +43,10 @@ public class PlaybackService extends Service {
     private JSONObject importedTrack = null, loadedTrack = null;
     private String quality = "standard", loadedQuality = "standard", actualFormat = "等待音频信息";
     private String currentTrack = "", apiBase = "";
+    private String playbackMode = "sequential";
+    private boolean restored = false;
+    private int restoredPosition = 0, restoredDuration = 0, pendingSeek = -1, lyricOffset = 0;
+    private long lastSessionSave = 0;
     private int volume = 70;
     private boolean ducked = false;
     private String selectedOutput = "";
@@ -55,7 +59,7 @@ public class PlaybackService extends Service {
         @Override public void onReceive(Context context, Intent intent) { pause(true); }
     };
     private final Runnable ticker = new Runnable() {
-        @Override public void run() { if (destroyed) return; update(); handler.postDelayed(this, 250); }
+        @Override public void run() { if (destroyed) return; update(); if(SystemClock.elapsedRealtime()-lastSessionSave>=5000)saveSession(false); handler.postDelayed(this, 250); }
     };
     @Override public void onCreate() {
         super.onCreate(); instance = this;
@@ -69,6 +73,7 @@ public class PlaybackService extends Service {
             String imported=getSharedPreferences("queue",MODE_PRIVATE).getString("imported","");
             if(!imported.isEmpty())importedTrack=new JSONObject(imported);
         } catch (Exception ignored) { queue = new JSONArray(); }
+        restoreSession();
         AudioAttributes attributes = new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build();
         focus = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN).setAudioAttributes(attributes).setOnAudioFocusChangeListener(change -> {
             if (change == AudioManager.AUDIOFOCUS_GAIN) {
@@ -109,6 +114,14 @@ public class PlaybackService extends Service {
     void dispatch(String command, String value) {
         if (command == null) return;
         switch (command) {
+            case "mode":
+                if(java.util.Arrays.asList("sequential","loop","single","shuffle").contains(value)) {
+                    playbackMode=value;getSharedPreferences("playback",0).edit().putString("mode",value).apply();update();
+                } break;
+            case "lyricOffset":
+                try { if(!currentTrack.isEmpty()) {lyricOffset=Math.max(-10000,Math.min(10000,Integer.parseInt(value)));
+                    getSharedPreferences("lyricOffsets",0).edit().putInt(currentTrack,lyricOffset).apply();update();} }
+                catch(NumberFormatException ignored){} break;
             case "volume": volume=Math.max(0,Math.min(100,Integer.parseInt(value))); getSharedPreferences("audio",MODE_PRIVATE).edit().putInt("volume",volume).apply(); applyVolume(); update(); break;
             case "output": selectedOutput=value; refreshOutputs(); break;
             case "outputs": refreshOutputs(); break;
@@ -128,14 +141,38 @@ public class PlaybackService extends Service {
             case "import": importAudio(Uri.parse(value)); break;
             case "toggle": if (isPlaying()) pause(true); else play(); break;
             case "seek": try { seek(Long.parseLong(value)); } catch (Exception ignored) {} break;
-            case "stop": PlayerBridge.event("quit", ""); stopSelf(); break;
+            case "stop": saveSession(true);PlayerBridge.event("quit", ""); stopSelf(); break;
         }
     }
     private boolean isPlaying() { try { return ready && player != null && player.isPlaying(); } catch (IllegalStateException e) { return false; } }
-    private int position() { try { return ready && player != null ? player.getCurrentPosition() : 0; } catch (IllegalStateException e) { return 0; } }
-    private int duration() { try { return ready && player != null ? player.getDuration() : 0; } catch (IllegalStateException e) { return 0; } }
+    private int position() { if(restored)return restoredPosition; if(pendingSeek>=0)return pendingSeek; try { return ready && player != null ? player.getCurrentPosition() : 0; } catch (IllegalStateException e) { return 0; } }
+    private int duration() { if(restored)return restoredDuration; try { return ready && player != null ? player.getDuration() : 0; } catch (IllegalStateException e) { return 0; } }
+    private void restoreSession() {
+        SharedPreferences saved=getSharedPreferences("playback",0);
+        String mode=saved.getString("mode","sequential");
+        if(java.util.Arrays.asList("sequential","loop","single","shuffle").contains(mode))playbackMode=mode;
+        try {
+            JSONObject state=new JSONObject(saved.getString("session","{}")),track=state.optJSONObject("track");
+            if(track==null||track.optString("id").isEmpty()||!java.util.Arrays.asList("local","netease").contains(track.optString("source")))return;
+            loadedTrack=track;currentTrack=track.optString("id");title=track.optString("name");
+            restoredDuration=Math.max(0,state.optInt("duration"));restoredPosition=Math.max(0,Math.min(restoredDuration,state.optInt("position")));
+            lyricOffset=getSharedPreferences("lyricOffsets",0).getInt(currentTrack,0);
+            restored=true;ready=true;
+        } catch(Exception ignored){}
+    }
+    private void saveSession(boolean flush) {
+        if(destroyed||busy||loadedTrack==null||!ready)return;
+        try {
+            JSONObject state=new JSONObject().put("track",loadedTrack).put("position",position()).put("duration",duration());
+            SharedPreferences.Editor editor=getSharedPreferences("playback",0).edit().putString("session",state.toString());
+            if(flush)editor.commit();else editor.apply();lastSessionSave=SystemClock.elapsedRealtime();
+        } catch(Exception ignored){}
+    }
+    void saveBeforeExit(){saveSession(true);}
     private void abandonFocus() { if (audio != null && focus != null) audio.abandonAudioFocusRequest(focus); hasFocus = false; resumeOnFocus = false; }
     private void play() {
+        if(busy)return;
+        if(restored&&loadedTrack!=null){playTrack(loadedTrack,true,true);return;}
         if (!ready || player == null) return;
         if (!hasFocus) hasFocus = audio.requestAudioFocus(focus) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
         if (!hasFocus) { report("暂时无法取得音频焦点，请稍后重试。"); return; }
@@ -146,11 +183,12 @@ public class PlaybackService extends Service {
     private void pause(boolean user) {
         if (isPlaying()) player.pause();
         if (user) abandonFocus();
-        refreshNotification(); update();
+        saveSession(false); refreshNotification(); update();
     }
     private void seek(long value) {
+        if(restored) { restoredPosition=(int)Math.max(0,Math.min(value,restoredDuration));saveSession(false);update();return; }
         if (!ready || player == null) return;
-        try { player.seekTo(Math.max(0, Math.min(value, duration())), MediaPlayer.SEEK_CLOSEST); ended = false; }
+        try { pendingSeek=(int)Math.max(0,Math.min(value,duration()));player.seekTo(pendingSeek, MediaPlayer.SEEK_CLOSEST); ended = false;saveSession(false); }
         catch (Exception e) { report("当前音频无法跳转。"); }
         update();
     }
@@ -241,6 +279,7 @@ public class PlaybackService extends Service {
     }
     private void playTrack(JSONObject track, boolean autoplay, boolean preserve) {
         if(busy)return;
+        saveSession(false);
         if(!java.util.Arrays.asList("standard","higher","exhigh","lossless","hires").contains(quality)) quality="standard";
         busy=true; error=""; final int ticket=++generation; update();
         final String requestedQuality=quality;
@@ -287,11 +326,14 @@ public class PlaybackService extends Service {
         });
     }
     private void step(int delta, boolean automatic) {
+        if(busy)return;
+        if(automatic&&playbackMode.equals("single")&&loadedTrack!=null){playTrack(loadedTrack,true,false);return;}
         if(busy||queue.length()==0)return;
         int index=-1;
-        for(int i=0;i<queue.length();i++) if(currentTrack.equals(queue.optJSONObject(i).optString("id"))) index=i;
-        if(automatic&&(index<0||index+1>=queue.length()))return;
+        for(int i=0;i<queue.length();i++) if(queue.optJSONObject(i)!=null&&currentTrack.equals(queue.optJSONObject(i).optString("id"))) index=i;
+        if(automatic&&(index<0||(playbackMode.equals("sequential")&&index+1>=queue.length())))return;
         int next=index<0?(delta>0?0:queue.length()-1):(index+delta+queue.length())%queue.length();
+        if(playbackMode.equals("shuffle")&&queue.length()>1){next=ThreadLocalRandom.current().nextInt(queue.length()-(index>=0?1:0));if(index>=0&&next>=index)next++;}
         playTrack(queue.optJSONObject(next).optString("id"));
     }
     private void prepare(String source, JSONObject track, boolean autoplay, boolean importing) {
@@ -316,6 +358,8 @@ public class PlaybackService extends Service {
                 if (player != null) player.release();
                 abandonFocus(); player = mp; pending = null; pendingFile = null;
                 currentTrack=track.optString("id"); loadedTrack=track; loadedQuality=requestedQuality;
+                restored=false;pendingSeek=resume>0?Math.min(resume,Math.max(0,mp.getDuration()-1)):-1;
+                lyricOffset=getSharedPreferences("lyricOffsets",0).getInt(currentTrack,0);
                 actualFormat="系统解码";
                 for(MediaPlayer.TrackInfo info:mp.getTrackInfo()) {
                     if(info.getTrackType()==MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO && info.getFormat()!=null) {
@@ -325,15 +369,20 @@ public class PlaybackService extends Service {
                     }
                 }
                 if(importing) { importedTrack=track; queue.put(track); getSharedPreferences("queue",MODE_PRIVATE).edit().putString("imported",track.toString()).apply(); }
-                title = track.optString("name"); ready = true; busy = false; ended = false; error = ""; applyVolume(); refreshOutputs();
+                title = track.optString("name"); ready = true; busy = resume>0; ended = false; error = ""; applyVolume(); refreshOutputs();
+                player.setOnSeekCompleteListener(p -> {if(p==player){pendingSeek=-1;saveSession(false);update();}});
                 player.setOnCompletionListener(p -> { ended = true; abandonFocus(); refreshNotification(); update(); step(1,true); });
-                player.setOnErrorListener((p, what, extra) -> { ready = false; abandonFocus(); report("音频播放失败（"+what+"/"+extra+"），请重试或更换音质。"); refreshNotification(); return true; });
+                player.setOnErrorListener((p, what, extra) -> { ready = false;busy=false;pendingSeek=-1; abandonFocus(); report("音频播放失败（"+what+"/"+extra+"），请重试或更换音质。"); refreshNotification(); return true; });
                 session.setMetadata(new MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, title).putLong(MediaMetadata.METADATA_KEY_DURATION, duration()).build());
                 refreshNotification(); update();
                 if(resume>0) {
-                    player.setOnSeekCompleteListener(p -> {p.setOnSeekCompleteListener(null);if(p==player){if(autoplay)play();else update();}});
-                    player.seekTo(Math.min(resume,Math.max(0,duration()-1)),MediaPlayer.SEEK_CLOSEST);
-                } else if(autoplay)play();
+                    pendingSeek=Math.min(resume,Math.max(0,duration()-1));
+                    player.setOnSeekCompleteListener(p -> {if(p==player){pendingSeek=-1;busy=false;
+                        p.setOnSeekCompleteListener(done -> {if(done==player){pendingSeek=-1;saveSession(false);update();}});
+                        saveSession(false);if(autoplay)play();else update();}});
+                    player.seekTo(pendingSeek,MediaPlayer.SEEK_CLOSEST);
+                    handler.postDelayed(()->{if(player==mp&&pendingSeek>=0&&busy){busy=false;ready=false;report("恢复播放进度超时，请点击重试。");}},10000);
+                } else {saveSession(false);if(autoplay)play();}
             });
             pending.setOnErrorListener((mp, what, extra) -> { cancelPending(); report("无法加载音频（"+what+"/"+extra+"），请检查网络、重试或更换音质。"); return true; });
             final MediaPlayer preparing=pending;
@@ -377,6 +426,7 @@ public class PlaybackService extends Service {
             o.put("position", pos); o.put("duration", length); o.put("playing", playing); o.put("ready", ready); o.put("busy", busy); o.put("overlayAllowed", Settings.canDrawOverlays(this));
             o.put("volume", volume); o.put("selectedOutput", selectedOutput);
             o.put("currentTrack",currentTrack);o.put("loadedTrack",loadedTrack);o.put("loadedQuality",loadedQuality);
+            o.put("playbackMode",playbackMode);o.put("lyricOffset",lyricOffset);
             String qualityName = "hires".equals(loadedQuality) ? "Hi-Res" : "lossless".equals(loadedQuality) ? "无损" : "exhigh".equals(loadedQuality) ? "极高" : "higher".equals(loadedQuality) ? "较高" : "标准";
             o.put("qualityInfo","当前音源请求："+qualityName+" · "+actualFormat); if(importedTrack!=null)o.put("importedTrack",importedTrack);
             org.json.JSONArray outputs = new org.json.JSONArray();
@@ -409,6 +459,7 @@ public class PlaybackService extends Service {
         if(overlay!=null)overlay.configurationChanged();
     }
     @Override public void onDestroy() {
+        saveSession(true);
         destroyed=true; audio.unregisterAudioDeviceCallback(deviceCallback); generation++; importer.shutdownNow(); handler.removeCallbacks(ticker);
         if(overlay!=null){overlay.close();overlay=null;}
         if(player != null) { player.release(); player=null; }

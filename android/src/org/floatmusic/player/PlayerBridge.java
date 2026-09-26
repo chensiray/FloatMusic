@@ -31,6 +31,16 @@ public final class PlayerBridge {
     private static volatile String state = "{\"title\":\"还没有导入音乐\",\"status\":\"选择一首本地音频，开始试听\"}";
     static void publish(JSONObject object) { state = object.toString(); }
     public static String snapshot() { return state; }
+    // Qt may stop immediately after its quit command. Persist on the player thread
+    // before returning to native shutdown, including exits from the welcome page.
+    public static void prepareExit() {
+        Runnable save=()->{PlaybackService service=PlaybackService.instance;if(service!=null)service.saveBeforeExit();};
+        if(Looper.myLooper()==Looper.getMainLooper()){save.run();return;}
+        java.util.concurrent.CountDownLatch completed=new java.util.concurrent.CountDownLatch(1);
+        main.post(()->{try{save.run();}finally{completed.countDown();}});
+        try { completed.await(2,java.util.concurrent.TimeUnit.SECONDS); }
+        catch(InterruptedException e){Thread.currentThread().interrupt();}
+    }
     public static int themeMode() {
         android.content.Context context = activity.get();
         if(context==null)context=PlaybackService.instance;

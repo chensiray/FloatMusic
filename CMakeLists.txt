@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
-project(FloatMusic VERSION 0.5.0 LANGUAGES CXX)
+project(FloatMusic VERSION 0.6.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Concurrent Network)
 qt_standard_project_setup(REQUIRES 6.8)
-set(PLAYER_SOURCES src/playercontroller.cpp src/playercontroller.h src/audiofilepolicy.cpp src/audiofilepolicy.h src/playliststore.cpp src/playliststore.h src/musicapi.cpp src/musicapi.h)
+set(PLAYER_SOURCES src/playercontroller.cpp src/playercontroller.h src/audiofilepolicy.cpp src/audiofilepolicy.h src/playliststore.cpp src/playliststore.h src/musicapi.cpp src/musicapi.h src/lyrictimeline.cpp src/lyrictimeline.h)
 qt_add_executable(FloatMusic src/main.cpp src/singleinstance.cpp src/singleinstance.h ${PLAYER_SOURCES})
 qt_add_qml_module(FloatMusic URI FloatMusic QML_FILES qml/Main.qml qml/AndroidMain.qml)
 target_link_libraries(FloatMusic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Concurrent Qt6::Network)
@@ -20,8 +20,8 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
         QT_ANDROID_MIN_SDK_VERSION 28
         QT_ANDROID_TARGET_SDK_VERSION 36
-        QT_ANDROID_VERSION_CODE 5
-        QT_ANDROID_VERSION_NAME "0.5.0"
+        QT_ANDROID_VERSION_CODE 7
+        QT_ANDROID_VERSION_NAME "0.6.0-preview.2"
         QT_ANDROID_APP_NAME "浮音 · 功能验证")
 endif()
 option(FLOATMUSIC_TESTS "Build import policy tests (desktop only)" OFF)
