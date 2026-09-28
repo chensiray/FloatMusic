@@ -72,6 +72,14 @@ public final class PlayerBridge {
             PlayerActivity a = activity.get();
             PlaybackService service = PlaybackService.instance;
             try {
+                if (command.equals("libraryDocument") || command.equals("libraryClipboard")) {
+                    android.content.Context context = a != null ? a : service;
+                    if (context != null) {
+                        if (command.equals("libraryDocument")) PlaylistDocuments.start(context, value);
+                        else PlaylistDocuments.copy(context, value);
+                    }
+                    return;
+                }
                 if (command.equals("ready")) { qtReady=true; if(a!=null)a.completeOverlayRequest(); return; }
                 if (command.equals("float")) { if (a != null) a.enableOverlay(); return; }
                 if (command.equals("pick")) { if (a != null) a.pickMusic(true); return; }

@@ -45,7 +45,7 @@ Android 当前构建的是调试包。正式分发所需的签名、密钥保管
 
 Windows 构建脚本运行四组 CTest：导入策略、播放器与界面、API 与歌单、单实例。测试使用独立测试数据目录。
 
-0.5 的界面测试代码已随布局调整，但此版本交付未重新运行自动测试。历史通过记录不能作为当前全部测试通过的证明，具体范围见[验证说明](../VERIFICATION.md)。如果旧构建目录配置失败，可改用新的构建目录重新配置，不需要删除源码或应用数据。
+0.7 按用户要求通过编译打包后交由用户验收，未运行自动化测试。历史通过记录不能作为当前全部测试通过的证明，具体范围见[验证说明](../VERIFICATION.md)。如果旧构建目录配置失败，可改用新的构建目录重新配置，不需要删除源码或应用数据。
 
 `tests/live_api` 是单独的真实接口探测工具，不属于默认离线测试；使用方法见该目录 README。真实服务结果只代表测试时状态。
 
@@ -60,6 +60,9 @@ Windows 构建脚本运行四组 CTest：导入策略、播放器与界面、API
 | 请求 | 响应要求 |
 |---|---|
 | `GET /cloudsearch?keywords=...&type=1&limit=30` | `code: 200`，`result.songs` 中包含数字 `id`、`name`、`ar[].name` 或 `artists[].name` |
+| `GET /search?keywords=...&type=1000&offset=0&limit=30` | `code: 200`，`result.playlists` 提供 `id`、`name`、`description`、`trackCount`、`creator.nickname` |
+| `GET /playlist/detail?id=...` | `code: 200`，`playlist` 提供歌单信息及 `tracks` 或 `trackIds`；提供完整 ID 列表与总数便于判断完整度 |
+| `GET /song/detail?ids=ID1,ID2,...` | `code: 200`，`songs` 提供歌曲信息；按每批最多 100 首补全详情，单张在线歌单最多读取 2000 首 |
 | `GET /song/url/v1?id=...&level=...` | `code: 200`，`data[0].url` 为有效 HTTP(S) 音频地址 |
 | `GET /lyric?id=...&tv=-1&lv=-1` | `code: 200`，`lrc.lyric`、可选 `tlyric.lyric`，或 `nolyric/uncollected` 状态 |
 
@@ -71,12 +74,15 @@ Windows 构建脚本运行四组 CTest：导入策略、播放器与界面、API
 |---|---|
 | `qml/Main.qml` | Windows 悬浮卡片、共用展开区、桌面图标与缩放 |
 | `qml/AndroidMain.qml` | Android 欢迎页与悬浮权限入口 |
-| `src/playercontroller.*` | 播放状态、导入、收藏持久化、设备路由、Android 桥接 |
-| `src/musicapi.*` | 搜索、歌词、音频地址和错误处理 |
-| `src/playliststore.*` | 本地歌单与持久化 |
+| `src/playercontroller.*` | 播放状态、音频导入、设备路由、Android 桥接 |
+| `src/playerlibrary.cpp` | 歌单搜索与详情状态、批量整理、导入导出和双端操作入口 |
+| `src/musicapi.*` | 歌曲与歌单搜索、歌单详情、歌词、音频地址和错误处理 |
+| `src/playliststore.*` | 本地歌单、收藏迁移、排序、批量操作与持久化 |
+| `src/playlistdocument.*` | JSON 歌单解析与导出、链接识别、容量限制和本地引用校验 |
 | `src/singleinstance.*` | Windows 单实例与重复启动唤起 |
 | `android/src/org/floatmusic/player/` | Android 活动、后台服务、独立悬浮页 |
-| `android/src/org/floatmusic/player/OverlayWindow.java` | 0.5 音乐卡片、共用展开区、等比缩放、窗口尺寸与焦点 |
+| `android/src/org/floatmusic/player/OverlayWindow.java` | 音乐卡片、歌单操作面板、共用展开区、等比缩放、窗口尺寸与焦点 |
+| `android/src/org/floatmusic/player/PlaylistDocuments.java` | Android 歌单文件选择、读取与保存 |
 | `tests/` | 策略、播放、UI、API、持久化和多进程测试 |
 
 历史测试报告见 [VERIFICATION.md](../VERIFICATION.md)。报告按日期记录当时状态，未覆盖场景和用户反馈见 [BACKLOG.md](../BACKLOG.md)。

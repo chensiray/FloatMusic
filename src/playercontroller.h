@@ -30,6 +30,12 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList playlists READ playlists NOTIFY libraryChanged)
     Q_PROPERTY(QVariantList tracks READ tracks NOTIFY libraryChanged)
     Q_PROPERTY(QString activePlaylist READ activePlaylist NOTIFY libraryChanged)
+    Q_PROPERTY(QVariantList playlistResults READ playlistResults NOTIFY playlistSearchChanged)
+    Q_PROPERTY(bool playlistSearching READ playlistSearching NOTIFY playlistSearchChanged)
+    Q_PROPERTY(QString playlistSearchMessage READ playlistSearchMessage NOTIFY playlistSearchChanged)
+    Q_PROPERTY(QVariantMap onlinePlaylist READ onlinePlaylist NOTIFY onlinePlaylistChanged)
+    Q_PROPERTY(bool onlinePlaylistLoading READ onlinePlaylistLoading NOTIFY onlinePlaylistChanged)
+    Q_PROPERTY(QString libraryMessage READ libraryMessage NOTIFY libraryMessageChanged)
     Q_PROPERTY(QString currentTrack READ currentTrack NOTIFY changed)
     Q_PROPERTY(QVariantList searchResults READ searchResults NOTIFY searchChanged)
     Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
@@ -73,6 +79,13 @@ public:
     QVariantList playlists() const { return m_library.playlists(); }
     QVariantList tracks() const { return m_library.tracks(); }
     QString activePlaylist() const { return m_library.activeId(); }
+    QVariantList playlistResults() const { return m_playlistResults; }
+    bool playlistSearching() const { return m_playlistSearching; }
+    QString playlistSearchMessage() const { return m_playlistSearchMessage; }
+    QVariantMap onlinePlaylist() const { return m_onlinePlaylist; }
+    bool onlinePlaylistLoading() const { return m_onlinePlaylistLoading; }
+    QString libraryMessage() const { return m_libraryMessage; }
+    Q_INVOKABLE void libraryAction(const QString &action, const QVariantMap &args);
     QString currentTrack() const { return m_currentTrack; }
     QVariantList searchResults() const { return m_searchResults; }
     bool searching() const { return m_searching; }
@@ -87,7 +100,7 @@ public:
     bool lyricsFailed() const { return m_lyricsFailed; }
     bool online() const { return m_online; }
     QString artist() const { return m_loadedTrack.value("artist").toString(); }
-    QVariantList favorites() const { return m_favorites; }
+    QVariantList favorites() const { return m_library.tracks("favorites"); }
     bool currentFavorite() const;
     QString favoriteMessage() const { return m_favoriteMessage; }
     QString playbackMode() const { return m_playbackMode; }
@@ -133,6 +146,9 @@ signals:
     void changed();
     void audioSettingsChanged();
     void libraryChanged();
+    void playlistSearchChanged();
+    void onlinePlaylistChanged();
+    void libraryMessageChanged();
     void searchChanged();
     void lyricsChanged();
     void lyricLinesChanged();
@@ -153,9 +169,18 @@ private:
     QTimer m_sessionTimer;
     void step(int delta, bool automatic = false);
     void syncQueue();
-    void saveFavorites();
+    void setLibraryMessage(const QString &message);
+    void importPlaylistText(const QString &text, const QString &target);
+    void mergePlaylist(const QVariantMap &playlist, const QString &target, int skipped = 0);
+    QVariantList m_playlistResults;
+    QVariantMap m_onlinePlaylist;
+    QString m_playlistSearchMessage, m_libraryMessage;
+    bool m_playlistSearching = false, m_onlinePlaylistLoading = false;
+    int m_playlistGeneration = 0;
+    QString m_pendingImportTarget, m_pendingImportToken;
+    QByteArray m_pendingExport;
+    QString m_pendingExportToken;
     QVariantMap favoriteTrack(const QString &id) const;
-    QVariantList m_favorites;
     QString m_favoriteMessage;
 #ifdef Q_OS_ANDROID
     void processOverlayEvents();

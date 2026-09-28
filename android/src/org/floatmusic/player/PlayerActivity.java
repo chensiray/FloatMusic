@@ -47,6 +47,7 @@ public class PlayerActivity extends QtActivity {
     }
     @Override public void onBackPressed() { handleBack(); }
     private void handleBack() {
+        if (PlaylistDocuments.cancelPaste(this)) return;
         android.view.View decor = getWindow().getDecorView();
         boolean keyboardVisible;
         if (Build.VERSION.SDK_INT >= 30) {
@@ -63,6 +64,10 @@ public class PlayerActivity extends QtActivity {
         } else moveTaskToBack(true);
     }
     private void handle(Intent intent) {
+        if (intent != null && intent.getBooleanExtra("libraryDocument", false)) {
+            intent.removeExtra("libraryDocument");
+            PlayerBridge.main.post(() -> PlaylistDocuments.open(this));
+        }
         if (intent != null && intent.getBooleanExtra("pickFromOverlay", false)) {
             intent.removeExtra("pickFromOverlay"); pendingPick=true; PlayerBridge.main.post(() -> { pendingPick=false; pickMusic(true); });
         }
@@ -79,6 +84,10 @@ public class PlayerActivity extends QtActivity {
                 Toast.makeText(this,"允许悬浮权限后，即可在图标中使用浮音",Toast.LENGTH_LONG).show();
             } else completeOverlayRequest();
         }
+    }
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) PlaylistDocuments.focused(this);
     }
     // Only a tap on the welcome page may start this flow. Resuming the app must stay visible.
     public void completeOverlayRequest() {
@@ -148,6 +157,7 @@ public class PlayerActivity extends QtActivity {
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PlaylistDocuments.REQUEST) { PlaylistDocuments.result(this, result, data); return; }
         if (request == PICK_AUDIO) {
             picking = false;
             PlayerBridge.picking = false;

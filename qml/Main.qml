@@ -9,6 +9,15 @@ ApplicationWindow {
     property bool quitting: false
     property string section: ""
     property string detail: ""
+    property bool selectingTracks: false
+    property var selectedTrackIds: []
+    property string searchKind: "songs"
+    property bool showingOnlinePlaylist: false
+    readonly property var activeList: {
+        for (var i = 0; i < player.playlists.length; ++i)
+            if (player.playlists[i].id === player.activePlaylist) return player.playlists[i]
+        return { name: "歌单", description: "", trackCount: 0 }
+    }
     readonly property var playbackModes: [
         { key: "sequential", name: "顺序播放", icon: "sequential" },
         { key: "loop", name: "列表循环", icon: "loop" },
@@ -42,7 +51,7 @@ ApplicationWindow {
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: "浮音 0.6 · 桌面预览"
+    title: "浮音 0.7 · 桌面预览"
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -68,12 +77,108 @@ ApplicationWindow {
     }
     function collapse() {
         playbackMenu.close(); lyricTiming.close()
+        libraryMenu.close(); selectionMenu.close(); targetSheet.close(); importSheet.close(); exportSheet.close(); descriptionSheet.close(); playlistDialog.close(); deleteDialog.close(); removeDialog.close(); trackMenu.close()
         floating.x = root.x; floating.y = root.y
         section = ""; detail = ""; root.hide(); fitWindow(floating); saveIconPosition()
     }
     function saveIconPosition() { appearance.iconX = floating.x; appearance.iconY = floating.y }
     function toggleSection(name) { section = section === name ? "" : name; detail = "" }
-    function openDetail(name) { section = "more"; detail = name }
+    function openDetail(name) {
+        if (name === "favorites") { player.selectPlaylist("favorites"); section = "playlist"; detail = ""; return }
+        section = "more"; detail = name
+    }
+    function hasSelected(id) { return selectedTrackIds.indexOf(id) >= 0 }
+    function toggleTrack(id) {
+        var ids = selectedTrackIds.slice(), at = ids.indexOf(id)
+        if (at >= 0) ids.splice(at, 1); else ids.push(id)
+        selectedTrackIds = ids
+    }
+    function clearTrackSelection() { selectedTrackIds = []; selectingTracks = false }
+    function playlistTargets(includeNew, excludeCurrent) {
+        var list = []
+        for (var i = 0; i < player.playlists.length; ++i) {
+            var p = player.playlists[i]
+            if (!excludeCurrent || p.id !== player.activePlaylist)
+                list.push({ id: p.id, name: p.name + "（" + p.trackCount + " 首）" })
+        }
+        if (includeNew) list.push({ id: "new", name: "新建歌单" })
+        return list
+    }
+    function usePlaylist(id) {
+        if (player.activePlaylist !== id) player.selectPlaylist(id)
+        return player.activePlaylist === id
+    }
+    function startSearch() {
+        showingOnlinePlaylist = false
+        if (searchKind === "playlists") player.libraryAction("searchPlaylists", { query: keywords.text })
+        else player.search(keywords.text)
+        Qt.callLater(function() { (root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning() })
+    }
+    function showTransfer(move) {
+        targetSheet.sourceId = player.activePlaylist
+        targetSheet.ids = selectedTrackIds.slice()
+        targetSheet.mode = move ? "move" : "copy"
+        targetSheet.targets = playlistTargets(false, true)
+        transferTarget.currentIndex = targetSheet.targets.length ? 0 : -1
+        targetSheet.open()
+    }
+    function showOnlineImport() {
+        targetSheet.sourceId = player.activePlaylist
+        targetSheet.ids = []
+        targetSheet.mode = "online"
+        targetSheet.targets = playlistTargets(true, false)
+        transferTarget.currentIndex = Math.max(0, transferTarget.indexOfValue(player.activePlaylist))
+        targetSheet.open()
+    }
+    function showImport() {
+        importSheet.targets = playlistTargets(true, false)
+        importTarget.currentIndex = Math.max(0, importTarget.indexOfValue(player.activePlaylist))
+        importText.text = ""
+        importSheet.open()
+    }
+    function showExport() {
+        exportSheet.sourceId = player.activePlaylist
+        exportSheet.ids = selectingTracks ? selectedTrackIds.slice() : []
+        exportSheet.listName = activeList.name
+        exportSheet.open()
+    }
+    function openExportFile() {
+        playlistExportFile.sourceId = exportSheet.sourceId
+        playlistExportFile.ids = exportSheet.ids.slice()
+        var name = exportSheet.listName.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 120).replace(/[. ]+$/g, "")
+        if (!name.length) name = "浮音歌单"
+        if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(name)) name = "_" + name
+        if (!/\.json$/i.test(name)) name += ".json"
+        var folder = playlistExportFile.currentFolder.toString()
+        if (!folder.length) folder = StandardPaths.writableLocation(StandardPaths.DocumentsLocation).toString()
+        playlistExportFile.selectedFile = folder.replace(/\/+$/g, "") + "/" + encodeURIComponent(name)
+        exportSheet.close()
+        playlistExportFile.open()
+    }
+    function confirmRemove(ids, sourceId) {
+        removeDialog.sourceId = sourceId || player.activePlaylist
+        removeDialog.ids = ids.slice()
+        removeDialog.open()
+    }
+    Connections {
+        target: player
+        property string lastPlaylist: ""
+        function onLibraryChanged() {
+            if (lastPlaylist !== player.activePlaylist) {
+                lastPlaylist = player.activePlaylist
+                root.clearTrackSelection()
+                filter.text = ""
+                Qt.callLater(function() { songs.positionViewAtBeginning() })
+                // Async imports may select a newly created list while an old menu is open.
+                selectionMenu.close(); trackMenu.close(); targetSheet.close(); descriptionSheet.close()
+                playlistDialog.close(); deleteDialog.close(); removeDialog.close(); exportSheet.close()
+            } else {
+                var available = player.tracks.map(function(t) { return t.id })
+                root.selectedTrackIds = root.selectedTrackIds.filter(function(id) { return available.indexOf(id) >= 0 })
+            }
+            lists.updateSelection()
+        }
+    }
     function clock(ms) { var s = Math.floor(ms / 1000); return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60 }
     function lyricText(text) { return text.replace(/\[(?:\d+:\d+(?:[.:]\d+)?|(?:ar|ti|al|by|offset):[^\]]*)\]/g, "").trim() }
     function chooseMusic() { picker.open() }
@@ -91,9 +196,10 @@ ApplicationWindow {
             if (root.workArea.x !== area.x || root.workArea.y !== area.y || root.workArea.width !== area.width || root.workArea.height !== area.height) { root.workArea = area; root.fitWindow(window) }
         }
     }
-    Shortcut { sequence: "Ctrl+F"; enabled: root.visible; onActivated: {root.openDetail("search");keywords.forceActiveFocus()} }
-    Shortcut { sequence: "Ctrl+O"; enabled: root.visible; onActivated: root.chooseMusic() }
-    Shortcut { sequence: "Escape"; enabled: root.visible && !playbackMenu.opened && !lyricTiming.opened; onActivated: {if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
+    Shortcut { sequence: "Ctrl+F"; enabled: root.visible && !root.sheetOpen; onActivated: {root.showingOnlinePlaylist=false;root.openDetail("search");Qt.callLater(function(){(root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning();keywords.forceActiveFocus()})} }
+    Shortcut { sequence: "Ctrl+O"; enabled: root.visible && !root.sheetOpen; onActivated: root.chooseMusic() }
+    readonly property bool sheetOpen: playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened
+    Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.showingOnlinePlaylist=false;else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
     component Glyph: Canvas {
         id: glyph
         property string kind: "music"
@@ -125,6 +231,7 @@ ApplicationWindow {
             else if (kind === "shuffle") {path([[3,6],[7,6],[17,18],[21,18],[18,15]]);path([[21,18],[18,21]]);path([[3,18],[7,18],[17,6],[21,6],[18,3]]);path([[21,6],[18,9]])}
             else if (kind === "folder") path([[3,7],[10,7],[12,9],[21,9],[21,20],[3,20],[3,7],[3,4],[10,4],[12,7]])
             else if (kind === "list") { for(var y=6;y<=18;y+=6){path([[9,y],[21,y]]);c.fillRect(3,y-1,2,2)} }
+            else if (kind === "drag") { for(var dy=6;dy<=18;dy+=6){c.fillRect(8,dy-1,2,2);c.fillRect(14,dy-1,2,2)} }
             else if (kind === "heart") { c.beginPath();c.moveTo(12,20);c.bezierCurveTo(-4,10,5,-1,12,7);c.bezierCurveTo(19,-1,28,10,12,20);c.stroke() }
             else if (kind === "settings") { for(var j=0;j<3;j++){var yy=6+j*6;path([[3,yy],[21,yy]]);c.clearRect(7+j*3,yy-2,4,4);c.strokeRect(7+j*3,yy-2,4,4)} }
             else if (kind === "volume") { path([[3,9],[7,9],[12,5],[12,19],[7,15],[3,15]],true);c.beginPath();c.arc(12,12,6,-0.8,0.8);c.stroke();c.beginPath();c.arc(12,12,10,-0.8,0.8);c.stroke() }
@@ -183,6 +290,7 @@ ApplicationWindow {
         }
         popup: Popup {
             parent: Overlay.overlay
+            popupType: Popup.Item; z: 1100; dim: false
             property point origin: Qt.point(0, 0)
             onAboutToShow: origin = choice.mapToItem(Overlay.overlay, 0, 0)
             x: Math.max(8, Math.min(origin.x, root.width - width * root.contentScale - 8))
@@ -457,7 +565,7 @@ ApplicationWindow {
                     id: drawer; objectName: "sharedDrawer"
                     visible: root.section.length>0
                     Layout.fillWidth: true
-                    Layout.preferredHeight: visible ? (root.section==="more" && root.detail==="" ? moreMenu.implicitHeight+32 : Math.max(180, Math.min(350, (workArea.height - 16) / contentScale - playerCard.implicitHeight - 48))) : 0
+                    Layout.preferredHeight: visible ? (root.section==="more" && root.detail==="" ? moreMenu.implicitHeight+32 : Math.max(root.section === "playlist" || root.detail === "search" ? 280 : 180, Math.min(root.section === "playlist" || root.detail === "search" ? 520 : 350, (workArea.height - 16) / contentScale - playerCard.implicitHeight - 48))) : 0
                     StackLayout {
                         anchors.fill: parent; anchors.margins: 16
                         currentIndex: root.section==="lyrics" ? 0 : root.section==="playlist" ? 1 : 2
@@ -572,47 +680,173 @@ ApplicationWindow {
                             }
                         }
                         ColumnLayout {
-                            spacing: 8
-                            Choice {
-                                id: lists; objectName: "playlistSelector"; Layout.fillWidth: true
-                                model: player.playlists; textRole: "name"; valueRole: "id"; Accessible.name: "当前歌单"
-                                function updateSelection() { currentIndex=indexOfValue(player.activePlaylist) }
-                                Component.onCompleted: updateSelection()
-                                onModelChanged: Qt.callLater(updateSelection)
-                                onActivated: player.selectPlaylist(currentValue)
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true; spacing: 8
-                                Action { text: "新建"; Layout.fillWidth: true; onClicked: {playlistDialog.renaming=false;playlistName.text="";playlistDialog.open()} }
-                                Action { text: "改名"; Layout.fillWidth: true; onClicked: {playlistDialog.renaming=true;playlistName.text=lists.currentText;playlistDialog.open()} }
-                                Action { text: "删除"; Layout.fillWidth: true; enabled: player.playlists.length>1; onClicked: deleteDialog.open() }
-                            }
-                            Field { id: filter; Layout.fillWidth: true; placeholderText: "筛选歌名或歌手"; Accessible.name: "筛选当前歌单" }
-                            ListView {
-                                id: songs; objectName: "playlistView"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                                model: player.tracks.filter(function(t){return (t.name+" "+(t.artist||"")).toLowerCase().indexOf(filter.text.trim().toLowerCase())>=0})
-                                ScrollBar.vertical: ScrollBar {}
-                                delegate: SongRow {
-                                    required property var modelData
-                                    track: modelData; removable: true
-                                    onPlayRequested: player.playTrack(track.id)
-                                    onRemoveRequested: player.removeTrack(track.id)
+                            spacing: 0
+                            ColumnLayout {
+                                id: playlistTools
+                                parent: songs.headerItem
+                                width: songs.width - 12; spacing: 6
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 6
+                                    Choice {
+                                        id: lists; objectName: "playlistSelector"; Layout.fillWidth: true; Layout.minimumWidth: 0
+                                        model: player.playlists; textRole: "name"; valueRole: "id"; Accessible.name: "当前歌单"
+                                        function updateSelection() { currentIndex = indexOfValue(player.activePlaylist) }
+                                        Component.onCompleted: updateSelection()
+                                        onModelChanged: Qt.callLater(updateSelection)
+                                        onActivated: { root.clearTrackSelection(); player.selectPlaylist(currentValue) }
+                                    }
+                                    Action { glyph: "more"; quiet: true; Accessible.name: "歌单管理"; ToolTip.text: Accessible.name; onClicked: libraryMenu.open() }
                                 }
-                                Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: songs.count===0; text: "暂无歌曲，去“更多”搜索或导入" }
+                                Button {
+                                    Layout.fillWidth: true; implicitHeight: 30; padding: 0
+                                    Accessible.name: "歌单简介，" + (root.activeList.description || "点击添加简介")
+                                    contentItem: RowLayout {
+                                        Copy { text: player.tracks.length + " 首"; color: root.accent; font.pixelSize: 12 }
+                                        Copy { text: root.activeList.description || "点击添加歌单简介"; Layout.fillWidth: true; Layout.minimumWidth: 0; color: root.muted; font.pixelSize: 12 }
+                                    }
+                                    background: Rectangle { radius: 6; color: parent.hovered ? root.selection : "transparent"; border.color: root.accent; border.width: parent.activeFocus ? 2 : 0 }
+                                    onClicked: { descriptionSheet.sourceId = player.activePlaylist; descriptionText.text = root.activeList.description || ""; descriptionSheet.open() }
+                                }
+                                RowLayout {
+                                    visible: !root.selectingTracks; Layout.fillWidth: true; spacing: 6
+                                    Field { id: filter; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: "筛选歌名或歌手"; Accessible.name: "筛选当前歌单" }
+                                    Action { text: "多选"; quiet: true; enabled: player.tracks.length > 0; onClicked: { filter.text = ""; root.selectingTracks = true } }
+                                }
+                                RowLayout {
+                                    visible: root.selectingTracks; Layout.fillWidth: true; spacing: 4
+                                    Action {
+                                        text: "全选"; quiet: true; enabled: root.selectedTrackIds.length < player.tracks.length
+                                        onClicked: root.selectedTrackIds = player.tracks.map(function(t) { return t.id })
+                                    }
+                                    Action { text: "清空"; quiet: true; enabled: root.selectedTrackIds.length > 0; onClicked: root.selectedTrackIds = [] }
+                                    Copy { text: "已选 " + root.selectedTrackIds.length; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+                                    Action { text: "操作"; primary: true; enabled: root.selectedTrackIds.length > 0; onClicked: selectionMenu.open() }
+                                    Action { glyph: "close"; quiet: true; Accessible.name: "退出多选"; ToolTip.text: Accessible.name; onClicked: root.clearTrackSelection() }
+                                }
+                                Hint { text: player.libraryMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                             }
-                            Hint { text: player.tracks.length+" 首 · " + root.playbackModeName }
+                            ListView {
+                                id: songs; objectName: "playlistView"; Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 58; clip: true
+                                headerPositioning: ListView.InlineHeader
+                                header: Item { width: songs.width - 12; height: playlistTools.implicitHeight + 8 }
+                                model: player.tracks.filter(function(t) { return (t.name + " " + (t.artist || "")).toLowerCase().indexOf(filter.text.trim().toLowerCase()) >= 0 })
+                                property int dragFrom: -1
+                                property int dragTo: -1
+                                property real dragPointerY: 0
+                                readonly property bool reorderEnabled: !root.selectingTracks && filter.text.trim().length === 0
+                                boundsBehavior: Flickable.StopAtBounds
+                                // Keep the pressed delegate alive while edge-scrolling a long playlist.
+                                currentIndex: dragFrom
+                                highlightFollowsCurrentItem: false
+                                function updateDropTarget() {
+                                    var firstRowY = headerItem ? headerItem.y + headerItem.height : originY
+                                    dragTo = Math.max(0, Math.min(count - 1, Math.floor((contentY + dragPointerY - firstRowY) / 64)))
+                                }
+                                function endReorder(commit) {
+                                    var from = dragFrom, to = dragTo
+                                    dragFrom = -1; dragTo = -1
+                                    if (commit && from >= 0 && to >= 0 && from !== to)
+                                        player.libraryAction("moveTrack", { from: from, to: to })
+                                }
+                                onModelChanged: endReorder(false)
+                                onVisibleChanged: if (!visible) endReorder(false)
+                                ScrollBar.vertical: ScrollBar {}
+                                Timer {
+                                    interval: 45; repeat: true; running: songs.dragFrom >= 0
+                                    onTriggered: {
+                                        var delta = songs.dragPointerY < 28 ? -12 : songs.dragPointerY > songs.height - 28 ? 12 : 0
+                                        if (delta) {
+                                            songs.contentY = Math.max(songs.originY, Math.min(songs.originY + Math.max(0, songs.contentHeight - songs.height), songs.contentY + delta))
+                                            songs.updateDropTarget()
+                                        }
+                                    }
+                                }
+                                delegate: Rectangle {
+                                    id: libraryTrack
+                                    required property var modelData
+                                    required property int index
+                                    readonly property bool selected: root.hasSelected(modelData.id)
+                                    width: songs.width - 10; height: 64; radius: 8
+                                    color: selected || player.currentTrack === modelData.id ? root.selection : trackHover.hovered ? root.backdrop : "transparent"
+                                    opacity: songs.dragFrom === index ? 0.6 : 1
+                                    HoverHandler { id: trackHover }
+                                    Rectangle {
+                                        anchors.left: parent.left; anchors.right: parent.right; height: 3; radius: 1.5
+                                        y: songs.dragTo > songs.dragFrom ? parent.height - height : 0
+                                        color: root.accent; visible: songs.dragFrom >= 0 && songs.dragTo === libraryTrack.index && songs.dragTo !== songs.dragFrom
+                                    }
+                                    RowLayout {
+                                        anchors.fill: parent; spacing: 4
+                                        CheckBox {
+                                            visible: root.selectingTracks; checked: libraryTrack.selected
+                                            Layout.preferredWidth: 40; implicitHeight: 44
+                                            Accessible.name: "选择 " + libraryTrack.modelData.name
+                                            onClicked: root.toggleTrack(libraryTrack.modelData.id)
+                                        }
+                                        Item {
+                                            visible: !root.selectingTracks; Layout.preferredWidth: 30; Layout.fillHeight: true
+                                            Glyph { anchors.centerIn: parent; kind: "drag"; tint: songs.reorderEnabled ? root.muted : root.line }
+                                            MouseArea {
+                                                id: dragHandle; anchors.fill: parent; enabled: songs.reorderEnabled
+                                                preventStealing: true; cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                                property real pressY: 0
+                                                property bool moved: false
+                                                onPressed: function(mouse) { pressY = mouse.y; moved = false }
+                                                onPositionChanged: function(mouse) {
+                                                    if (!pressed) return
+                                                    if (!moved && Math.abs(mouse.y - pressY) < Qt.styleHints.startDragDistance) return
+                                                    if (!moved) { moved = true; songs.dragFrom = libraryTrack.index }
+                                                    songs.dragPointerY = mapToItem(songs, mouse.x, mouse.y).y
+                                                    songs.updateDropTarget()
+                                                }
+                                                onReleased: songs.endReorder(true)
+                                                onCanceled: songs.endReorder(false)
+                                            }
+                                            ToolTip.visible: handleHover.hovered
+                                            ToolTip.text: songs.reorderEnabled ? "拖动排序，也可在歌曲菜单中上移、下移" : "清除筛选后可拖动排序"
+                                            HoverHandler { id: handleHover }
+                                        }
+                                        Button {
+                                            Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.fillHeight: true; padding: 4
+                                            Accessible.name: (root.selectingTracks ? "选择 " : "播放 ") + libraryTrack.modelData.name
+                                            contentItem: ColumnLayout {
+                                                spacing: 4
+                                                Copy { text: libraryTrack.modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold }
+                                                Copy { text: libraryTrack.modelData.artist || "本地音频"; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+                                            }
+                                            background: Rectangle { color: "transparent"; radius: 8; border.width: parent.activeFocus ? 2 : 0; border.color: root.accent }
+                                            onClicked: { if (root.selectingTracks) root.toggleTrack(libraryTrack.modelData.id); else if (!player.busy) player.playTrack(libraryTrack.modelData.id) }
+                                        }
+                                        Action {
+                                            visible: !root.selectingTracks; glyph: "more"; quiet: true
+                                            Accessible.name: "管理 " + libraryTrack.modelData.name; ToolTip.text: Accessible.name
+                                            onClicked: {
+                                                trackMenu.sourceId = player.activePlaylist
+                                                trackMenu.trackId = libraryTrack.modelData.id
+                                                trackMenu.trackName = libraryTrack.modelData.name
+                                                trackMenu.trackIndex = player.tracks.map(function(t) { return t.id }).indexOf(libraryTrack.modelData.id)
+                                                trackMenu.open()
+                                            }
+                                        }
+                                    }
+                                }
+                                footer: Item {
+                                    width: songs.width; height: songs.count === 0 ? 80 : 0
+                                    Hint { anchors.centerIn: parent; width: parent.width - 16; horizontalAlignment: Text.AlignHCenter; visible: songs.count === 0; text: player.tracks.length ? "没有匹配的歌曲" : "暂无歌曲，去“更多”搜索或导入" }
+                                }
+                            }
                         }
                         ColumnLayout {
                             spacing: 10
                             RowLayout {
-                                visible: root.detail.length>0; Layout.fillWidth: true
+                                visible: root.detail.length>0 && root.detail!=="search"; Layout.fillWidth: true
                                 Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail="" }
                                 Item { Layout.fillWidth: true }
                                 Copy { text: root.detail==="search" ? "搜索音乐" : root.detail==="favorites" ? "我的收藏" : "设置"; font.weight: Font.DemiBold }
                             }
                             StackLayout {
                                 Layout.fillWidth: true; Layout.fillHeight: true
-                                currentIndex: root.detail==="search" ? 1 : root.detail==="favorites" ? 2 : root.detail==="settings" ? 3 : 0
+                                currentIndex: root.detail==="search" ? 1 : root.detail==="settings" ? 2 : 0
                                 ColumnLayout {
                                     id: moreMenu; spacing: 12
                                     GridLayout {
@@ -627,40 +861,103 @@ ApplicationWindow {
                                     Hint { text: player.favoriteMessage; visible: text.length>0 }
                                     Hint { text: "也可将音频拖入窗口或图标\nMP3 / WAV / FLAC / OGG / M4A / AAC · 单首 ≤ 30 MiB" }
                                 }
-                                ColumnLayout {
-                                    spacing: 8
-                                    RowLayout {
-                                        Layout.fillWidth: true; spacing: 8
-                                        Field { id: keywords; objectName: "searchInput"; Layout.fillWidth: true; placeholderText: "输入歌名"; Accessible.name: "按歌名搜索音乐"; onAccepted: player.search(text) }
-                                        Action { text: player.searching ? "搜索中" : "搜索"; primary: true; enabled: !player.searching; onClicked: player.search(keywords.text) }
-                                    }
-                                    Hint { text: player.searchMessage; visible: text.length>0 }
-                                    ListView {
-                                        id: results; objectName: "searchResults"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                                        model: player.searchResults; ScrollBar.vertical: ScrollBar {}
-                                        delegate: SongRow {
-                                            required property var modelData; required property int index
-                                            track: modelData; extraText: "+"
-                                            onPlayRequested: player.playSearchResult(index)
-                                            onExtraRequested: player.addSearchResult(index)
+                                Item {
+                                    ColumnLayout {
+                                        id: searchTools
+                                        parent: root.searchKind === "playlists" ? playlistResults.headerItem : results.headerItem
+                                        width: parent ? parent.width : 0; spacing: 6
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail = "" }
+                                            Item { Layout.fillWidth: true }
+                                            Copy { text: "搜索音乐"; font.weight: Font.DemiBold }
                                         }
-                                        Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: results.count===0; text: player.searching ? "正在查找歌曲…" : "输入歌名，找到想听的音乐" }
-                                    }
-                                }
-                                ColumnLayout {
-                                    spacing: 8
-                                    Hint { text: player.favoriteMessage; visible: text.length>0 }
-                                    ListView {
-                                        id: favoriteList; objectName: "favoritesView"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                                        model: player.favorites; ScrollBar.vertical: ScrollBar {}
-                                        delegate: SongRow {
-                                            required property var modelData
-                                            track: modelData; extraText: "+"; removable: true
-                                            onPlayRequested: player.playFavorite(track.id)
-                                            onExtraRequested: player.addFavorite(track.id)
-                                            onRemoveRequested: player.removeFavorite(track.id)
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 6
+                                            Action { text: "歌曲"; primary: root.searchKind === "songs"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "songs" }
+                                            Action { text: "歌单"; primary: root.searchKind === "playlists"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "playlists" }
                                         }
-                                        Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: favoriteList.count===0; text: "还没有收藏\n播放歌曲后，在更多中点击“收藏当前”" }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 6
+                                            Field { id: keywords; objectName: "searchInput"; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: root.searchKind === "songs" ? "输入歌名或歌手" : "输入歌单名称"; Accessible.name: placeholderText; onAccepted: root.startSearch() }
+                                            Action { text: (root.searchKind === "songs" ? player.searching : player.playlistSearching) ? "搜索中" : "搜索"; primary: true; enabled: !(root.searchKind === "songs" ? player.searching : player.playlistSearching); onClicked: root.startSearch() }
+                                        }
+                                        Hint { text: root.searchKind === "songs" ? player.searchMessage : player.playlistSearchMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
+                                    }
+                                    StackLayout {
+                                        anchors.fill: parent
+                                        currentIndex: root.showingOnlinePlaylist ? 2 : root.searchKind === "playlists" ? 1 : 0
+                                        ListView {
+                                            id: results; objectName: "searchResults"; clip: true
+                                            boundsBehavior: Flickable.StopAtBounds
+                                            headerPositioning: ListView.InlineHeader
+                                            header: Item { width: results.width - 12; height: root.searchKind === "songs" ? searchTools.implicitHeight + 8 : 0 }
+                                            model: player.searchResults; ScrollBar.vertical: ScrollBar {}
+                                            delegate: SongRow {
+                                                required property var modelData; required property int index
+                                                track: modelData; extraText: "+"
+                                                onPlayRequested: player.playSearchResult(index)
+                                                onExtraRequested: player.addSearchResult(index)
+                                            }
+                                            footer: Item {
+                                                width: results.width; height: results.count === 0 ? 80 : 0
+                                                Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: results.count === 0; text: player.searching ? "正在查找歌曲…" : "输入歌名，找到想听的音乐" }
+                                            }
+                                        }
+                                        ListView {
+                                            id: playlistResults; objectName: "playlistSearchResults"; clip: true
+                                            boundsBehavior: Flickable.StopAtBounds
+                                            headerPositioning: ListView.InlineHeader
+                                            header: Item { width: playlistResults.width - 12; height: root.searchKind === "playlists" ? searchTools.implicitHeight + 8 : 0 }
+                                            model: player.playlistResults; ScrollBar.vertical: ScrollBar {}
+                                            delegate: ItemDelegate {
+                                                id: onlineResult
+                                                required property var modelData
+                                                width: playlistResults.width - 10; height: 82
+                                                Accessible.name: modelData.name + "，" + modelData.trackCount + " 首，查看歌单"
+                                                contentItem: ColumnLayout {
+                                                    spacing: 4
+                                                    Copy { text: onlineResult.modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold }
+                                                    Copy { text: onlineResult.modelData.trackCount + " 首" + (onlineResult.modelData.creator ? " · " + onlineResult.modelData.creator : ""); Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+                                                    Copy { text: onlineResult.modelData.description || "暂无简介"; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+                                                }
+                                                background: Rectangle { radius: 8; color: onlineResult.hovered || onlineResult.down ? root.selection : "transparent"; border.width: onlineResult.activeFocus ? 2 : 0; border.color: root.accent }
+                                                onClicked: { root.showingOnlinePlaylist = true; player.libraryAction("openOnline", { id: modelData.id }) }
+                                            }
+                                            footer: Item {
+                                                width: playlistResults.width; height: playlistResults.count === 0 ? 80 : 0
+                                                Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: playlistResults.count === 0; text: player.playlistSearching ? "正在查找歌单…" : "输入歌单名称，发现想听的音乐" }
+                                            }
+                                        }
+                                        ColumnLayout {
+                                            spacing: 0
+                                            ListView {
+                                                id: onlineTracks; objectName: "onlinePlaylistTracks"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                                                model: player.onlinePlaylistLoading ? [] : (player.onlinePlaylist.tracks || [])
+                                                ScrollBar.vertical: ScrollBar {}
+                                                headerPositioning: ListView.InlineHeader
+                                                boundsBehavior: Flickable.StopAtBounds
+                                                header: ColumnLayout {
+                                                    width: onlineTracks.width - 12; spacing: 6
+                                                    RowLayout {
+                                                        Layout.fillWidth: true; spacing: 6
+                                                        Action { glyph: "back"; quiet: true; Accessible.name: "返回歌单搜索结果"; ToolTip.text: Accessible.name; onClicked: root.showingOnlinePlaylist = false }
+                                                        Copy { text: player.onlinePlaylistLoading ? "读取歌单…" : (player.onlinePlaylist.name || "歌单详情"); Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold }
+                                                        Action { text: "导入"; primary: true; enabled: !player.onlinePlaylistLoading && player.onlinePlaylist.tracks && player.onlinePlaylist.tracks.length > 0; onClicked: root.showOnlineImport() }
+                                                    }
+                                                    Copy { text: (player.onlinePlaylist.trackCount || 0) + " 首" + (onlineTracks.count !== (player.onlinePlaylist.trackCount || 0) ? " · 已读取 " + onlineTracks.count + " 首" : ""); color: root.accent; font.pixelSize: 12 }
+                                                    Hint { text: player.onlinePlaylist.description || "暂无简介" }
+                                                    Hint { text: player.onlinePlaylist.warning || ""; visible: text.length > 0; color: root.danger }
+                                                    Hint { text: player.onlinePlaylistLoading ? "正在读取歌单与歌曲…" : player.libraryMessage; visible: text.length > 0 }
+                                                    Item { height: 4; width: 1 }
+                                                }
+                                                delegate: SongRow {
+                                                    required property var modelData; required property int index
+                                                    track: modelData
+                                                    onPlayRequested: player.libraryAction("playOnline", { index: index })
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 ScrollView {
@@ -738,7 +1035,7 @@ ApplicationWindow {
                                         }
                                         Hint { text: player.searchMessage; visible: text.length>0 }
                                         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
-                                        Copy { text: "浮音 0.5 · Windows"; font.weight: Font.DemiBold }
+                                        Copy { text: "浮音 0.7 · Windows"; font.weight: Font.DemiBold }
                                         Hint { text: "拖动顶部移动窗口，减号收为图标。\n更多中的“退出浮音”会停止播放并退出。\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起" }
                                     }
                                 }
@@ -749,24 +1046,197 @@ ApplicationWindow {
             }
         }
     }
-    Dialog {
-        id: playlistDialog; parent: Overlay.overlay
-        property bool renaming: false
-        width: 330; scale: root.contentScale; anchors.centerIn: parent
-        title: renaming ? "重命名歌单" : "新建歌单"; modal: true; focus: true
-        standardButtons: Dialog.Ok|Dialog.Cancel
-        background: Rectangle { color: root.elevated; radius: 16; border.color: root.fieldBorder }
-        Field { id: playlistName; width: parent.width; placeholderText: "歌单名称（1–60 字）"; maximumLength: 60; Accessible.name: "歌单名称"; onAccepted: playlistDialog.accept() }
-        onOpened: playlistName.forceActiveFocus()
-        onAccepted: {if(renaming)player.renamePlaylist(playlistName.text);else player.createPlaylist(playlistName.text)}
+    // Sheets stay within the always-on-top card and scroll when the desktop is short.
+    component LibrarySheet: Popup {
+        id: sheet
+        default property alias body: sheetBody.data
+        property string heading: ""
+        parent: Overlay.overlay; popupType: Popup.Item; z: 1000
+        modal: true; dim: false; focus: true; padding: 12
+        width: Math.min(344, root.width / root.contentScale - 24)
+        height: Math.min(sheetContents.implicitHeight + padding * 2, Math.max(80, root.height / root.contentScale - 24))
+        x: (root.width - width * root.contentScale) / 2
+        y: Math.max(8, (root.height - height * root.contentScale) / 2)
+        scale: root.contentScale; transformOrigin: Popup.TopLeft
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: root.elevated; radius: 14; border.color: root.fieldBorder }
+        contentItem: ScrollView {
+            id: sheetScroll; clip: true; contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ColumnLayout {
+                id: sheetContents; width: sheetScroll.availableWidth; spacing: 8
+                RowLayout {
+                    Layout.fillWidth: true
+                    Copy { text: sheet.heading; font.weight: Font.DemiBold; Layout.fillWidth: true; Layout.minimumWidth: 0 }
+                    Action { glyph: "close"; quiet: true; Accessible.name: "关闭" + sheet.heading; ToolTip.text: "关闭"; onClicked: sheet.close() }
+                }
+                ColumnLayout { id: sheetBody; Layout.fillWidth: true; spacing: 8 }
+            }
+        }
     }
-    Dialog {
-        id: deleteDialog; parent: Overlay.overlay
-        width: 330; scale: root.contentScale; anchors.centerIn: parent
-        title: "删除歌单？"; modal: true; focus: true; standardButtons: Dialog.Ok|Dialog.Cancel
-        background: Rectangle { color: root.elevated; radius: 16; border.color: root.fieldBorder }
-        Label { width: parent.width; text: "删除“"+lists.currentText+"”，保留本地音频副本。"; wrapMode: Text.Wrap; textFormat: Text.PlainText; color: root.ink }
-        onAccepted: player.deletePlaylist()
+    LibrarySheet {
+        id: libraryMenu; heading: "歌单管理"
+        Hint { text: root.activeList.name + " · " + player.tracks.length + " 首" }
+        GridLayout {
+            Layout.fillWidth: true; columns: 2; rowSpacing: 8; columnSpacing: 8
+            Action { text: "新建歌单"; Layout.fillWidth: true; onClicked: { libraryMenu.close(); playlistDialog.renaming = false; playlistName.text = ""; playlistDialog.open() } }
+            Action { text: "修改名称"; Layout.fillWidth: true; enabled: player.activePlaylist !== "favorites"; onClicked: { libraryMenu.close(); playlistDialog.sourceId = player.activePlaylist; playlistDialog.renaming = true; playlistName.text = root.activeList.name; playlistDialog.open() } }
+            Action { text: "编辑简介"; Layout.fillWidth: true; onClicked: { libraryMenu.close(); descriptionSheet.sourceId = player.activePlaylist; descriptionText.text = root.activeList.description || ""; descriptionSheet.open() } }
+            Action { text: "复制整单"; Layout.fillWidth: true; onClicked: { libraryMenu.close(); player.libraryAction("duplicate", {}) } }
+            Action { text: "导入歌单"; Layout.fillWidth: true; onClicked: { libraryMenu.close(); root.showImport() } }
+            Action { text: "导出整单"; Layout.fillWidth: true; enabled: player.tracks.length > 0; onClicked: { libraryMenu.close(); exportSheet.sourceId = player.activePlaylist; exportSheet.ids = []; exportSheet.listName = root.activeList.name; exportSheet.open() } }
+        }
+        Action {
+            text: "删除歌单"; Layout.fillWidth: true; enabled: player.activePlaylist !== "favorites" && player.playlists.length > 1
+            onClicked: { libraryMenu.close(); deleteDialog.sourceId = player.activePlaylist; deleteDialog.listName = root.activeList.name; deleteDialog.open() }
+        }
+        Hint { visible: player.activePlaylist === "favorites"; text: "收藏夹与普通歌单使用相同的歌曲管理方式；名称固定，始终保留。" }
+    }
+    LibrarySheet {
+        id: selectionMenu; heading: "已选 " + root.selectedTrackIds.length + " 首"
+        Action { text: "复制到歌单"; Layout.fillWidth: true; onClicked: { selectionMenu.close(); root.showTransfer(false) } }
+        Action { text: "移动到歌单"; Layout.fillWidth: true; onClicked: { selectionMenu.close(); root.showTransfer(true) } }
+        Action { text: "导出所选"; Layout.fillWidth: true; onClicked: { selectionMenu.close(); root.showExport() } }
+        Action { text: "从歌单移除"; Layout.fillWidth: true; onClicked: { selectionMenu.close(); root.confirmRemove(root.selectedTrackIds) } }
+    }
+    LibrarySheet {
+        id: trackMenu; heading: "歌曲操作"
+        property string sourceId: ""
+        property string trackId: ""
+        property string trackName: ""
+        property int trackIndex: -1
+        Hint { text: trackMenu.trackName }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Action { text: "上移"; glyph: "up"; Layout.fillWidth: true; enabled: trackMenu.trackIndex > 0; onClicked: { if (root.usePlaylist(trackMenu.sourceId)) player.libraryAction("moveTrack", { from: trackMenu.trackIndex, to: trackMenu.trackIndex - 1 }); trackMenu.close() } }
+            Action { text: "下移"; glyph: "down"; Layout.fillWidth: true; enabled: trackMenu.trackIndex >= 0 && trackMenu.trackIndex < player.tracks.length - 1; onClicked: { if (root.usePlaylist(trackMenu.sourceId)) player.libraryAction("moveTrack", { from: trackMenu.trackIndex, to: trackMenu.trackIndex + 1 }); trackMenu.close() } }
+        }
+        Action { text: "选择这首歌"; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(trackMenu.sourceId)) { filter.text = ""; root.selectingTracks = true; root.selectedTrackIds = [trackMenu.trackId] }; trackMenu.close() } }
+        Action { text: "从歌单移除"; Layout.fillWidth: true; onClicked: { trackMenu.close(); root.confirmRemove([trackMenu.trackId], trackMenu.sourceId) } }
+    }
+    LibrarySheet {
+        id: targetSheet; heading: mode === "online" ? "导入在线歌单" : mode === "move" ? "移动歌曲" : "复制歌曲"
+        property string sourceId: ""
+        property string mode: "copy"
+        property var ids: []
+        property var targets: []
+        Hint { text: targetSheet.mode === "online" ? "选择导入位置。已有歌曲会自动跳过，新建歌单会保留原名称和简介。" : "将 " + targetSheet.ids.length + " 首歌曲" + (targetSheet.mode === "move" ? "移动" : "复制") + "到目标歌单，自动跳过已有歌曲。" }
+        Copy { text: "目标歌单" }
+        Choice { id: transferTarget; Layout.fillWidth: true; model: targetSheet.targets; textRole: "name"; valueRole: "id"; Accessible.name: "目标歌单" }
+        Hint { visible: targetSheet.targets.length === 0; text: "请先在歌单管理中新建一个歌单。" }
+        Action {
+            text: targetSheet.mode === "online" ? "导入歌单" : targetSheet.mode === "move" ? "移动" : "复制"
+            primary: true; Layout.fillWidth: true; enabled: transferTarget.currentIndex >= 0
+            onClicked: {
+                var target = transferTarget.currentValue
+                if (targetSheet.mode === "online") player.libraryAction("addOnline", { target: target })
+                else if (root.usePlaylist(targetSheet.sourceId)) {
+                    player.libraryAction("transfer", { ids: targetSheet.ids, target: target, move: targetSheet.mode === "move" })
+                    root.clearTrackSelection()
+                }
+                targetSheet.close()
+            }
+        }
+    }
+    LibrarySheet {
+        id: importSheet; heading: "导入歌单"
+        property var targets: []
+        Copy { text: "导入到" }
+        Choice { id: importTarget; Layout.fillWidth: true; model: importSheet.targets; textRole: "name"; valueRole: "id"; Accessible.name: "导入目标歌单" }
+        Hint { text: "支持歌单 JSON 文件或文本，也可粘贴网易云歌单链接 / ID。已有歌曲会自动跳过。" }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Action { text: "选择文件"; Layout.fillWidth: true; enabled: importTarget.currentIndex >= 0; onClicked: { playlistImportFile.targetId = importTarget.currentValue; importSheet.close(); playlistImportFile.open() } }
+            Action { text: "读取剪贴板"; Layout.fillWidth: true; enabled: importTarget.currentIndex >= 0; onClicked: { var target = importTarget.currentValue; importSheet.close(); player.libraryAction("paste", { target: target }) } }
+        }
+        Copy { text: "或在下方粘贴内容" }
+        ScrollView {
+            Layout.fillWidth: true; Layout.preferredHeight: 110; clip: true; contentWidth: availableWidth
+            TextArea {
+                id: importText; selectByMouse: true; wrapMode: TextEdit.Wrap; textFormat: TextEdit.PlainText
+                color: root.ink; placeholderTextColor: root.muted; selectionColor: root.accent; selectedTextColor: root.accentInk
+                placeholderText: "粘贴 JSON、网易云歌单链接或 ID"; Accessible.name: "歌单导入内容"; padding: 10
+                background: Rectangle { color: root.backdrop; radius: 8; border.color: importText.activeFocus ? root.accent : root.fieldBorder; border.width: importText.activeFocus ? 2 : 1 }
+            }
+        }
+        Action { text: "导入内容"; primary: true; Layout.fillWidth: true; enabled: importText.text.trim().length > 0 && importTarget.currentIndex >= 0; onClicked: { var args = { text: importText.text, target: importTarget.currentValue }; importSheet.close(); player.libraryAction("importText", args) } }
+    }
+    LibrarySheet {
+        id: exportSheet; heading: ids.length ? "导出所选歌曲" : "导出整张歌单"
+        property string sourceId: ""
+        property string listName: ""
+        property var ids: []
+        Hint { text: exportSheet.listName + (exportSheet.ids.length ? " · " + exportSheet.ids.length + " 首" : " · 全部歌曲") }
+        Hint { text: "导出歌单 JSON，保留歌曲原顺序。文件中包含歌曲信息和引用，不包含音频文件。" }
+        Action { text: "复制到剪贴板"; primary: true; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(exportSheet.sourceId)) player.libraryAction("copyExport", { ids: exportSheet.ids }); exportSheet.close() } }
+        Action { text: "保存 JSON 文件"; Layout.fillWidth: true; onClicked: root.openExportFile() }
+    }
+    LibrarySheet {
+        id: descriptionSheet; heading: "歌单简介"
+        property string sourceId: ""
+        Copy { text: "简介" }
+        ScrollView {
+            Layout.fillWidth: true; Layout.preferredHeight: 150; clip: true; contentWidth: availableWidth
+            TextArea {
+                id: descriptionText; selectByMouse: true; wrapMode: TextEdit.Wrap; textFormat: TextEdit.PlainText
+                color: root.ink; placeholderTextColor: root.muted; selectionColor: root.accent; selectedTextColor: root.accentInk
+                placeholderText: "写下这个歌单的风格、心情或用途"; Accessible.name: "歌单简介"; padding: 10
+                background: Rectangle { color: root.backdrop; radius: 8; border.color: descriptionText.activeFocus ? root.accent : root.fieldBorder; border.width: descriptionText.activeFocus ? 2 : 1 }
+            }
+        }
+        Action { text: "保存简介"; primary: true; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(descriptionSheet.sourceId)) player.libraryAction("describe", { description: descriptionText.text }); descriptionSheet.close() } }
+        onOpened: descriptionText.forceActiveFocus()
+    }
+    LibrarySheet {
+        id: playlistDialog; heading: renaming ? "修改歌单名称" : "新建歌单"
+        property bool renaming: false
+        property string sourceId: ""
+        function save() {
+            if (!playlistName.text.trim().length) return
+            if (renaming) { if (root.usePlaylist(sourceId)) player.renamePlaylist(playlistName.text) }
+            else player.createPlaylist(playlistName.text)
+            close()
+        }
+        Copy { text: "歌单名称" }
+        Field { id: playlistName; Layout.fillWidth: true; placeholderText: "1–60 字"; maximumLength: 60; Accessible.name: "歌单名称"; onAccepted: playlistDialog.save() }
+        Action { text: "保存"; primary: true; Layout.fillWidth: true; enabled: playlistName.text.trim().length > 0; onClicked: playlistDialog.save() }
+        onOpened: playlistName.forceActiveFocus()
+    }
+    LibrarySheet {
+        id: deleteDialog; heading: "删除歌单？"
+        property string sourceId: ""
+        property string listName: ""
+        Hint { text: "删除“" + deleteDialog.listName + "”？本地音频文件会保留。" }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Action { text: "取消"; Layout.fillWidth: true; onClicked: deleteDialog.close() }
+            Action { text: "删除歌单"; Layout.fillWidth: true; onClicked: { if (deleteDialog.sourceId !== "favorites" && root.usePlaylist(deleteDialog.sourceId)) player.deletePlaylist(); deleteDialog.close() } }
+        }
+    }
+    LibrarySheet {
+        id: removeDialog; heading: "移除歌曲？"
+        property string sourceId: ""
+        property var ids: []
+        Hint { text: "从当前歌单移除 " + removeDialog.ids.length + " 首歌曲？本地音频文件和其他歌单中的歌曲会保留。" }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Action { text: "取消"; Layout.fillWidth: true; onClicked: removeDialog.close() }
+            Action { text: "移除"; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(removeDialog.sourceId)) player.libraryAction("removeTracks", { ids: removeDialog.ids }); root.clearTrackSelection(); removeDialog.close() } }
+        }
+    }
+    FileDialog {
+        id: playlistImportFile; title: "导入歌单 JSON"
+        property string targetId: ""
+        fileMode: FileDialog.OpenFile; nameFilters: ["歌单 JSON (*.json)", "所有文件 (*)"]
+        onAccepted: player.libraryAction("importFile", { url: selectedFile.toString(), target: targetId })
+    }
+    FileDialog {
+        id: playlistExportFile; title: "保存歌单 JSON"
+        property string sourceId: ""
+        property var ids: []
+        currentFolder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
+        fileMode: FileDialog.SaveFile; nameFilters: ["歌单 JSON (*.json)"]; defaultSuffix: "json"
+        onAccepted: if (root.usePlaylist(sourceId)) player.libraryAction("exportFile", { url: selectedFile.toString(), ids: ids })
     }
     Rectangle {
         anchors.fill: parent; radius: 20 * root.contentScale; color: "transparent"

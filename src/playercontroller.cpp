@@ -54,17 +54,24 @@ ImportResult copyAudio(const QUrl &url) {
 
 PlayerController::PlayerController(QObject *parent) : PlayerController(MusicApi::Endpoints{}, parent) {}
 PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent) : QObject(parent), m_api(endpoints) {
-    m_favorites = QJsonDocument::fromJson(QSettings().value("library/favorites").toByteArray()).array().toVariantList();
+    if (!m_library.migrateFavorites(QJsonDocument::fromJson(QSettings().value("library/favorites").toByteArray()).array().toVariantList())) {
+        m_error = m_library.error(); m_libraryMessage = m_error;
+    }
     const QString savedQuality = QSettings().value("netease/quality", "standard").toString();
     if (MusicApi::validQuality(savedQuality)) m_quality = savedQuality;
     connect(&m_library, &PlaylistStore::changed, this, [this] {
         if (!m_library.error().isEmpty()) { m_error = m_library.error(); emit changed(); }
-        emit libraryChanged(); syncQueue();
+        emit libraryChanged(); emit favoritesChanged(); emit changed(); syncQueue();
     });
     connect(&m_api, &MusicApi::results, this, [this](QVariantList tracks, QString error) {
         m_searching = false; m_searchResults = tracks;
         m_searchMessage = error.isEmpty() ? (tracks.isEmpty() ? QStringLiteral("没有找到歌曲。") : QStringLiteral("找到 %1 首，可直接点击播放。").arg(tracks.size())) : error;
         emit searchChanged();
+    });
+    connect(&m_api, &MusicApi::playlistResults, this, [this](QVariantList lists, QString error) {
+        m_playlistSearching = false; m_playlistResults = lists;
+        m_playlistSearchMessage = error.isEmpty() ? (lists.isEmpty() ? QStringLiteral("没有找到歌单。") : QStringLiteral("找到 %1 个歌单").arg(lists.size())) : error;
+        emit playlistSearchChanged();
     });
 #ifndef Q_OS_ANDROID
     setPlaybackMode(QSettings().value("playback/mode", "sequential").toString());
@@ -127,7 +134,10 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
 void PlayerController::setApiBase(const QString &url) {
     if (m_busy) { m_searchMessage = QStringLiteral("请等待当前加载完成后切换服务。"); emit searchChanged(); return; }
     if (!m_api.setBaseUrl(url)) m_searchMessage = QStringLiteral("请输入 http(s) 服务地址，不要包含账号、密码或查询参数。");
-    else { m_searching = false; m_searchResults.clear(); m_searchMessage = url.trimmed().isEmpty() ? QStringLiteral("已使用内置网易云接口，可直接按歌名搜索。"): QStringLiteral("自定义服务地址已保存。"); syncQueue(); }
+    else { ++m_playlistGeneration; m_onlinePlaylistLoading = false; m_onlinePlaylist.clear();
+        m_playlistSearching = false; m_playlistResults.clear(); m_playlistSearchMessage.clear();
+        emit playlistSearchChanged(); emit onlinePlaylistChanged();
+        m_searching = false; m_searchResults.clear(); m_searchMessage = url.trimmed().isEmpty() ? QStringLiteral("已使用内置网易云接口，可直接按歌名搜索。"): QStringLiteral("自定义服务地址已保存。"); syncQueue(); }
     emit searchChanged();
 }
 void PlayerController::search(const QString &keywords) {
@@ -191,33 +201,26 @@ void PlayerController::renamePlaylist(const QString &name) {
     if (!m_library.rename(name)) { m_error = QStringLiteral("歌单名称需为 1–60 个字符，且磁盘可写。"); emit changed(); }
 }
 void PlayerController::deletePlaylist() {
-    if (!m_library.removePlaylist()) { m_error = QStringLiteral("至少保留一个歌单。"); emit changed(); }
+    if (!m_library.removePlaylist()) { m_error = m_library.error(); emit changed(); }
 }
 void PlayerController::selectPlaylist(const QString &id) { m_library.select(id); }
 void PlayerController::removeTrack(const QString &id) { m_library.removeTrack(id); }
 QVariantMap PlayerController::favoriteTrack(const QString &id) const {
-    for (const auto &entry : m_favorites) if (entry.toMap().value("id").toString() == id) return entry.toMap();
+    for (const auto &entry : favorites()) if (entry.toMap().value("id").toString() == id) return entry.toMap();
     return {};
 }
 bool PlayerController::currentFavorite() const { return !favoriteTrack(m_loadedTrack.value("id").toString()).isEmpty(); }
-void PlayerController::saveFavorites() {
-    QSettings settings;
-    settings.setValue("library/favorites", QJsonDocument(QJsonArray::fromVariantList(m_favorites)).toJson(QJsonDocument::Compact));
-    settings.sync();
-    if (settings.status() != QSettings::NoError) m_favoriteMessage = QStringLiteral("收藏保存失败，请检查存储空间。");
-    emit favoritesChanged(); emit changed();
-}
 void PlayerController::toggleFavorite() {
     if (m_loadedTrack.isEmpty()) {
         m_favoriteMessage = QStringLiteral("先播放一首歌曲，再收藏。"); emit favoritesChanged(); return;
     }
     if (currentFavorite()) { removeFavorite(m_loadedTrack.value("id").toString()); return; }
-    m_favorites.append(m_loadedTrack); m_favoriteMessage = QStringLiteral("已收藏到本机"); saveFavorites();
+    m_favoriteMessage = m_library.addTracks("favorites", {m_loadedTrack}) >= 0 ? QStringLiteral("已加入收藏夹歌单") : m_library.error();
+    emit favoritesChanged(); emit changed();
 }
 void PlayerController::removeFavorite(const QString &id) {
-    for (qsizetype i = 0; i < m_favorites.size(); ++i) if (m_favorites[i].toMap().value("id").toString() == id) {
-        m_favorites.removeAt(i); m_favoriteMessage = QStringLiteral("已取消收藏"); saveFavorites(); return;
-    }
+    m_favoriteMessage = m_library.removeTracks("favorites", {id}) ? QStringLiteral("已取消收藏") : m_library.error();
+    emit favoritesChanged(); emit changed();
 }
 void PlayerController::playFavorite(const QString &id) {
     const auto track = favoriteTrack(id);
@@ -557,7 +560,10 @@ void PlayerController::processOverlayEvents() {
         const auto event = entry.toObject();
         const auto action = event.value("action").toString(), value = event.value("value").toString();
         m_overlayMessage.clear();
-        if (action == "search") search(value);
+        if (action == "libraryAction") {
+            const auto payload = QJsonDocument::fromJson(value.toUtf8()).object();
+            libraryAction(payload.value("action").toString(), payload.value("args").toObject().toVariantMap());
+        } else if (action == "search") search(value);
         else if (action == "playResult" || action == "addResult") {
             const auto track = findTrack(m_searchResults, value);
             if (track.isEmpty()) continue;
@@ -569,7 +575,7 @@ void PlayerController::processOverlayEvents() {
             const bool ok = action == "createPlaylist" ? m_library.create(value) : m_library.rename(value);
             m_overlayMessage = ok ? QStringLiteral("歌单已保存") : QStringLiteral("保存失败：歌单名称需为 1–60 个字符，并确保存储可写。");
         } else if (action == "deletePlaylist") {
-            m_overlayMessage = m_library.removePlaylist() ? QStringLiteral("歌单已删除") : QStringLiteral("至少保留一个歌单。");
+            m_overlayMessage = m_library.removePlaylist() ? QStringLiteral("歌单已删除") : m_library.error();
         } else if (action == "removeTrack") removeTrack(value);
         else if (action == "quality") { setQuality(value); syncQueue(); }
         else if (action == "api") { setApiBase(value); m_overlayMessage=m_searchMessage; }
@@ -592,7 +598,9 @@ void PlayerController::publishOverlayUi() {
         {"lyricTrack",m_currentTrack},{"lyricLines",m_lyricLines},
         {"lyricsLoading",m_lyricsLoading},{"lyricsFailed",m_lyricsFailed},{"online",m_online},
         {"quality",m_quality},{"qualityInfo",qualityInfo()},{"api",apiBase()},
-        {"favorites",m_favorites},{"message",m_overlayMessage}};
+        {"favorites",favorites()},{"message",m_overlayMessage},
+        {"playlistResults",m_playlistResults},{"playlistSearching",m_playlistSearching},{"playlistSearchMessage",m_playlistSearchMessage},
+        {"onlinePlaylist",m_onlinePlaylist},{"onlinePlaylistLoading",m_onlinePlaylistLoading},{"libraryMessage",m_libraryMessage}};
     const auto json=QJsonDocument(QJsonObject::fromVariantMap(data)).toJson(QJsonDocument::Compact);
     if(json==m_overlayUi)return;
     m_overlayUi=json;
