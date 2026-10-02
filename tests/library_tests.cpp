@@ -10,7 +10,12 @@
 #include <QUrlQuery>
 #include <QPointer>
 #include <QSslSocket>
+#include <QAudioBufferOutput>
+#include <QAudioBuffer>
+#include <QMediaMetaData>
+#include <algorithm>
 #include "playercontroller.h"
+#include "playlistapi_fixture.h"
 
 class MockApi : public QTcpServer {
 public:
@@ -18,6 +23,9 @@ public:
     QByteArray wave;
     QList<QUrl> requests;
     QString failingQuality;
+    int gdStatus = 200, legacyStatus = 200, metingStatus = 200;
+    QByteArray gdBody;
+    bool badGdAudio = false, hangGd = false, corruptGdAudio = false;
     bool failingLyrics = false, noLyrics = false;
     int firstLyricDelay = 0;
     explicit MockApi(int seconds = 2) {
@@ -39,6 +47,21 @@ public:
                     QByteArray body; QByteArray contentType="application/json";
                     int status=200;
                     if (url.path()=="/audio.wav") { body=wave; contentType="audio/wav"; }
+                    else if(url.path()=="/bad-audio") { body="<html>expired audio link</html>"; contentType="text/html"; }
+                    else if(url.path()=="/bad-decode") { body="fLaC000000000000000000000000000000"; contentType="audio/flac"; }
+                    else if(url.path()=="/gd") {
+                        if(hangGd)return;
+                        status=gdStatus;
+                        body=gdBody.isEmpty() ? QJsonDocument(QJsonObject{{"url",base()+(badGdAudio ? "/bad-audio" : corruptGdAudio ? "/bad-decode" : "/audio.wav?signature=keep%2Bthis")},{"br",740},{"size",12345}}).toJson() : gdBody;
+                    }
+                    else if(url.path()=="/meting") {
+                        status=metingStatus;
+                        if(query.queryItemValue("type")=="url") {
+                            socket->write("HTTP/1.1 302 Found\r\nLocation: "+(base()+"/audio.wav?token=signed%2Bvalue").toUtf8()+"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                            socket->disconnectFromHost();return;
+                        }
+                        body=QJsonDocument(QJsonArray{QJsonObject{{"name","Test song"},{"artist","Test artist"},{"url",base()+"/meting?server=netease&type=url&id=101"},{"pic",""},{"lrc",""}}}).toJson();
+                    }
                     else if(keyword=="bad-json") body="<html>not an API</html>";
                     else if(keyword=="http-error") {status=503;body="unavailable";}
                     else if(keyword=="denied") body=R"({"code":301})";
@@ -52,7 +75,8 @@ public:
                     }
                     else if(url.path()=="/api/1/") {
                         contentType="text/plain";
-                        if(query.queryItemValue("level")==failingQuality) {status=503;body="unavailable";}
+                        if(legacyStatus!=200) {status=legacyStatus;body="upstream unavailable";}
+                        else if(query.queryItemValue("level")==failingQuality) {status=503;body="unavailable";}
                         else if(query.queryItemValue("id")=="999") body="<html>not audio</html>";
                         else body=(base()+"/audio.wav?signature=keep%2Bthis").toUtf8();
                     }
@@ -101,7 +125,15 @@ private slots:
         }
         { PlaylistStore restored; QCOMPARE(restored.activeId(),id); QCOMPARE(restored.tracks().size(),1);
           QVERIFY(restored.removeTrack("netease:42")); QCOMPARE(restored.tracks().size(),0); QVERIFY(restored.removePlaylist());
-          while(restored.playlists().size()>1)QVERIFY(restored.removePlaylist()); QVERIFY(!restored.removePlaylist());
+          const auto lists = restored.playlists();
+          for (const auto &entry : lists) {
+              const auto listId = entry.toMap().value("id").toString();
+              if (listId == "favorites") continue;
+              QVERIFY(restored.select(listId)); QVERIFY(restored.removePlaylist());
+          }
+          QCOMPARE(restored.playlists().size(), 1);
+          QCOMPARE(restored.activeId(), QString("favorites"));
+          QVERIFY(!restored.removePlaylist());
         }
     }
     void searchErrorsAndStaleResponses() {
@@ -124,6 +156,214 @@ private slots:
         QVERIFY(api.setBaseUrl(mock.base())); QSignalSpy results(&api, &MusicApi::results);
         api.search("http-error"); QTRY_COMPARE(results.size(), 1);
         QVERIFY2(results.first()[1].toString().contains("503"), qPrintable(results.first()[1].toString()));
+    }
+    void gdSourceResolvesRequestedQuality() {
+        MockApi mock; QVERIFY(mock.listen(QHostAddress::LocalHost));
+        MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",1000};
+        endpoints.gdStudio=mock.base()+"/gd"; endpoints.injahow=mock.base()+"/meting";
+        MusicApi api(endpoints); QVERIFY(api.setBaseUrl(""));
+        bool done=false; QUrl media; QString error;
+        api.resolve("101","hires",[&](QUrl u,QString e){media=u;error=e;done=true;});
+        QTRY_VERIFY(done); QVERIFY2(error.isEmpty(),qPrintable(error));
+        QCOMPARE(media.toEncoded(),(mock.base()+"/audio.wav?signature=keep%2Bthis").toUtf8());
+        QCOMPARE(mock.requests.first().path(),QString("/gd"));
+        QCOMPARE(QUrlQuery(mock.requests.first()).queryItemValue("br"),QString("999"));
+    }
+    void resolverFallsBackAfter523AndInvalidAudio() {
+        MockApi mock; QVERIFY(mock.listen(QHostAddress::LocalHost));
+        mock.badGdAudio=true; mock.legacyStatus=523;
+        MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",1000};
+        endpoints.gdStudio=mock.base()+"/gd"; endpoints.injahow=mock.base()+"/meting";
+        MusicApi api(endpoints); QVERIFY(api.setBaseUrl(""));
+        bool done=false; QUrl media; QString error;
+        api.resolve("101","hires",[&](QUrl u,QString e){media=u;error=e;done=true;});
+        QTRY_VERIFY(done); QVERIFY2(error.isEmpty(),qPrintable(error));
+        QCOMPARE(media.toEncoded(),(mock.base()+"/audio.wav?token=signed%2Bvalue").toUtf8());
+        QVERIFY(std::any_of(mock.requests.cbegin(),mock.requests.cend(),[](const QUrl &u){return u.path()=="/bad-audio";}));
+    }
+    void resolverTimeoutUsesBackupAndCustomApiStaysSelected() {
+        MockApi mock; QVERIFY(mock.listen(QHostAddress::LocalHost)); mock.hangGd=true;
+        MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",120};
+        endpoints.gdStudio=mock.base()+"/gd"; endpoints.injahow=mock.base()+"/meting";
+        MusicApi api(endpoints); QVERIFY(api.setBaseUrl(""));
+        bool done=false; QUrl media; QString error;
+        api.resolve("101","standard",[&](QUrl u,QString e){media=u;error=e;done=true;});
+        QTRY_VERIFY_WITH_TIMEOUT(done,2000); QVERIFY2(error.isEmpty(),qPrintable(error)); QVERIFY(!media.isEmpty());
+        QCOMPARE(mock.requests.first().path(),QString("/gd"));
+        mock.requests.clear(); QVERIFY(api.setBaseUrl(mock.base())); done=false;
+        api.resolve("101","hires",[&](QUrl u,QString e){media=u;error=e;done=true;});
+        QTRY_VERIFY(done); QVERIFY2(error.isEmpty(),qPrintable(error));
+        QVERIFY(std::none_of(mock.requests.cbegin(),mock.requests.cend(),[](const QUrl &u){return u.path()=="/gd"||u.path()=="/meting"||u.path()=="/api/1/";}));
+    }
+    void exhaustedAudioSourcesReportFailuresOnce() {
+        MockApi mock; QVERIFY(mock.listen(QHostAddress::LocalHost));
+        mock.gdStatus=503; mock.legacyStatus=523; mock.metingStatus=502;
+        MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",500};
+        endpoints.gdStudio=mock.base()+"/gd"; endpoints.injahow=mock.base()+"/meting";
+        MusicApi api(endpoints); QVERIFY(api.setBaseUrl(""));
+        int calls=0; QString error;
+        api.resolve("101","hires",[&](QUrl url,QString e){QVERIFY(url.isEmpty());error=e;++calls;});
+        QTRY_COMPARE(calls,1); QVERIFY(error.contains("503")); QVERIFY(error.contains("523")); QVERIFY(error.contains("502"));
+        QCOMPARE(mock.requests.size(),3);
+        api.resolve("101","hires",[&](QUrl url,QString e){QVERIFY(url.isEmpty());QVERIFY(!e.isEmpty());++calls;});
+        QTRY_COMPARE(calls,2); QCOMPARE(mock.requests.size(),3); // Outage cooldown avoids hammering the same servers.
+        QTest::qWait(150); QCOMPARE(calls,2);
+    }
+    void cancelledAudioDoesNotReturnStaleUrl() {
+        MockApi mock; QVERIFY(mock.listen(QHostAddress::LocalHost)); mock.hangGd=true;
+        MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",500}; endpoints.gdStudio=mock.base()+"/gd";
+        MusicApi api(endpoints); QVERIFY(api.setBaseUrl("")); bool cancelled=false;
+        api.resolveAudio("101","hires",[&](MusicApi::Audio audio,QString error){QVERIFY(audio.url.isEmpty());QVERIFY(!error.isEmpty());cancelled=true;});
+        QTRY_VERIFY(!mock.requests.isEmpty()); QVERIFY(api.setBaseUrl(mock.base()));
+        QTRY_VERIFY(cancelled); QTest::qWait(600); QCOMPARE(mock.requests.size(),1);
+    }
+    void fallbackPlaybackShowsSourceAndPreservesPosition() {
+        MockApi mock(15); QVERIFY(mock.listen(QHostAddress::LocalHost)); mock.gdStatus=503; mock.legacyStatus=523;
+        MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",500};
+        endpoints.gdStudio=mock.base()+"/gd"; endpoints.injahow=mock.base()+"/meting";
+        PlayerController player(endpoints); player.setApiBase(""); player.setQuality("standard");
+        player.search("Fallback track"); QTRY_VERIFY(!player.searching()); player.playSearchResult(0);
+        QTRY_VERIFY_WITH_TIMEOUT(!player.busy(),5000); QVERIFY2(player.error().isEmpty(),qPrintable(player.error())); QTRY_VERIFY(player.playing());
+        QVERIFY(player.qualityInfo().contains("INJAHOW"));
+        player.toggle(); QTRY_VERIFY(!player.playing()); player.seek(4000);
+        player.setQuality("hires"); QTRY_VERIFY_WITH_TIMEOUT(!player.busy(),5000); QVERIFY(player.error().isEmpty());
+        QCOMPARE(player.currentTrack(),QString("netease:101")); QVERIFY(!player.playing()); QVERIFY(qAbs(player.position()-4000)<500);
+        QVERIFY(player.qualityInfo().contains("INJAHOW"));
+    }
+    void decoderFailureTriesNextSource() {
+        MockApi mock(15); QVERIFY(mock.listen(QHostAddress::LocalHost)); mock.corruptGdAudio=true; mock.legacyStatus=523;
+        MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",500};endpoints.gdStudio=mock.base()+"/gd";endpoints.injahow=mock.base()+"/meting";
+        PlayerController player(endpoints);player.setApiBase("");player.search("Corrupt source");QTRY_VERIFY(!player.searching());
+        player.playSearchResult(0);QTRY_VERIFY_WITH_TIMEOUT(player.playing(),6000);
+        QVERIFY2(player.error().isEmpty(),qPrintable(player.error()));QVERIFY(player.qualityInfo().contains("INJAHOW"));
+        QCOMPARE(player.currentTrack(),QString("netease:101"));
+    }
+    void rankingsParsingAndEndpoints() {
+        PlaylistApiFixture mock; QVERIFY(mock.listen(QHostAddress::LocalHost));
+        MusicApi api(MusicApi::Endpoints{mock.base(), mock.base(), 1000});
+        QVERIFY(api.setBaseUrl(""));
+        QVariantList lists; QString error; bool done = false;
+        auto fetch = [&] {
+            done = false;
+            api.fetchRankings([&](QVariantList value, QString message) {
+                lists = value; error = message; done = true;
+            });
+        };
+        fetch(); QTRY_VERIFY(done); QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(mock.requests.last().path(), QString("/api/toplist"));
+        QStringList ids;
+        for (const auto &list : lists) ids.append(list.toMap().value("id").toString());
+        QCOMPARE(ids, QStringList({"243", "242", "244", "241", "240", "245"}));
+        QCOMPARE(lists.first().toMap().value("trackCount").toInt(), 1000);
+        QCOMPARE(lists.last().toMap().value("trackCount").toInt(), -1);
+        QVERIFY(!lists.first().toMap().value("description").toString().isEmpty());
+        QVERIFY(api.setBaseUrl(mock.base())); fetch(); QTRY_VERIFY(done);
+        QCOMPARE(mock.requests.last().path(), QString("/toplist"));
+        for (const QByteArray body : {QByteArray("not JSON"), QByteArray(R"({"code":301})"),
+                                     QByteArray(R"({"code":200})"),
+                                     QByteArray(R"({"code":200,"list":[{"id":0,"name":"bad"}]})")}) {
+            mock.rankingsBody = body; fetch(); QTRY_VERIFY(done);
+            QVERIFY(lists.isEmpty()); QVERIFY(!error.isEmpty());
+        }
+        mock.rankingsBody = R"({"code":200,"list":[]})";
+        fetch(); QTRY_VERIFY(done); QVERIFY(lists.isEmpty()); QVERIFY(error.isEmpty());
+    }
+    void rankingsRefreshAndSourceChanges() {
+        PlaylistApiFixture first, second;
+        QVERIFY(first.listen(QHostAddress::LocalHost)); QVERIFY(second.listen(QHostAddress::LocalHost));
+        PlayerController player; player.setApiBase(first.base());
+        first.rankingsDelay = 100;
+        player.libraryAction("loadRankings", {}); QVERIFY(player.rankingsLoading());
+        player.libraryAction("loadRankings", {}); // Only one in-flight request.
+        QTRY_VERIFY(!player.rankingsLoading()); QCOMPARE(first.requests.size(), 1);
+        const auto saved = player.rankings(); QCOMPARE(saved.size(), 6); QVERIFY(player.rankingsMessage().isEmpty());
+        first.rankingsStatus = 503;
+        player.libraryAction("loadRankings", {}); QTRY_VERIFY(!player.rankingsLoading());
+        QCOMPARE(player.rankings(), saved); QVERIFY(player.rankingsMessage().contains("503"));
+        first.rankingsStatus = 200; first.rankingsDelay = 300;
+        player.libraryAction("loadRankings", {}); QTRY_COMPARE(first.requests.size(), 3);
+        player.setApiBase(second.base());
+        QVERIFY(!player.rankingsLoading()); QVERIFY(player.rankings().isEmpty()); QVERIFY(player.rankingsMessage().isEmpty());
+        second.rankingsBody = R"({"code":200,"list":[{"id":300,"name":"Other source"}]})";
+        player.libraryAction("loadRankings", {}); QTRY_VERIFY(!player.rankingsLoading());
+        QCOMPARE(player.rankings().first().toMap().value("id").toString(), QString("300"));
+        QTest::qWait(350);
+        QCOMPARE(player.rankings().size(), 1); // Delayed old source cannot repopulate the list.
+        QCOMPARE(player.rankings().first().toMap().value("id").toString(), QString("300"));
+        second.rankingsBody = R"({"code":200,"list":[]})";
+        player.libraryAction("loadRankings", {}); QTRY_VERIFY(!player.rankingsLoading());
+        QVERIFY(player.rankings().isEmpty()); QVERIFY(!player.rankingsMessage().isEmpty());
+    }
+    void incompletePlaylistKeepsOriginalRanks() {
+        PlaylistApiFixture mock; QVERIFY(mock.listen(QHostAddress::LocalHost));
+        MusicApi api; QVERIFY(api.setBaseUrl(mock.base()));
+        QVariantMap playlist; QString error; bool done = false;
+        api.fetchPlaylist("243", [&](QVariantMap value, QString message) {
+            playlist = value; error = message; done = true;
+        });
+        QTRY_VERIFY(done); QVERIFY2(error.isEmpty(), qPrintable(error));
+        const auto tracks = playlist.value("tracks").toList(); QCOMPARE(tracks.size(), 2);
+        QCOMPARE(tracks[0].toMap().value("playlistPosition").toInt(), 1);
+        QCOMPARE(tracks[1].toMap().value("playlistPosition").toInt(), 4);
+        QCOMPARE(playlist.value("trackCount").toInt(), 4); QVERIFY(!playlist.value("warning").toString().isEmpty());
+        QCOMPARE(mock.requests.size(), 2);
+        QCOMPARE(mock.requests.last().path(), QString("/song/detail"));
+    }
+    void liveRankings() {
+        if (!qEnvironmentVariableIsSet("FLOATMUSIC_LIVE_TESTS")) QSKIP("Live rankings test is opt-in.");
+        MusicApi api; QVERIFY(api.setBaseUrl(""));
+        bool done = false; QVariantList lists; QString error;
+        api.fetchRankings([&](QVariantList value, QString message) { lists = value; error = message; done = true; });
+        QTRY_VERIFY_WITH_TIMEOUT(done, 20000);
+        QVERIFY2(error.isEmpty(), qPrintable(error)); QVERIFY(!lists.isEmpty());
+        auto hot = std::find_if(lists.cbegin(), lists.cend(), [](const QVariant &list) {
+            return list.toMap().value("name").toString().contains(QStringLiteral("热歌榜"));
+        });
+        QVERIFY2(hot != lists.cend(), "The live service should return a hot songs playlist.");
+        qInfo() << "Live rankings:" << lists.size() << "hot playlist:" << hot->toMap().value("id").toString();
+        QVariantMap playlist; done = false;
+        api.fetchPlaylist(hot->toMap().value("id").toString(), [&](QVariantMap value, QString message) {
+            playlist = value; error = message; done = true;
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(done, 60000);
+        QVERIFY2(error.isEmpty(), qPrintable(error)); QVERIFY(!playlist.value("tracks").toList().isEmpty());
+        qInfo() << "Live hot songs:" << playlist.value("name").toString()
+                << "reported:" << playlist.value("trackCount").toInt()
+                << "loaded:" << playlist.value("tracks").toList().size()
+                << "warning:" << playlist.value("warning").toString();
+    }
+    void liveResolveAudio() {
+        if (!qEnvironmentVariableIsSet("FLOATMUSIC_LIVE_TESTS")) QSKIP("Live audio resolver test is opt-in.");
+        MusicApi api; QVERIFY(api.setBaseUrl(""));
+        const QString song = qEnvironmentVariable("FLOATMUSIC_LIVE_SONG", "1220792");
+        const QString quality = qEnvironmentVariable("FLOATMUSIC_LIVE_QUALITY", "hires");
+        bool done = false; QUrl media; QString error;
+        api.resolve(song, quality, [&](QUrl value, QString message) { media = value; error = message; done = true; });
+        QTRY_VERIFY_WITH_TIMEOUT(done, 30000);
+        qInfo() << "Audio resolver song:" << song << "quality:" << quality
+                << "valid URL:" << !media.isEmpty() << "error:" << error;
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!media.isEmpty());
+    }
+    void liveAudioSourcesPlayback() {
+        if (!qEnvironmentVariableIsSet("FLOATMUSIC_LIVE_TESTS")) QSKIP("Live audio playback is opt-in.");
+        MusicApi api;QVERIFY(api.setBaseUrl(""));bool done=false;MusicApi::Audio audio;QString error;
+        const QString song=qEnvironmentVariable("FLOATMUSIC_LIVE_SONG","1220792");
+        const QString quality=qEnvironmentVariable("FLOATMUSIC_LIVE_QUALITY","hires");
+        const QStringList excluded=qEnvironmentVariable("FLOATMUSIC_LIVE_EXCLUDED").split(',',Qt::SkipEmptyParts);
+        api.resolveAudio(song,quality,[&](MusicApi::Audio a,QString e){audio=a;error=e;done=true;},excluded);
+        QTRY_VERIFY_WITH_TIMEOUT(done,30000);QVERIFY2(error.isEmpty(),qPrintable(error));
+        QMediaPlayer media;QAudioOutput output;output.setMuted(true);media.setAudioOutput(&output);
+        QAudioBufferOutput buffers;media.setAudioBufferOutput(&buffers);int decoded=0;
+        connect(&buffers,&QAudioBufferOutput::audioBufferReceived,this,[&](const QAudioBuffer &b){if(b.isValid())++decoded;});
+        media.setSource(audio.url);media.play();QTRY_VERIFY_WITH_TIMEOUT(decoded>0,15000);QTRY_VERIFY(media.position()>150);
+        media.pause();QTRY_COMPARE(media.playbackState(),QMediaPlayer::PausedState);
+        const auto paused=media.position();QTest::qWait(350);QVERIFY(qAbs(media.position()-paused)<200);
+        QVERIFY(media.isSeekable());media.setPosition(10000);QTRY_VERIFY(media.position()>=9500);
+        media.play();QTRY_VERIFY(media.position()>10200);
+        qInfo()<<"Live audio passed:"<<song<<quality<<audio.sourceName<<"source quality"<<audio.bitrate
+               <<"codec"<<media.metaData().stringValue(QMediaMetaData::AudioCodec)<<"decoded buffers"<<decoded;
+        media.stop();
     }
     void directPlaybackQualityAndLyrics() {
         MockApi mock(12); QVERIFY(mock.listen(QHostAddress::LocalHost)); PlayerController player;

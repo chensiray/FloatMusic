@@ -41,6 +41,38 @@ New-Item -ItemType Directory -Path 'artifacts\api-probe' -Force | Out-Null
 
 其他参数：`--song 347230` 修改第三方音质和普通链接的种子歌曲；`--keyword 纯音乐` 修改搜索词。
 
+## 播放失败诊断
+
+2026-10-01 增加单独搜索与限次音源解析模式，用于区分元数据服务、音源接口和音频文件。建议在英文暂存目录运行；最多重复 3 轮，默认一轮，不修改浮音设置。
+
+```powershell
+# 单独检查搜索，不调用音源接口。
+.\build\live_api_probe.exe --search-only --keyword 'Cool Forest Rain' --out search.json
+
+# 同一歌曲对照 Hi-Res 与标准音质，记录 HTTP 状态、Server、CF-Ray。
+.\build\live_api_probe.exe --resolver-only --song 1220792 --levels hires,standard --repeat 2 --ua 'FloatMusic/0.8' --out resolver.json
+```
+
+`--search-only` 在搜索结构有效时返回 0，否则返回 1；`--resolver-only` 要求所有解析请求返回 HTTP 200 与有效地址，并通过少量 Range 字节读取，否则返回 1。参数音质无效返回 2。Range 检查仅用于区分错误页面，不等于播放器解码或整首可播。本模式不调用完整播放、不下载整首音频，临时音源地址只留在内存中。
+
+新增可选 QtTest `library_tests liveResolveAudio` 直接调用浮音的 `MusicApi::resolve`；设置 `FLOATMUSIC_LIVE_TESTS=1`，可用 `FLOATMUSIC_LIVE_SONG` 和 `FLOATMUSIC_LIVE_QUALITY` 指定歌曲与音质。默认离线回归跳过此测试；接口失效时测试应失败，不能用探测程序正常结束代替可用结论。
+
+本次实验和改进方案见[第三方音源稳定性分析](../../docs/第三方音源稳定性分析-2026-10-01.md)。
+
+## 候选第三方音源对照
+
+`--providers` 可指定 `gd`、`injahow`、`meting`（I-METO）、`paugram`，逗号分隔。默认 GD 请求 `br=999`，用 `--br 320` 对照极高音质；`--song` 指定同一网易云编号。通过 JSON、音频头及 Qt 实际解码/暂停/定位/续播检查可用性；加 `--no-playback` 只检查地址和音频头，不能作为可播证据。
+
+```powershell
+.\build\live_api_probe.exe --providers gd,injahow --song 1220792 --br 999 --out candidates.json
+```
+
+该独立工具默认强制直连。需要对照本机已有代理时，追加 `--proxy 'http://主机:端口'`；它只配置 Qt Network，不修改系统代理，也不自动配置 Qt Multimedia。原始播放日志可能含临时地址，建议重定向到本地忽略目录。
+
+此模式返回 0 表示至少一个所选来源通过；应逐项检查输出，不能据退出码称所有来源通过。返回 1 表示没有来源通过，未知来源参数返回 2。JSON 保存主机与格式信息，不保存签名播放地址。
+
+浮音本身的联网回归使用 `library_tests liveResolveAudio liveAudioSourcesPlayback`，按当前实现调用 `MusicApi::resolveAudio`。设置 `FLOATMUSIC_LIVE_TESTS=1`；可选 `FLOATMUSIC_LIVE_EXCLUDED=gd,byfuns` 强制对照 INJAHOW。它遵循系统代理配置，与独立探测的强制直连模式不同。接入结果与范围见[备用音源接入与实测](../../docs/备用音源接入与实测-2026-10-01.md)。
+
 ## 怎样解读
 
 - `httpStatus`、`businessCode`、`schemaValid` 分别表示传输、业务、样本字段检查，不能只看 HTTP 200。

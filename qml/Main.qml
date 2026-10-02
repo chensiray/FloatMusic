@@ -13,6 +13,7 @@ ApplicationWindow {
     property var selectedTrackIds: []
     property string searchKind: "songs"
     property bool showingOnlinePlaylist: false
+    property string onlinePlaylistSource: "search"
     readonly property var activeList: {
         for (var i = 0; i < player.playlists.length; ++i)
             if (player.playlists[i].id === player.activePlaylist) return player.playlists[i]
@@ -29,29 +30,31 @@ ApplicationWindow {
     property rect workArea: Qt.rect(0, 0, 1280, 720)
     readonly property real contentScale: Math.min(Math.max(0.9, Math.min(1.4, appearance.windowScale)), Math.max(0.4, (workArea.width - 16) / baseWidth))
     readonly property bool darkMode: appearance.mode === 2 || (appearance.mode === 0 && Qt.styleHints.colorScheme === Qt.Dark)
-    readonly property color backdrop: darkMode ? "#101722" : "#F3F5F8"
-    readonly property color surface: darkMode ? "#192333" : "#FFFFFF"
-    readonly property color elevated: darkMode ? "#233044" : "#FFFFFF"
-    readonly property color ink: darkMode ? "#EDF2FA" : "#182338"
-    readonly property color muted: darkMode ? "#ABB8CC" : "#56657A"
-    readonly property color accent: darkMode ? "#83ABFF" : "#2458D3"
+    readonly property color backdrop: darkMode ? "#111924" : "#F4F6FA"
+    readonly property color surface: darkMode ? "#192332" : "#FCFDFF"
+    readonly property color elevated: darkMode ? "#222F41" : "#FFFFFF"
+    readonly property color control: darkMode ? "#243044" : "#EEF2F8"
+    readonly property color ink: darkMode ? "#EDF2FA" : "#202C41"
+    readonly property color muted: darkMode ? "#AAB8CD" : "#596A80"
+    readonly property color accent: darkMode ? "#91B6FF" : "#2B61D7"
     readonly property color accentInk: darkMode ? "#101722" : "#FFFFFF"
     readonly property color selection: darkMode ? "#243B60" : "#E8EFFF"
-    readonly property color line: darkMode ? "#3A465A" : "#D5DEEB"
-    readonly property color fieldBorder: darkMode ? "#718198" : "#7B899D"
+    readonly property color line: darkMode ? "#34445A" : "#DCE4EF"
+    readonly property color fieldBorder: darkMode ? "#687C97" : "#8190A5"
     readonly property color danger: darkMode ? "#FF9B93" : "#B42318"
     Settings {
         id: appearance; category: "appearance"
         property int mode: 0
         property real windowScale: 1.0
         property real backgroundOpacity: 1.0
+        property bool animationsEnabled: true
         property int iconX: 48
         property int iconY: 120
     }
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: "浮音 0.7 · 桌面预览"
+    title: "浮音 0.8 · 桌面预览"
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -79,13 +82,33 @@ ApplicationWindow {
         playbackMenu.close(); lyricTiming.close()
         libraryMenu.close(); selectionMenu.close(); targetSheet.close(); importSheet.close(); exportSheet.close(); descriptionSheet.close(); playlistDialog.close(); deleteDialog.close(); removeDialog.close(); trackMenu.close()
         floating.x = root.x; floating.y = root.y
-        section = ""; detail = ""; root.hide(); fitWindow(floating); saveIconPosition()
+        section = ""; detail = ""; showingOnlinePlaylist = false; root.hide(); fitWindow(floating); saveIconPosition()
     }
     function saveIconPosition() { appearance.iconX = floating.x; appearance.iconY = floating.y }
-    function toggleSection(name) { section = section === name ? "" : name; detail = "" }
+    function toggleSection(name) { section = section === name ? "" : name; detail = ""; showingOnlinePlaylist = false }
     function openDetail(name) {
+        showingOnlinePlaylist = false
         if (name === "favorites") { player.selectPlaylist("favorites"); section = "playlist"; detail = ""; return }
         section = "more"; detail = name
+        if (name === "rankings" && !player.rankingsLoading && player.rankings.length === 0 && !player.rankingsMessage.length)
+            player.libraryAction("loadRankings", {})
+    }
+    function openOnlinePlaylist(id, source) {
+        onlinePlaylistSource = source
+        showingOnlinePlaylist = true
+        player.libraryAction("openOnline", { id: id })
+        Qt.callLater(function() { onlineTracks.positionViewAtBeginning() })
+    }
+    function closeOnlinePlaylist() {
+        showingOnlinePlaylist = false; detail = onlinePlaylistSource
+        Qt.callLater(function() { (root.onlinePlaylistSource === "rankings" ? rankingResults : playlistResults).forceActiveFocus() })
+    }
+    function isFeaturedRanking(name) { return /热歌|新歌|飙升|原创/.test(name || "") }
+    function rankingGlyph(name) {
+        if (/飙升/.test(name || "")) return "trending"
+        if (/新歌/.test(name || "")) return "spark"
+        if (/原创/.test(name || "")) return "music"
+        return "ranking"
     }
     function hasSelected(id) { return selectedTrackIds.indexOf(id) >= 0 }
     function toggleTrack(id) {
@@ -199,14 +222,17 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+F"; enabled: root.visible && !root.sheetOpen; onActivated: {root.showingOnlinePlaylist=false;root.openDetail("search");Qt.callLater(function(){(root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning();keywords.forceActiveFocus()})} }
     Shortcut { sequence: "Ctrl+O"; enabled: root.visible && !root.sheetOpen; onActivated: root.chooseMusic() }
     readonly property bool sheetOpen: playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened
-    Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.showingOnlinePlaylist=false;else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
+    Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.closeOnlinePlaylist();else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
     component Glyph: Canvas {
         id: glyph
         property string kind: "music"
         property color tint: root.ink
         implicitWidth: 20; implicitHeight: 20
+        Accessible.ignored: true
         onTintChanged: requestPaint()
         onKindChanged: requestPaint()
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
         onPaint: {
             var c = getContext("2d"); c.reset(); c.scale(width / 24, height / 24)
             c.strokeStyle = tint; c.fillStyle = tint; c.lineWidth = 1.7; c.lineCap = "round"; c.lineJoin = "round"
@@ -219,7 +245,16 @@ ApplicationWindow {
             else if (kind === "more") { for(var k=5;k<=19;k+=7){c.beginPath();c.arc(k,12,1.7,0,Math.PI*2);c.fill()} }
             else if (kind === "close") { path([[6,6],[18,18]]); path([[18,6],[6,18]]) }
             else if (kind === "back") path([[15,5],[8,12],[15,19]])
+            else if (kind === "forward") path([[9,5],[16,12],[9,19]])
             else if (kind === "chevron") path([[7,10],[12,15],[17,10]])
+            else if (kind === "add") { path([[12,5],[12,19]]); path([[5,12],[19,12]]) }
+            else if (kind === "refresh") { c.beginPath();c.arc(12,12,8,0.6,5.3);c.stroke();path([[16,3],[17,8],[22,7]]) }
+            else if (kind === "ranking") { path([[4,20],[4,13],[9,13],[9,20]]);path([[9,20],[9,5],[15,5],[15,20]]);path([[15,20],[15,10],[20,10],[20,20]]);path([[3,20],[21,20]]) }
+            else if (kind === "trending") { path([[3,18],[9,12],[13,15],[21,5]]);path([[15,5],[21,5],[21,11]]) }
+            else if (kind === "spark") { path([[12,3],[14.5,9.5],[21,12],[14.5,14.5],[12,21],[9.5,14.5],[3,12],[9.5,9.5]],true) }
+            else if (kind === "lyrics") { path([[6,3],[18,3],[18,21],[6,21]],true);path([[9,8],[15,8]]);path([[9,12],[15,12]]);path([[9,16],[13,16]]) }
+            else if (kind === "import") { path([[4,15],[4,20],[20,20],[20,15]]);path([[12,3],[12,15]]);path([[7,10],[12,15],[17,10]]) }
+            else if (kind === "exit") { path([[10,4],[4,4],[4,20],[10,20]]);path([[9,12],[21,12]]);path([[16,7],[21,12],[16,17]]) }
             else if (kind === "check") path([[5,12],[10,17],[19,7]])
             else if (kind === "up" || kind === "down") { if(kind === "down"){c.translate(0,24);c.scale(1,-1)} path([[12,20],[12,4]]);path([[6,10],[12,4],[18,10]]) }
             else if (kind === "sequential") {path([[4,6],[20,6]]);path([[4,12],[20,12]]);path([[4,18],[20,18],[16,14]]);path([[20,18],[16,22]])}
@@ -243,46 +278,92 @@ ApplicationWindow {
         id: action
         property bool primary: false
         property bool quiet: false
+        property bool selected: false
         property string glyph: ""
-        implicitHeight: 44; implicitWidth: Math.max(44, contentItem.implicitWidth + 24)
-        padding: 10; spacing: 8; hoverEnabled: true
+        property real cornerRadius: 8
+        readonly property real visualScale: appearance.animationsEnabled && down ? 0.965 : 1
+        implicitHeight: 34; implicitWidth: text.length ? Math.max(48, contentItem.implicitWidth + 20) : 34
+        padding: 8; spacing: 6; hoverEnabled: true; font.pixelSize: 13
         Accessible.name: text
         contentItem: Item {
             implicitWidth: buttonContents.implicitWidth; implicitHeight: buttonContents.implicitHeight
+            scale: action.visualScale
+            Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: action.down ? 80 : 150; easing.type: Easing.OutCubic } }
             RowLayout {
-                id: buttonContents; anchors.centerIn: parent; spacing: 8
-                Glyph { visible: action.glyph.length > 0; kind: action.glyph; tint: action.primary && action.enabled ? root.accentInk : (action.enabled ? root.ink : root.muted); Layout.preferredWidth: 18; Layout.preferredHeight: 18 }
-                Text { visible: action.text.length > 0; text: action.text; font: action.font; color: action.primary && action.enabled ? root.accentInk : action.enabled ? root.ink : root.muted; horizontalAlignment: Text.AlignHCenter }
+                id: buttonContents; anchors.centerIn: parent; spacing: 6
+                Glyph { visible: action.glyph.length > 0; kind: action.glyph; tint: action.primary && action.enabled ? root.accentInk : action.selected && action.enabled ? root.accent : (action.enabled ? root.ink : root.muted); Layout.preferredWidth: 18; Layout.preferredHeight: 18 }
+                Text { visible: action.text.length > 0; text: action.text; font: action.font; color: action.primary && action.enabled ? root.accentInk : action.selected && action.enabled ? root.accent : action.enabled ? root.ink : root.muted; horizontalAlignment: Text.AlignHCenter }
             }
         }
         background: Rectangle {
-            radius: 12
-            color: !action.enabled ? root.backdrop : action.primary ? (action.down ? Qt.darker(root.accent, 1.12) : root.accent) : action.down || action.hovered ? root.selection : action.quiet ? "transparent" : root.surface
-            border.width: action.activeFocus ? 2 : action.quiet || action.primary ? 0 : 1
-            border.color: action.activeFocus ? root.accent : root.line
+            radius: action.cornerRadius
+            scale: action.visualScale
+            Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: action.down ? 80 : 150; easing.type: Easing.OutCubic } }
+            color: !action.enabled ? (action.quiet ? "transparent" : root.backdrop) : action.primary ? (action.down ? Qt.darker(root.accent, 1.12) : root.accent) : action.selected || action.down || action.hovered ? root.selection : action.quiet ? "transparent" : root.control
+            border.width: action.activeFocus ? 2 : 0
+            border.color: root.accent
         }
         ToolTip.visible: hovered && ToolTip.text.length > 0
         ToolTip.delay: 600
     }
+    component MenuEntry: Action {
+        id: entry
+        property bool navigates: true
+        quiet: true; implicitHeight: 40
+        contentItem: Item {
+            implicitWidth: menuContent.implicitWidth; implicitHeight: menuContent.implicitHeight
+            scale: entry.visualScale
+            Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: entry.down ? 80 : 150; easing.type: Easing.OutCubic } }
+            RowLayout {
+                id: menuContent; anchors.fill: parent; spacing: 12
+                Glyph { kind: entry.glyph; tint: entry.enabled ? root.accent : root.muted; Layout.preferredWidth: 18; Layout.preferredHeight: 18 }
+                Copy { text: entry.text; font.pixelSize: 13; Layout.fillWidth: true; color: entry.enabled ? root.ink : root.muted }
+                Glyph { visible: entry.navigates; kind: "forward"; tint: root.muted; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
+            }
+        }
+    }
+    component PressRow: ItemDelegate {
+        id: pressRow
+        hoverEnabled: true
+        property bool emphasized: false
+        readonly property real visualScale: appearance.animationsEnabled && down ? 0.97 : 1
+        padding: 10
+        background: Rectangle {
+            radius: 10; color: pressRow.hovered || pressRow.down ? root.selection : pressRow.emphasized ? root.control : "transparent"
+            border.width: pressRow.activeFocus ? 2 : 0; border.color: root.accent
+            scale: pressRow.visualScale
+            Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: pressRow.down ? 80 : 150; easing.type: Easing.OutCubic } }
+        }
+    }
     component Field: TextField {
         id: field
-        implicitHeight: 44; leftPadding: 14; rightPadding: 14
+        implicitHeight: 36; leftPadding: 11; rightPadding: 11; font.pixelSize: 13
         color: root.ink; placeholderTextColor: root.muted; selectionColor: root.accent; selectedTextColor: root.accentInk; selectByMouse: true
         background: Rectangle { radius: 8; color: root.elevated; border.color: field.activeFocus ? root.accent : root.fieldBorder; border.width: field.activeFocus ? 2 : 1 }
     }
     component Choice: ComboBox {
         id: choice
-        implicitHeight: 44; implicitWidth: 210; leftPadding: 14; rightPadding: 36; hoverEnabled: true
-        contentItem: Text { text: choice.displayText; font: choice.font; color: choice.enabled ? root.ink : root.muted; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+        implicitHeight: 36; implicitWidth: 210; leftPadding: 11; rightPadding: 34; hoverEnabled: true; font.pixelSize: 13
+        contentItem: Text {
+            text: choice.displayText; font: choice.font; color: choice.enabled ? root.ink : root.muted; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+            scale: appearance.animationsEnabled && choice.down ? 0.97 : 1
+            Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: choice.down ? 80 : 150; easing.type: Easing.OutCubic } }
+        }
         indicator: Glyph { kind: "chevron"; tint: root.muted; x: choice.width - width - 12; y: (choice.height-height)/2 }
-        background: Rectangle { radius: 8; color: choice.hovered ? root.selection : root.elevated; border.color: choice.activeFocus ? root.accent : root.fieldBorder; border.width: choice.activeFocus ? 2 : 1 }
+        background: Rectangle {
+            radius: 8; color: choice.hovered || choice.down ? root.selection : root.elevated; border.color: choice.activeFocus ? root.accent : root.fieldBorder; border.width: choice.activeFocus ? 2 : 1
+            scale: appearance.animationsEnabled && choice.down ? 0.97 : 1
+            Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: choice.down ? 80 : 150; easing.type: Easing.OutCubic } }
+        }
         delegate: ItemDelegate {
             id: option
             required property int index
             text: choice.textAt(index)
             Accessible.name: text
-            width: choice.width; height: 44; highlighted: choice.highlightedIndex === index
+            width: choice.width; height: 36; highlighted: choice.highlightedIndex === index
             contentItem: RowLayout {
+                scale: appearance.animationsEnabled && option.down ? 0.97 : 1
+                Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: option.down ? 80 : 150; easing.type: Easing.OutCubic } }
                 Text { text: choice.textAt(option.index); color: choice.currentIndex === option.index ? root.accent : root.ink; font: choice.font; elide: Text.ElideRight; Layout.fillWidth: true }
                 Glyph { kind: "check"; tint: root.accent; visible: choice.currentIndex === option.index }
             }
@@ -299,6 +380,10 @@ ApplicationWindow {
             implicitHeight: Math.min(260, root.height / root.contentScale - 24, contentItem.implicitHeight + 12)
             contentItem: ListView { clip: true; implicitHeight: contentHeight; model: choice.popup.visible ? choice.delegateModel : null; currentIndex: choice.highlightedIndex; ScrollIndicator.vertical: ScrollIndicator {} }
             background: Rectangle { color: root.elevated; radius: 10; border.color: root.fieldBorder }
+            enter: Transition {
+                enabled: appearance.animationsEnabled
+                NumberAnimation { target: choice.popup.contentItem; property: "opacity"; from: 0; to: 1; duration: 130; easing.type: Easing.OutCubic }
+            }
         }
     }
     component TrackSlider: Slider {
@@ -320,9 +405,10 @@ ApplicationWindow {
         id: tab
         property string sectionName
         Layout.fillWidth: true
-        primary: root.section === sectionName
+        selected: root.section === sectionName
+        quiet: true; font.weight: selected ? Font.DemiBold : Font.Normal
         onClicked: root.toggleSection(sectionName)
-        Accessible.description: primary ? "已展开，再次点击收起" : "点击展开"
+        Accessible.description: selected ? "已展开，再次点击收起" : "点击展开"
     }
     // Keep popups in the card's overlay: native popup windows can fall behind
     // the always-on-top Windows card after focus/activation changes.
@@ -340,24 +426,30 @@ ApplicationWindow {
         margins: 8; padding: 8; focus: true; modal: true; dim: false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { radius: 12; color: root.elevated; border.color: root.fieldBorder }
+        enter: Transition {
+            enabled: appearance.animationsEnabled
+            NumberAnimation { targets: [upPopup.contentItem, upPopup.background]; property: "opacity"; from: 0; to: 1; duration: 130; easing.type: Easing.OutCubic }
+        }
         onClosed: if (root.visible) anchorItem.forceActiveFocus()
     }
     UpPopup {
         id: playbackMenu; objectName: "playbackModePopup"; anchorItem: modeButton
-        width: 176; height: 192
+        width: 176; height: 160
         contentItem: Column {
             Repeater {
                 model: root.playbackModes
                 delegate: ItemDelegate {
                     id: modeOption
                     required property var modelData
-                    width: 160; height: 44
+                    width: 160; height: 36
                     Accessible.name: modelData.name
                     Accessible.role: Accessible.RadioButton
                     Accessible.checked: player.playbackMode === modelData.key
                     onClicked: { player.setPlaybackMode(modelData.key); playbackMenu.close() }
                     contentItem: RowLayout {
                         spacing: 10
+                        scale: appearance.animationsEnabled && modeOption.down ? 0.97 : 1
+                        Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: modeOption.down ? 80 : 150; easing.type: Easing.OutCubic } }
                         Glyph { kind: modeOption.modelData.icon; tint: root.accent; implicitWidth: 18; implicitHeight: 18 }
                         Copy { text: modeOption.modelData.name; Layout.fillWidth: true }
                         Glyph { kind: "check"; visible: player.playbackMode === modeOption.modelData.key; tint: root.accent; implicitWidth: 16; implicitHeight: 16 }
@@ -391,23 +483,25 @@ ApplicationWindow {
         id: song
         required property var track
         property string extraText: ""
+        property int rank: 0
         signal playRequested()
         signal extraRequested()
         signal removeRequested()
         property bool removable: false
         width: ListView.view ? ListView.view.width : 320
-        height: 70; radius: 10
+        height: 58; radius: 8
         color: player.currentTrack === track.id ? root.selection : songHover.hovered ? root.backdrop : "transparent"
         HoverHandler { id: songHover }
         RowLayout {
             anchors.fill: parent; anchors.margins: 6; spacing: 8
+            Copy { visible: song.rank > 0; text: song.rank; font.pixelSize: 13; font.weight: song.rank <= 3 ? Font.DemiBold : Font.Normal; color: song.rank <= 3 ? root.accent : root.muted; elide: Text.ElideNone; Layout.preferredWidth: Math.max(24, implicitWidth); Layout.minimumWidth: implicitWidth; horizontalAlignment: Text.AlignHCenter }
             ColumnLayout {
                 Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
                 Copy { Layout.fillWidth: true; text: song.track.name; font.weight: Font.DemiBold }
                 Copy { Layout.fillWidth: true; text: song.track.artist || "本地音频"; color: root.muted; font.pixelSize: 12 }
             }
             Action { glyph: "play"; quiet: true; enabled: !player.busy; Accessible.name: "播放 " + song.track.name; ToolTip.text: Accessible.name; onClicked: song.playRequested() }
-            Action { visible: song.extraText.length > 0; text: song.extraText; quiet: true; Accessible.name: "加入当前歌单"; ToolTip.text: "加入当前歌单"; onClicked: song.extraRequested() }
+            Action { visible: song.extraText.length > 0; glyph: "add"; quiet: true; Accessible.name: "加入当前歌单"; ToolTip.text: "加入当前歌单"; onClicked: song.extraRequested() }
             Action { visible: song.removable; glyph: "close"; quiet: true; Accessible.name: "移除 " + song.track.name; ToolTip.text: Accessible.name; onClicked: song.removeRequested() }
         }
     }
@@ -489,7 +583,7 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
                         Item {
-                            Layout.fillWidth: true; implicitHeight: 44
+                            Layout.fillWidth: true; implicitHeight: 34
                             RowLayout {
                                 anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; spacing: 8
                                 Glyph { tint: root.accent }
@@ -502,7 +596,7 @@ ApplicationWindow {
                         Action { objectName: "collapseButton"; glyph: "minus"; quiet: true; Accessible.name: "收为图标"; ToolTip.text: "收为图标"; onClicked: root.collapse() }
                     }
                     Copy {
-                        Layout.fillWidth: true; text: player.title; font.pixelSize: 24; font.weight: Font.DemiBold
+                        Layout.fillWidth: true; text: player.title; font.pixelSize: 22; font.weight: Font.DemiBold
                         wrapMode: Text.Wrap; maximumLineCount: 2
                     }
                     Copy {
@@ -523,18 +617,19 @@ ApplicationWindow {
                         Copy { text: root.clock(player.duration); color: root.muted; font.pixelSize: 12 }
                     }
                     RowLayout {
-                        Layout.fillWidth: true; spacing: 12
+                        Layout.fillWidth: true; spacing: 14
+                        Item { Layout.preferredWidth: 34 }
                         Item { Layout.fillWidth: true }
                         Action { objectName: "previousButton"; glyph: "previous"; quiet: true; Accessible.name: "上一首"; ToolTip.text: "上一首"; enabled: !player.busy&&player.tracks.length>0; onClicked: player.previous() }
-                        Action { objectName: "playPauseButton"; glyph: player.playing ? "pause" : "play"; primary: true; implicitWidth: 72; implicitHeight: 48; Accessible.name: player.playing ? "暂停" : "播放"; ToolTip.text: Accessible.name; enabled: player.ready&&!player.busy; onClicked: player.toggle() }
+                        Action { objectName: "playPauseButton"; glyph: player.playing ? "pause" : "play"; primary: true; implicitWidth: 46; implicitHeight: 46; cornerRadius: 23; Accessible.name: player.playing ? "暂停" : "播放"; ToolTip.text: Accessible.name; enabled: player.ready&&!player.busy; onClicked: player.toggle() }
                         Action { objectName: "nextButton"; glyph: "next"; quiet: true; Accessible.name: "下一首"; ToolTip.text: "下一首"; enabled: !player.busy&&player.tracks.length>0; onClicked: player.next() }
+                        Item { Layout.fillWidth: true }
                         Action {
                             id: modeButton; objectName: "playbackModeButton"; glyph: player.playbackMode; quiet: true
                             Accessible.name: "播放模式：" + root.playbackModeName
                             ToolTip.text: Accessible.name
                             onClicked: playbackMenu.opened ? playbackMenu.close() : playbackMenu.open()
                         }
-                        Item { Layout.fillWidth: true }
                     }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
@@ -553,11 +648,14 @@ ApplicationWindow {
                         Hint { objectName: "playbackError"; text: player.error; color: root.danger; maximumLineCount: 4; elide: Text.ElideRight }
                         Action { objectName: "retryPlayback"; text: "重试"; enabled: !player.busy; onClicked: player.retryPlayback() }
                     }
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 8
-                        SectionTab { objectName: "lyricsTab"; text: "歌词"; sectionName: "lyrics" }
-                        SectionTab { objectName: "playlistTab"; text: "歌单"; sectionName: "playlist" }
-                        SectionTab { objectName: "moreTab"; text: "更多"; sectionName: "more" }
+                    Rectangle {
+                        Layout.fillWidth: true; implicitHeight: 40; radius: 10; color: root.control
+                        RowLayout {
+                            anchors.fill: parent; anchors.margins: 3; spacing: 3
+                            SectionTab { objectName: "lyricsTab"; text: "歌词"; glyph: "lyrics"; sectionName: "lyrics" }
+                            SectionTab { objectName: "playlistTab"; text: "歌单"; glyph: "list"; sectionName: "playlist" }
+                            SectionTab { objectName: "moreTab"; text: "更多"; glyph: "more"; sectionName: "more" }
+                        }
                     }
                 }
                 Rectangle { visible: root.section.length>0; Layout.fillWidth: true; implicitHeight: 1; color: root.line }
@@ -565,7 +663,7 @@ ApplicationWindow {
                     id: drawer; objectName: "sharedDrawer"
                     visible: root.section.length>0
                     Layout.fillWidth: true
-                    Layout.preferredHeight: visible ? (root.section==="more" && root.detail==="" ? moreMenu.implicitHeight+32 : Math.max(root.section === "playlist" || root.detail === "search" ? 280 : 180, Math.min(root.section === "playlist" || root.detail === "search" ? 520 : 350, (workArea.height - 16) / contentScale - playerCard.implicitHeight - 48))) : 0
+                    Layout.preferredHeight: visible ? (root.section==="more" && root.detail==="" ? moreMenu.implicitHeight+32 : Math.max(root.section === "playlist" || root.detail === "search" || root.detail === "rankings" ? 280 : 180, Math.min(root.section === "playlist" || root.detail === "search" || root.detail === "rankings" ? 520 : 350, (workArea.height - 16) / contentScale - playerCard.implicitHeight - 48))) : 0
                     StackLayout {
                         anchors.fill: parent; anchors.margins: 16
                         currentIndex: root.section==="lyrics" ? 0 : root.section==="playlist" ? 1 : 2
@@ -673,7 +771,7 @@ ApplicationWindow {
                                     objectName: "returnToCurrentLyric"
                                     anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 8
                                     visible: lyricView.visible && lyricView.manualBrowsing && player.currentLyricIndex >= 0
-                                    primary: true; glyph: lyricView.currentAbove ? "up" : "down"
+                                    selected: true; glyph: lyricView.currentAbove ? "up" : "down"
                                     Accessible.name: "回到当前歌词并恢复跟随"; ToolTip.text: Accessible.name
                                     onClicked: lyricView.returnToCurrent()
                                 }
@@ -698,9 +796,12 @@ ApplicationWindow {
                                     Action { glyph: "more"; quiet: true; Accessible.name: "歌单管理"; ToolTip.text: Accessible.name; onClicked: libraryMenu.open() }
                                 }
                                 Button {
+                                    id: descriptionButton
                                     Layout.fillWidth: true; implicitHeight: 30; padding: 0
                                     Accessible.name: "歌单简介，" + (root.activeList.description || "点击添加简介")
                                     contentItem: RowLayout {
+                                        scale: appearance.animationsEnabled && descriptionButton.down ? 0.97 : 1
+                                        Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: descriptionButton.down ? 80 : 150; easing.type: Easing.OutCubic } }
                                         Copy { text: player.tracks.length + " 首"; color: root.accent; font.pixelSize: 12 }
                                         Copy { text: root.activeList.description || "点击添加歌单简介"; Layout.fillWidth: true; Layout.minimumWidth: 0; color: root.muted; font.pixelSize: 12 }
                                     }
@@ -720,7 +821,7 @@ ApplicationWindow {
                                     }
                                     Action { text: "清空"; quiet: true; enabled: root.selectedTrackIds.length > 0; onClicked: root.selectedTrackIds = [] }
                                     Copy { text: "已选 " + root.selectedTrackIds.length; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
-                                    Action { text: "操作"; primary: true; enabled: root.selectedTrackIds.length > 0; onClicked: selectionMenu.open() }
+                                    Action { text: "操作"; selected: true; enabled: root.selectedTrackIds.length > 0; onClicked: selectionMenu.open() }
                                     Action { glyph: "close"; quiet: true; Accessible.name: "退出多选"; ToolTip.text: Accessible.name; onClicked: root.clearTrackSelection() }
                                 }
                                 Hint { text: player.libraryMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
@@ -740,7 +841,7 @@ ApplicationWindow {
                                 highlightFollowsCurrentItem: false
                                 function updateDropTarget() {
                                     var firstRowY = headerItem ? headerItem.y + headerItem.height : originY
-                                    dragTo = Math.max(0, Math.min(count - 1, Math.floor((contentY + dragPointerY - firstRowY) / 64)))
+                                    dragTo = Math.max(0, Math.min(count - 1, Math.floor((contentY + dragPointerY - firstRowY) / 58)))
                                 }
                                 function endReorder(commit) {
                                     var from = dragFrom, to = dragTo
@@ -766,7 +867,7 @@ ApplicationWindow {
                                     required property var modelData
                                     required property int index
                                     readonly property bool selected: root.hasSelected(modelData.id)
-                                    width: songs.width - 10; height: 64; radius: 8
+                                    width: songs.width - 10; height: 58; radius: 8
                                     color: selected || player.currentTrack === modelData.id ? root.selection : trackHover.hovered ? root.backdrop : "transparent"
                                     opacity: songs.dragFrom === index ? 0.6 : 1
                                     HoverHandler { id: trackHover }
@@ -779,7 +880,7 @@ ApplicationWindow {
                                         anchors.fill: parent; spacing: 4
                                         CheckBox {
                                             visible: root.selectingTracks; checked: libraryTrack.selected
-                                            Layout.preferredWidth: 40; implicitHeight: 44
+                                            Layout.preferredWidth: 34; implicitHeight: 34
                                             Accessible.name: "选择 " + libraryTrack.modelData.name
                                             onClicked: root.toggleTrack(libraryTrack.modelData.id)
                                         }
@@ -807,10 +908,13 @@ ApplicationWindow {
                                             HoverHandler { id: handleHover }
                                         }
                                         Button {
+                                            id: trackTap
                                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.fillHeight: true; padding: 4
                                             Accessible.name: (root.selectingTracks ? "选择 " : "播放 ") + libraryTrack.modelData.name
                                             contentItem: ColumnLayout {
                                                 spacing: 4
+                                                scale: appearance.animationsEnabled && trackTap.down ? 0.97 : 1
+                                                Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: trackTap.down ? 80 : 150; easing.type: Easing.OutCubic } }
                                                 Copy { text: libraryTrack.modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold }
                                                 Copy { text: libraryTrack.modelData.artist || "本地音频"; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
                                             }
@@ -839,27 +943,26 @@ ApplicationWindow {
                         ColumnLayout {
                             spacing: 10
                             RowLayout {
-                                visible: root.detail.length>0 && root.detail!=="search"; Layout.fillWidth: true
+                                visible: root.detail.length>0 && root.detail!=="search" && root.detail!=="rankings" && !root.showingOnlinePlaylist; Layout.fillWidth: true
                                 Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail="" }
                                 Item { Layout.fillWidth: true }
                                 Copy { text: root.detail==="search" ? "搜索音乐" : root.detail==="favorites" ? "我的收藏" : "设置"; font.weight: Font.DemiBold }
                             }
                             StackLayout {
                                 Layout.fillWidth: true; Layout.fillHeight: true
-                                currentIndex: root.detail==="search" ? 1 : root.detail==="settings" ? 2 : 0
+                                currentIndex: root.showingOnlinePlaylist ? 4 : root.detail==="search" ? 1 : root.detail==="settings" ? 2 : root.detail==="rankings" ? 3 : 0
                                 ColumnLayout {
-                                    id: moreMenu; spacing: 12
-                                    GridLayout {
-                                        Layout.fillWidth: true; columns: 2; columnSpacing: 8; rowSpacing: 8
-                                        Action { text: "搜索音乐"; glyph: "search"; Layout.fillWidth: true; onClicked: root.openDetail("search") }
-                                        Action { text: "我的收藏"; glyph: "heart"; Layout.fillWidth: true; onClicked: root.openDetail("favorites") }
-                                        Action { text: "导入音乐"; glyph: "folder"; Layout.fillWidth: true; enabled: !player.busy; onClicked: root.chooseMusic() }
-                                        Action { text: "设置"; glyph: "settings"; Layout.fillWidth: true; onClicked: root.openDetail("settings") }
-                                        Action { text: player.currentFavorite ? "取消收藏" : "收藏当前"; glyph: "heart"; Layout.fillWidth: true; enabled: player.ready; onClicked: player.toggleFavorite() }
-                                        Action { objectName: "exitButton"; text: "退出浮音"; glyph: "close"; Layout.fillWidth: true; Accessible.name: "退出并停止播放"; onClicked: root.quitApp() }
-                                    }
+                                    id: moreMenu; spacing: 4
+                                    MenuEntry { text: "搜索音乐"; glyph: "search"; Layout.fillWidth: true; onClicked: root.openDetail("search") }
+                                    MenuEntry { objectName: "rankingsEntry"; text: "排行榜"; glyph: "ranking"; Layout.fillWidth: true; onClicked: root.openDetail("rankings") }
+                                    MenuEntry { text: "我的收藏"; glyph: "heart"; Layout.fillWidth: true; onClicked: root.openDetail("favorites") }
+                                    Rectangle { Layout.fillWidth: true; Layout.topMargin: 4; Layout.bottomMargin: 4; implicitHeight: 1; color: root.line }
+                                    MenuEntry { text: "导入音乐"; glyph: "import"; Layout.fillWidth: true; enabled: !player.busy; onClicked: root.chooseMusic() }
+                                    MenuEntry { text: player.currentFavorite ? "取消收藏" : "收藏当前"; glyph: "heart"; navigates: false; Layout.fillWidth: true; enabled: player.ready; onClicked: player.toggleFavorite() }
+                                    MenuEntry { text: "设置"; glyph: "settings"; Layout.fillWidth: true; onClicked: root.openDetail("settings") }
+                                    MenuEntry { objectName: "exitButton"; text: "退出浮音"; glyph: "exit"; navigates: false; Layout.fillWidth: true; Accessible.name: "退出并停止播放"; onClicked: root.quitApp() }
                                     Hint { text: player.favoriteMessage; visible: text.length>0 }
-                                    Hint { text: "也可将音频拖入窗口或图标\nMP3 / WAV / FLAC / OGG / M4A / AAC · 单首 ≤ 30 MiB" }
+                                    Hint { Layout.topMargin: 8; text: "也可将音频拖入窗口或图标\nMP3 / WAV / FLAC / OGG / M4A / AAC · 单首 ≤ 30 MiB" }
                                 }
                                 Item {
                                     ColumnLayout {
@@ -874,19 +977,19 @@ ApplicationWindow {
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 6
-                                            Action { text: "歌曲"; primary: root.searchKind === "songs"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "songs" }
-                                            Action { text: "歌单"; primary: root.searchKind === "playlists"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "playlists" }
+                                            Action { text: "歌曲"; selected: root.searchKind === "songs"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "songs" }
+                                            Action { text: "歌单"; selected: root.searchKind === "playlists"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "playlists" }
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 6
                                             Field { id: keywords; objectName: "searchInput"; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: root.searchKind === "songs" ? "输入歌名或歌手" : "输入歌单名称"; Accessible.name: placeholderText; onAccepted: root.startSearch() }
-                                            Action { text: (root.searchKind === "songs" ? player.searching : player.playlistSearching) ? "搜索中" : "搜索"; primary: true; enabled: !(root.searchKind === "songs" ? player.searching : player.playlistSearching); onClicked: root.startSearch() }
+                                            Action { glyph: "search"; text: (root.searchKind === "songs" ? player.searching : player.playlistSearching) ? "搜索中" : "搜索"; enabled: !(root.searchKind === "songs" ? player.searching : player.playlistSearching); onClicked: root.startSearch() }
                                         }
                                         Hint { text: root.searchKind === "songs" ? player.searchMessage : player.playlistSearchMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                                     }
                                     StackLayout {
                                         anchors.fill: parent
-                                        currentIndex: root.showingOnlinePlaylist ? 2 : root.searchKind === "playlists" ? 1 : 0
+                                        currentIndex: root.searchKind === "playlists" ? 1 : 0
                                         ListView {
                                             id: results; objectName: "searchResults"; clip: true
                                             boundsBehavior: Flickable.StopAtBounds
@@ -910,52 +1013,24 @@ ApplicationWindow {
                                             headerPositioning: ListView.InlineHeader
                                             header: Item { width: playlistResults.width - 12; height: root.searchKind === "playlists" ? searchTools.implicitHeight + 8 : 0 }
                                             model: player.playlistResults; ScrollBar.vertical: ScrollBar {}
-                                            delegate: ItemDelegate {
+                                            delegate: PressRow {
                                                 id: onlineResult
                                                 required property var modelData
-                                                width: playlistResults.width - 10; height: 82
+                                                width: playlistResults.width - 10; height: 78
                                                 Accessible.name: modelData.name + "，" + modelData.trackCount + " 首，查看歌单"
                                                 contentItem: ColumnLayout {
                                                     spacing: 4
+                                                    scale: onlineResult.visualScale
+                                                    Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: onlineResult.down ? 80 : 150; easing.type: Easing.OutCubic } }
                                                     Copy { text: onlineResult.modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold }
                                                     Copy { text: onlineResult.modelData.trackCount + " 首" + (onlineResult.modelData.creator ? " · " + onlineResult.modelData.creator : ""); Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
                                                     Copy { text: onlineResult.modelData.description || "暂无简介"; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
                                                 }
-                                                background: Rectangle { radius: 8; color: onlineResult.hovered || onlineResult.down ? root.selection : "transparent"; border.width: onlineResult.activeFocus ? 2 : 0; border.color: root.accent }
-                                                onClicked: { root.showingOnlinePlaylist = true; player.libraryAction("openOnline", { id: modelData.id }) }
+                                                onClicked: root.openOnlinePlaylist(modelData.id, "search")
                                             }
                                             footer: Item {
                                                 width: playlistResults.width; height: playlistResults.count === 0 ? 80 : 0
                                                 Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: playlistResults.count === 0; text: player.playlistSearching ? "正在查找歌单…" : "输入歌单名称，发现想听的音乐" }
-                                            }
-                                        }
-                                        ColumnLayout {
-                                            spacing: 0
-                                            ListView {
-                                                id: onlineTracks; objectName: "onlinePlaylistTracks"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                                                model: player.onlinePlaylistLoading ? [] : (player.onlinePlaylist.tracks || [])
-                                                ScrollBar.vertical: ScrollBar {}
-                                                headerPositioning: ListView.InlineHeader
-                                                boundsBehavior: Flickable.StopAtBounds
-                                                header: ColumnLayout {
-                                                    width: onlineTracks.width - 12; spacing: 6
-                                                    RowLayout {
-                                                        Layout.fillWidth: true; spacing: 6
-                                                        Action { glyph: "back"; quiet: true; Accessible.name: "返回歌单搜索结果"; ToolTip.text: Accessible.name; onClicked: root.showingOnlinePlaylist = false }
-                                                        Copy { text: player.onlinePlaylistLoading ? "读取歌单…" : (player.onlinePlaylist.name || "歌单详情"); Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold }
-                                                        Action { text: "导入"; primary: true; enabled: !player.onlinePlaylistLoading && player.onlinePlaylist.tracks && player.onlinePlaylist.tracks.length > 0; onClicked: root.showOnlineImport() }
-                                                    }
-                                                    Copy { text: (player.onlinePlaylist.trackCount || 0) + " 首" + (onlineTracks.count !== (player.onlinePlaylist.trackCount || 0) ? " · 已读取 " + onlineTracks.count + " 首" : ""); color: root.accent; font.pixelSize: 12 }
-                                                    Hint { text: player.onlinePlaylist.description || "暂无简介" }
-                                                    Hint { text: player.onlinePlaylist.warning || ""; visible: text.length > 0; color: root.danger }
-                                                    Hint { text: player.onlinePlaylistLoading ? "正在读取歌单与歌曲…" : player.libraryMessage; visible: text.length > 0 }
-                                                    Item { height: 4; width: 1 }
-                                                }
-                                                delegate: SongRow {
-                                                    required property var modelData; required property int index
-                                                    track: modelData
-                                                    onPlayRequested: player.libraryAction("playOnline", { index: index })
-                                                }
                                             }
                                         }
                                     }
@@ -995,6 +1070,30 @@ ApplicationWindow {
                                             Binding { target: opacitySlider; property: "value"; value: appearance.backgroundOpacity*100; when: !opacitySlider.pressed }
                                         }
                                         Hint { text: "可拖动右下角等比缩放；透明度只影响背景。" }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            ColumnLayout {
+                                                Layout.fillWidth: true; spacing: 4
+                                                Copy { text: "界面动效" }
+                                                Hint { text: "按钮按压与面板轻量过渡" }
+                                            }
+                                            Switch {
+                                                id: motionSwitch
+                                                objectName: "animationsSwitch"; checked: appearance.animationsEnabled
+                                                implicitHeight: 34; padding: 0
+                                                Accessible.name: "界面动效"
+                                                onToggled: { appearance.animationsEnabled = checked; appearance.sync() }
+                                                indicator: Rectangle {
+                                                    x: motionSwitch.leftPadding; y: (motionSwitch.height - height) / 2
+                                                    implicitWidth: 38; implicitHeight: 22; radius: 11
+                                                    color: motionSwitch.checked ? root.accent : root.control
+                                                    border.width: motionSwitch.activeFocus ? 2 : 1; border.color: motionSwitch.activeFocus ? root.accent : root.fieldBorder
+                                                    scale: appearance.animationsEnabled && motionSwitch.down ? 0.965 : 1
+                                                    Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: motionSwitch.down ? 80 : 150; easing.type: Easing.OutCubic } }
+                                                    Rectangle { x: motionSwitch.checked ? 19 : 3; y: 3; width: 16; height: 16; radius: 8; color: motionSwitch.checked ? root.accentInk : root.muted }
+                                                }
+                                            }
+                                        }
                                         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
                                         Copy { text: "在线音质"; font.weight: Font.DemiBold }
                                         Choice {
@@ -1006,6 +1105,7 @@ ApplicationWindow {
                                             Connections { target: player; function onChanged(){qualitySelector.currentIndex=qualitySelector.levels.indexOf(player.quality)} }
                                         }
                                         Hint { text: player.qualityInfo + (player.quality==="hires" ? "\nHi-Res 为请求档位，实际音源可能回落。" : "") }
+                                        Hint { text: "音源不可用时自动尝试备用。GD 音乐台（music.gdstudio.xyz） / INJAHOW。" }
                                         RowLayout {
                                             Layout.fillWidth: true
                                             Copy { text: "音频输出"; font.weight: Font.DemiBold; Layout.fillWidth: true }
@@ -1030,13 +1130,101 @@ ApplicationWindow {
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 8
-                                            Action { text: "保存地址"; primary: true; Layout.fillWidth: true; enabled: !player.busy; onClicked: player.setApiBase(apiAddress.text) }
+                                            Action { text: "保存地址"; Layout.fillWidth: true; enabled: !player.busy; onClicked: player.setApiBase(apiAddress.text) }
                                             Action { text: "恢复内置"; Layout.fillWidth: true; enabled: !player.busy; onClicked: {player.setApiBase("");apiAddress.text=""} }
                                         }
                                         Hint { text: player.searchMessage; visible: text.length>0 }
                                         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
-                                        Copy { text: "浮音 0.7 · Windows"; font.weight: Font.DemiBold }
+                                        Copy { text: "浮音 0.8 · Windows"; font.weight: Font.DemiBold }
                                         Hint { text: "拖动顶部移动窗口，减号收为图标。\n更多中的“退出浮音”会停止播放并退出。\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起" }
+                                    }
+                                }
+                                Item {
+                                    ColumnLayout {
+                                        id: rankingsTools; parent: rankingResults.headerItem
+                                        width: rankingResults.width - 12; spacing: 8
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 6
+                                            Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail = "" }
+                                            Copy { text: "排行榜"; font.pixelSize: 16; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                                            Action { objectName: "refreshRankings"; glyph: "refresh"; text: player.rankingsLoading ? "刷新中" : "刷新"; quiet: true; enabled: !player.rankingsLoading; Accessible.name: "刷新排行榜"; onClicked: player.libraryAction("loadRankings", {}) }
+                                        }
+                                        Hint { text: "选择榜单，听听此刻的热门与新声。" }
+                                        RowLayout {
+                                            visible: player.rankingsMessage.length > 0; Layout.fillWidth: true; spacing: 8
+                                            Hint { text: player.rankingsMessage; maximumLineCount: 3; elide: Text.ElideRight; color: player.rankings.length > 0 ? root.danger : root.muted }
+                                            Action { text: "重试"; visible: player.rankings.length > 0; quiet: true; enabled: !player.rankingsLoading; onClicked: player.libraryAction("loadRankings", {}) }
+                                        }
+                                        Hint { text: "正在读取排行榜…"; visible: player.rankingsLoading }
+                                        Item { width: 1; height: 2 }
+                                    }
+                                    ListView {
+                                        id: rankingResults; objectName: "rankingsView"; anchors.fill: parent; clip: true
+                                        model: player.rankings; spacing: 6
+                                        boundsBehavior: Flickable.StopAtBounds
+                                        headerPositioning: ListView.InlineHeader
+                                        header: Item { width: rankingResults.width - 12; height: rankingsTools.implicitHeight + 8 }
+                                        ScrollBar.vertical: ScrollBar {}
+                                        delegate: PressRow {
+                                            id: rankingResult
+                                            required property var modelData
+                                            width: rankingResults.width - 12; height: emphasized ? 82 : 76
+                                            emphasized: root.isFeaturedRanking(modelData.name)
+                                            Accessible.name: modelData.name + (modelData.updateFrequency ? "，" + modelData.updateFrequency : "") + (modelData.trackCount >= 0 ? "，" + modelData.trackCount + " 首" : "") + "，查看榜单"
+                                            contentItem: RowLayout {
+                                                spacing: 12; scale: rankingResult.visualScale
+                                                Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: rankingResult.down ? 80 : 150; easing.type: Easing.OutCubic } }
+                                                Rectangle {
+                                                    Layout.preferredWidth: 34; Layout.preferredHeight: 34; radius: 9
+                                                    color: rankingResult.emphasized ? root.selection : root.control
+                                                    Glyph { anchors.centerIn: parent; kind: root.rankingGlyph(rankingResult.modelData.name); tint: root.accent; width: 20; height: 20 }
+                                                }
+                                                ColumnLayout {
+                                                    Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
+                                                    Copy { text: rankingResult.modelData.name; Layout.fillWidth: true; font.pixelSize: 14; font.weight: Font.DemiBold }
+                                                    Copy { text: (rankingResult.modelData.updateFrequency || "") + (rankingResult.modelData.trackCount >= 0 ? (rankingResult.modelData.updateFrequency ? " · " : "") + rankingResult.modelData.trackCount + " 首" : ""); visible: text.length > 0; Layout.fillWidth: true; color: rankingResult.emphasized ? root.accent : root.muted; font.pixelSize: 12 }
+                                                    Copy { text: rankingResult.modelData.description || rankingResult.modelData.creator || "点击查看榜单歌曲"; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+                                                }
+                                                Glyph { kind: "forward"; tint: root.muted; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
+                                            }
+                                            onClicked: root.openOnlinePlaylist(modelData.id, "rankings")
+                                        }
+                                        footer: ColumnLayout {
+                                            width: rankingResults.width - 12; spacing: 10
+                                            visible: rankingResults.count === 0 && !player.rankingsLoading
+                                            height: visible ? implicitHeight + 28 : 0
+                                            Hint { Layout.topMargin: 16; text: "暂时没有可用榜单，可以重新加载。"; horizontalAlignment: Text.AlignHCenter }
+                                            Action { text: "重新加载"; glyph: "refresh"; Layout.alignment: Qt.AlignHCenter; enabled: !player.rankingsLoading; onClicked: player.libraryAction("loadRankings", {}) }
+                                        }
+                                    }
+                                }
+                                ColumnLayout {
+                                    spacing: 0
+                                    ListView {
+                                        id: onlineTracks; objectName: "onlinePlaylistTracks"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                                        model: player.onlinePlaylistLoading ? [] : (player.onlinePlaylist.tracks || [])
+                                        ScrollBar.vertical: ScrollBar {}
+                                        headerPositioning: ListView.InlineHeader
+                                        boundsBehavior: Flickable.StopAtBounds
+                                        header: ColumnLayout {
+                                            width: onlineTracks.width - 12; spacing: 8
+                                            RowLayout {
+                                                Layout.fillWidth: true; spacing: 6
+                                                Action { glyph: "back"; quiet: true; Accessible.name: root.onlinePlaylistSource === "rankings" ? "返回排行榜" : "返回歌单搜索结果"; ToolTip.text: Accessible.name; onClicked: root.closeOnlinePlaylist() }
+                                                Copy { text: player.onlinePlaylistLoading ? "读取歌单…" : (player.onlinePlaylist.name || "歌单详情"); Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold }
+                                                Action { glyph: "import"; text: "导入"; enabled: !player.onlinePlaylistLoading && !!player.onlinePlaylist.tracks && player.onlinePlaylist.tracks.length > 0; onClicked: root.showOnlineImport() }
+                                            }
+                                            Copy { text: (player.onlinePlaylist.trackCount || 0) + " 首" + (onlineTracks.count !== (player.onlinePlaylist.trackCount || 0) ? " · 已读取 " + onlineTracks.count + " 首" : ""); color: root.accent; font.pixelSize: 12 }
+                                            Hint { text: player.onlinePlaylist.description || "暂无简介"; maximumLineCount: 5; elide: Text.ElideRight }
+                                            Hint { text: player.onlinePlaylist.warning || ""; visible: text.length > 0; color: root.danger }
+                                            Hint { text: player.onlinePlaylistLoading ? "正在读取歌单与歌曲…" : player.libraryMessage; visible: text.length > 0 }
+                                            Item { height: 4; width: 1 }
+                                        }
+                                        delegate: SongRow {
+                                            required property var modelData; required property int index
+                                            track: modelData; rank: root.onlinePlaylistSource === "rankings" ? (modelData.playlistPosition !== undefined ? modelData.playlistPosition : index + 1) : 0
+                                            onPlayRequested: player.libraryAction("playOnline", { index: index })
+                                        }
                                     }
                                 }
                             }
@@ -1060,6 +1248,10 @@ ApplicationWindow {
         scale: root.contentScale; transformOrigin: Popup.TopLeft
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: root.elevated; radius: 14; border.color: root.fieldBorder }
+        enter: Transition {
+            enabled: appearance.animationsEnabled
+            NumberAnimation { targets: [sheet.contentItem, sheet.background]; property: "opacity"; from: 0; to: 1; duration: 140; easing.type: Easing.OutCubic }
+        }
         contentItem: ScrollView {
             id: sheetScroll; clip: true; contentWidth: availableWidth
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
@@ -1126,7 +1318,7 @@ ApplicationWindow {
         Hint { visible: targetSheet.targets.length === 0; text: "请先在歌单管理中新建一个歌单。" }
         Action {
             text: targetSheet.mode === "online" ? "导入歌单" : targetSheet.mode === "move" ? "移动" : "复制"
-            primary: true; Layout.fillWidth: true; enabled: transferTarget.currentIndex >= 0
+            selected: true; Layout.fillWidth: true; enabled: transferTarget.currentIndex >= 0
             onClicked: {
                 var target = transferTarget.currentValue
                 if (targetSheet.mode === "online") player.libraryAction("addOnline", { target: target })
@@ -1159,7 +1351,7 @@ ApplicationWindow {
                 background: Rectangle { color: root.backdrop; radius: 8; border.color: importText.activeFocus ? root.accent : root.fieldBorder; border.width: importText.activeFocus ? 2 : 1 }
             }
         }
-        Action { text: "导入内容"; primary: true; Layout.fillWidth: true; enabled: importText.text.trim().length > 0 && importTarget.currentIndex >= 0; onClicked: { var args = { text: importText.text, target: importTarget.currentValue }; importSheet.close(); player.libraryAction("importText", args) } }
+        Action { text: "导入内容"; selected: true; Layout.fillWidth: true; enabled: importText.text.trim().length > 0 && importTarget.currentIndex >= 0; onClicked: { var args = { text: importText.text, target: importTarget.currentValue }; importSheet.close(); player.libraryAction("importText", args) } }
     }
     LibrarySheet {
         id: exportSheet; heading: ids.length ? "导出所选歌曲" : "导出整张歌单"
@@ -1168,7 +1360,7 @@ ApplicationWindow {
         property var ids: []
         Hint { text: exportSheet.listName + (exportSheet.ids.length ? " · " + exportSheet.ids.length + " 首" : " · 全部歌曲") }
         Hint { text: "导出歌单 JSON，保留歌曲原顺序。文件中包含歌曲信息和引用，不包含音频文件。" }
-        Action { text: "复制到剪贴板"; primary: true; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(exportSheet.sourceId)) player.libraryAction("copyExport", { ids: exportSheet.ids }); exportSheet.close() } }
+        Action { text: "复制到剪贴板"; selected: true; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(exportSheet.sourceId)) player.libraryAction("copyExport", { ids: exportSheet.ids }); exportSheet.close() } }
         Action { text: "保存 JSON 文件"; Layout.fillWidth: true; onClicked: root.openExportFile() }
     }
     LibrarySheet {
@@ -1184,7 +1376,7 @@ ApplicationWindow {
                 background: Rectangle { color: root.backdrop; radius: 8; border.color: descriptionText.activeFocus ? root.accent : root.fieldBorder; border.width: descriptionText.activeFocus ? 2 : 1 }
             }
         }
-        Action { text: "保存简介"; primary: true; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(descriptionSheet.sourceId)) player.libraryAction("describe", { description: descriptionText.text }); descriptionSheet.close() } }
+        Action { text: "保存简介"; selected: true; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(descriptionSheet.sourceId)) player.libraryAction("describe", { description: descriptionText.text }); descriptionSheet.close() } }
         onOpened: descriptionText.forceActiveFocus()
     }
     LibrarySheet {
@@ -1199,7 +1391,7 @@ ApplicationWindow {
         }
         Copy { text: "歌单名称" }
         Field { id: playlistName; Layout.fillWidth: true; placeholderText: "1–60 字"; maximumLength: 60; Accessible.name: "歌单名称"; onAccepted: playlistDialog.save() }
-        Action { text: "保存"; primary: true; Layout.fillWidth: true; enabled: playlistName.text.trim().length > 0; onClicked: playlistDialog.save() }
+        Action { text: "保存"; selected: true; Layout.fillWidth: true; enabled: playlistName.text.trim().length > 0; onClicked: playlistDialog.save() }
         onOpened: playlistName.forceActiveFocus()
     }
     LibrarySheet {

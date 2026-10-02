@@ -2,6 +2,7 @@ package org.floatmusic.player;
 
 import org.qtproject.qt.android.bindings.QtActivity;
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -14,6 +15,11 @@ import android.window.OnBackInvokedDispatcher;
 import java.lang.ref.WeakReference;
 
 public class PlayerActivity extends QtActivity {
+    public static boolean uiAnimationsEnabled() {
+        PlayerActivity current = PlayerBridge.activity.get();
+        return current != null && current.getSharedPreferences("window", MODE_PRIVATE).getBoolean("animationsEnabled", true)
+                && (Build.VERSION.SDK_INT < 26 || ValueAnimator.areAnimatorsEnabled());
+    }
     private static final int PICK_AUDIO = 7101;
     private boolean waitingOverlay = false;
     private boolean overlayRequested = false;

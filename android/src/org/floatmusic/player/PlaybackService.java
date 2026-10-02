@@ -17,8 +17,6 @@ import android.view.*;
 import android.widget.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.io.*;
 import java.util.Locale;
 import java.util.UUID;
@@ -35,12 +33,18 @@ public class PlaybackService extends Service {
     private MediaSession session;
     private AudioManager audio;
     private AudioFocusRequest focus;
-    private boolean hasFocus = false, resumeOnFocus = false, ready = false, busy = false, ended = false, destroyed = false;
+    private boolean hasFocus = false, resumeOnFocus = false, ready = false, busy = false, ended = false;
+    private volatile boolean destroyed = false;
+    private boolean playIntent = false;
+    private final AudioResolver audioResolver = new AudioResolver();
+    private final java.util.Set<String> attemptedSources = new java.util.HashSet<>();
+    private String loadedSource = "", loadedSourceId = "";
+    private int loadedBitrate = 0, lastPosition = 0;
     private String title = "还没有导入音乐", error = "";
     private File pendingFile;
     private OverlayWindow overlay;
     private JSONArray queue = new JSONArray();
-    private JSONObject importedTrack = null, loadedTrack = null;
+    private JSONObject importedTrack = null, loadedTrack = null, requestedTrack = null;
     private String quality = "standard", loadedQuality = "standard", actualFormat = "等待音频信息";
     private String currentTrack = "", apiBase = "";
     private String playbackMode = "sequential";
@@ -54,7 +58,7 @@ public class PlaybackService extends Service {
         @Override public void onAudioDevicesAdded(AudioDeviceInfo[] devices) { refreshOutputs(); }
         @Override public void onAudioDevicesRemoved(AudioDeviceInfo[] devices) { refreshOutputs(); }
     };
-    private int generation = 0;
+    private volatile int generation = 0;
     private final BroadcastReceiver noisy = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { pause(true); }
     };
@@ -78,11 +82,11 @@ public class PlaybackService extends Service {
         focus = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN).setAudioAttributes(attributes).setOnAudioFocusChangeListener(change -> {
             if (change == AudioManager.AUDIOFOCUS_GAIN) {
                 hasFocus = true; ducked = false; applyVolume();
-                if (resumeOnFocus) { resumeOnFocus = false; play(); }
+                if (resumeOnFocus) { resumeOnFocus = false; playIntent = true; play(); }
             } else if (change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
                 ducked = true; applyVolume();
             } else {
-                boolean resume = change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT && isPlaying();
+                boolean resume = change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT && playIntent;
                 pause(false); hasFocus = false; resumeOnFocus = resume;
                 if (change == AudioManager.AUDIOFOCUS_LOSS) abandonFocus();
             }
@@ -126,10 +130,13 @@ public class PlaybackService extends Service {
             case "output": selectedOutput=value; refreshOutputs(); break;
             case "outputs": refreshOutputs(); break;
             case "queue":
-                try { JSONObject data = new JSONObject(value); queue = data.getJSONArray("tracks"); apiBase = data.optString("api"); quality = data.optString("quality","standard");
+                try { JSONObject data = new JSONObject(value); queue = data.getJSONArray("tracks");
+                    if(!apiBase.equals(data.optString("api")))audioResolver.clearFailures();
+                    apiBase = data.optString("api"); quality = data.optString("quality","standard");
                     getSharedPreferences("queue",MODE_PRIVATE).edit().putString("data",value).apply();
                 } catch (Exception e) { report("歌单同步失败。"); } break;
             case "track": playTrack(value); break;
+            case "retry": audioResolver.clearFailures(); // Explicit retry rechecks cooled-down services.
             case "play":
                 try { JSONObject request = new JSONObject(value); playTrack(request.getJSONObject("track"), request.optBoolean("autoplay",true), request.optBoolean("preserve",false)); }
                 catch(Exception e) { report("播放请求无效："+e.getMessage()); } break;
@@ -154,7 +161,7 @@ public class PlaybackService extends Service {
         try {
             JSONObject state=new JSONObject(saved.getString("session","{}")),track=state.optJSONObject("track");
             if(track==null||track.optString("id").isEmpty()||!java.util.Arrays.asList("local","netease").contains(track.optString("source")))return;
-            loadedTrack=track;currentTrack=track.optString("id");title=track.optString("name");
+            loadedTrack=track;requestedTrack=track;currentTrack=track.optString("id");title=track.optString("name");
             restoredDuration=Math.max(0,state.optInt("duration"));restoredPosition=Math.max(0,Math.min(restoredDuration,state.optInt("position")));
             lyricOffset=getSharedPreferences("lyricOffsets",0).getInt(currentTrack,0);
             restored=true;ready=true;
@@ -176,11 +183,12 @@ public class PlaybackService extends Service {
         if (!ready || player == null) return;
         if (!hasFocus) hasFocus = audio.requestAudioFocus(focus) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
         if (!hasFocus) { report("暂时无法取得音频焦点，请稍后重试。"); return; }
-        try { if (ended) { player.seekTo(0); ended = false; } ducked = false; applyVolume(); player.start(); error = ""; }
+        try { if (ended) { player.seekTo(0); ended = false; } ducked = false; applyVolume(); player.start(); playIntent = true; error = ""; }
         catch (Exception e) { report("播放失败：" + e.getMessage()); }
         refreshNotification(); update();
     }
     private void pause(boolean user) {
+        playIntent = false;
         if (isPlaying()) player.pause();
         if (user) abandonFocus();
         saveSession(false); refreshNotification(); update();
@@ -229,7 +237,7 @@ public class PlaybackService extends Service {
     private void importAudio(Uri uri, DragAndDropPermissions grant) {
         if (busy) { if (grant != null) grant.release(); report("正在导入，请稍候。"); return; }
         if (!("content".equals(uri.getScheme()) || "file".equals(uri.getScheme()))) { if (grant != null) grant.release(); report("仅支持本地文件。"); return; }
-        busy = true; error = ""; int ticket = ++generation; update();
+        busy = true; playIntent = false; error = ""; int ticket = ++generation; update();
         importer.execute(() -> {
             File copied = null;
             try {
@@ -278,52 +286,37 @@ public class PlaybackService extends Service {
         }
     }
     private void playTrack(JSONObject track, boolean autoplay, boolean preserve) {
+        playTrack(track,autoplay,preserve,false,-1);
+    }
+    private void playTrack(JSONObject track, boolean autoplay, boolean preserve, boolean continueSources, int resumePosition) {
         if(busy)return;
         saveSession(false);
+        requestedTrack=track;
+        if(!continueSources)attemptedSources.clear();
+        if(!continueSources)playIntent=autoplay;
         if(!java.util.Arrays.asList("standard","higher","exhigh","lossless","hires").contains(quality)) quality="standard";
         busy=true; error=""; final int ticket=++generation; update();
         final String requestedQuality=quality;
-        if(!"netease".equals(track.optString("source"))) {prepare(track.optString("path"),track,autoplay,false,preserve,requestedQuality);return;}
+        if(!"netease".equals(track.optString("source"))) {prepare(track.optString("path"),track,autoplay,false,preserve,requestedQuality,null,resumePosition);return;}
         final String endpoint=apiBase;
-        // Bound the complete request, even if the server keeps sending tiny chunks.
-        handler.postDelayed(() -> {if(!destroyed && ticket==generation && busy && pending==null){generation++;busy=false;report("获取音频地址超时，请重试或更换音质。");}},16000);
+        final java.util.Set<String> excluded=new java.util.HashSet<>(attemptedSources);
+        handler.postDelayed(() -> {if(!destroyed && ticket==generation && busy && pending==null){generation++;audioResolver.cancel();busy=false;report("获取音频地址超时，请检查网络后重试。");}},25000);
         importer.execute(() -> {
-            String address="", failure=""; HttpURLConnection connection=null;
+            AudioResolver.Result result=null; String failure="";
             try {
-                String songId=track.optString("songId");
-                if(!songId.matches("[0-9]+"))throw new IOException("歌曲编号无效。");
-                String request=endpoint.isEmpty() ? "https://www.byfuns.top/api/1/?id="+songId+"&level="+requestedQuality
-                    : endpoint+"/song/url/v1?id="+songId+"&level="+requestedQuality;
-                connection=(HttpURLConnection)new URL(request).openConnection();
-                connection.setConnectTimeout(15000);connection.setReadTimeout(15000);
-                int code=connection.getResponseCode();
-                if(code<200||code>=300)throw new IOException("音频接口 HTTP "+code+"，请稍后重试。");
-                try(InputStream input=connection.getInputStream();ByteArrayOutputStream output=new ByteArrayOutputStream()) {
-                    byte[] buffer=new byte[8192];int n;long deadline=SystemClock.elapsedRealtime()+15000;
-                    while((n=input.read(buffer))!=-1){output.write(buffer,0,n);if(output.size()>2*1024*1024)throw new IOException("API 响应过大。");if(SystemClock.elapsedRealtime()>deadline)throw new IOException("API 响应超时。");}
-                    String body=output.toString("UTF-8").trim();
-                    if(endpoint.isEmpty())address=body;
-                    else {
-                        JSONObject response=new JSONObject(body);
-                        if(response.optInt("code")!=200)throw new IOException("音频接口错误 "+response.optInt("code")+"。");
-                        JSONObject song=response.getJSONArray("data").getJSONObject(0);
-                        address=song.isNull("url")?"":song.optString("url");
-                    }
-                    java.net.URI uri=new java.net.URI(address);
-                    if(address.length()>8192||uri.getHost()==null||uri.getRawUserInfo()!=null||!("http".equalsIgnoreCase(uri.getScheme())||"https".equalsIgnoreCase(uri.getScheme())))
-                        throw new IOException("歌曲暂无有效播放地址，可能受服务或版权限制。");
-                }
-            } catch(javax.net.ssl.SSLException e){failure="音频接口 TLS 连接失败："+e.getMessage();}
-              catch(java.net.SocketTimeoutException e){failure="音频接口连接超时，请检查网络。";}
-              catch(java.net.UnknownHostException e){failure="音频接口域名无法解析，请检查网络。";}
-              catch(Exception e){failure="获取音频地址失败："+e.getMessage();}
-            finally{if(connection!=null)connection.disconnect();}
-            final String result=address,message=failure;
+                result=audioResolver.resolve(track.optString("songId"),requestedQuality,endpoint,excluded,()->!destroyed&&ticket==generation);
+            } catch(IOException e){failure=e.getMessage();}
+              catch(Exception e){failure="获取音频地址失败，请检查网络后重试。";}
+            final AudioResolver.Result resolved=result; final String message=failure;
             handler.post(() -> {if(destroyed||ticket!=generation)return;
                 if(!message.isEmpty()){busy=false;report(message);}
-                else prepare(result,track,autoplay,false,preserve,requestedQuality);
+                else if(resolved!=null){attemptedSources.add(resolved.sourceId);prepare(resolved.address,track,autoplay,false,preserve,requestedQuality,resolved,resumePosition);}
             });
         });
+    }
+    private boolean tryNextAudioSource(JSONObject track, boolean autoplay, boolean preserve, int resumePosition) {
+        if(!apiBase.isEmpty()||attemptedSources.isEmpty()||attemptedSources.size()>=3||track==null||!"netease".equals(track.optString("source")))return false;
+        cancelPending();playTrack(track,autoplay,preserve,true,resumePosition);return true;
     }
     private void step(int delta, boolean automatic) {
         if(busy)return;
@@ -340,24 +333,30 @@ public class PlaybackService extends Service {
         prepare(source,track,autoplay,importing,false,quality);
     }
     private void prepare(String source, JSONObject track, boolean autoplay, boolean importing, boolean preserve, String requestedQuality) {
+        prepare(source,track,autoplay,importing,preserve,requestedQuality,null,-1);
+    }
+    private void prepare(String source, JSONObject track, boolean autoplay, boolean importing, boolean preserve, String requestedQuality, AudioResolver.Result resolved, int resumePosition) {
         try {
+            final int ticket=generation;
             pending = new MediaPlayer(); pendingFile=importing?new File(source):null;
             pending.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build());
             pending.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
             pending.setDataSource(source);
             pending.setOnPreparedListener(mp -> {
-                if (destroyed || pending != mp) return;
+                if (destroyed || pending != mp || ticket!=generation) return;
                 // Reject renamed MP4 videos that passed the MP4 container signature check.
                 boolean hasAudio = false, hasVideo = false;
                 for (MediaPlayer.TrackInfo mediaTrack : mp.getTrackInfo()) {
                     hasAudio |= mediaTrack.getTrackType() == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO;
                     hasVideo |= mediaTrack.getTrackType() == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_VIDEO;
                 }
-                if (!hasAudio || hasVideo) { cancelPending(); report("请选择纯音频文件，不支持视频。"); return; }
-                final int resume=preserve ? position() : 0;
+                if (!hasAudio || hasVideo) {if(tryNextAudioSource(track,playIntent,preserve,resumePosition))return;cancelPending(); report("请选择纯音频文件，不支持视频。"); return; }
+                final int resume=resumePosition>=0?resumePosition:preserve ? position() : 0;
                 if (player != null) player.release();
-                abandonFocus(); player = mp; pending = null; pendingFile = null;
-                currentTrack=track.optString("id"); loadedTrack=track; loadedQuality=requestedQuality;
+                if(!resumeOnFocus)abandonFocus(); player = mp; pending = null; pendingFile = null;
+                currentTrack=track.optString("id"); loadedTrack=track; requestedTrack=track; loadedQuality=requestedQuality;
+                loadedSource=resolved==null?"":resolved.sourceName;loadedSourceId=resolved==null?"":resolved.sourceId;loadedBitrate=resolved==null?0:resolved.bitrate;
+                lastPosition=resume;
                 restored=false;pendingSeek=resume>0?Math.min(resume,Math.max(0,mp.getDuration()-1)):-1;
                 lyricOffset=getSharedPreferences("lyricOffsets",0).getInt(currentTrack,0);
                 actualFormat="系统解码";
@@ -366,29 +365,43 @@ public class PlaybackService extends Service {
                         MediaFormat format=info.getFormat();
                         if(format.containsKey(MediaFormat.KEY_MIME))actualFormat=format.getString(MediaFormat.KEY_MIME);
                         if(format.containsKey(MediaFormat.KEY_SAMPLE_RATE))actualFormat+=" · "+format.getInteger(MediaFormat.KEY_SAMPLE_RATE)+" Hz";
+                        if(format.containsKey(MediaFormat.KEY_BIT_RATE))actualFormat+=" · "+format.getInteger(MediaFormat.KEY_BIT_RATE)/1000+" kbps";
                     }
                 }
                 if(importing) { importedTrack=track; queue.put(track); getSharedPreferences("queue",MODE_PRIVATE).edit().putString("imported",track.toString()).apply(); }
                 title = track.optString("name"); ready = true; busy = resume>0; ended = false; error = ""; applyVolume(); refreshOutputs();
                 player.setOnSeekCompleteListener(p -> {if(p==player){pendingSeek=-1;saveSession(false);update();}});
                 player.setOnCompletionListener(p -> { ended = true; abandonFocus(); refreshNotification(); update(); step(1,true); });
-                player.setOnErrorListener((p, what, extra) -> { ready = false;busy=false;pendingSeek=-1; abandonFocus(); report("音频播放失败（"+what+"/"+extra+"），请重试或更换音质。"); refreshNotification(); return true; });
+                player.setOnErrorListener((p, what, extra) -> {
+                    if(p!=player||destroyed)return true;
+                    final int resumeAt=pendingSeek>=0?pendingSeek:lastPosition;
+                    ready=false;pendingSeek=-1;if(!resumeOnFocus)abandonFocus();
+                    if(ticket!=generation&&busy){refreshNotification();update();return true;}
+                    busy=false;
+                    if(tryNextAudioSource(loadedTrack,playIntent,false,resumeAt))return true;
+                    report("音频播放失败（"+what+"/"+extra+"），请重试或更换音质。");
+                    refreshNotification();return true;
+                });
                 session.setMetadata(new MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, title).putLong(MediaMetadata.METADATA_KEY_DURATION, duration()).build());
                 refreshNotification(); update();
                 if(resume>0) {
                     pendingSeek=Math.min(resume,Math.max(0,duration()-1));
                     player.setOnSeekCompleteListener(p -> {if(p==player){pendingSeek=-1;busy=false;
                         p.setOnSeekCompleteListener(done -> {if(done==player){pendingSeek=-1;saveSession(false);update();}});
-                        saveSession(false);if(autoplay)play();else update();}});
+                        saveSession(false);if(playIntent)play();else update();}});
                     player.seekTo(pendingSeek,MediaPlayer.SEEK_CLOSEST);
                     handler.postDelayed(()->{if(player==mp&&pendingSeek>=0&&busy){busy=false;ready=false;report("恢复播放进度超时，请点击重试。");}},10000);
-                } else {saveSession(false);if(autoplay)play();}
+                } else {saveSession(false);if(playIntent)play();}
             });
-            pending.setOnErrorListener((mp, what, extra) -> { cancelPending(); report("无法加载音频（"+what+"/"+extra+"），请检查网络、重试或更换音质。"); return true; });
+            pending.setOnErrorListener((mp, what, extra) -> {
+                if(mp!=pending||destroyed||ticket!=generation)return true;
+                if(tryNextAudioSource(track,playIntent,preserve,resumePosition))return true;
+                cancelPending();report("无法加载音频（"+what+"/"+extra+"），请检查网络、重试或更换音质。");return true;
+            });
             final MediaPlayer preparing=pending;
-            handler.postDelayed(() -> {if(pending==preparing){cancelPending();report("音频加载超时，请重试或更换音质。");}},20000);
+            handler.postDelayed(() -> {if(pending==preparing){if(tryNextAudioSource(track,playIntent,preserve,resumePosition))return;cancelPending();report("音频加载超时，请重试或更换音质。");}},20000);
             pending.prepareAsync();
-        } catch (Exception e) { cancelPending(); report("无法加载音频：" + e.getMessage()); }
+        } catch (Exception e) { if(tryNextAudioSource(track,playIntent,preserve,resumePosition))return;cancelPending();report("无法加载音频，请重试或更换音质。"); }
     }
     private void cancelPending() { if (pending != null) { pending.release(); pending = null; } if (pendingFile != null) { pendingFile.delete(); pendingFile = null; } busy = false; }
     private PendingIntent action(String name, int id) { return PendingIntent.getService(this, id, new Intent(this, PlaybackService.class).setAction(name), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE); }
@@ -420,15 +433,20 @@ public class PlaybackService extends Service {
     void update() {
         if (destroyed) return;
         boolean playing = isPlaying(); int pos = position(), length = duration();
+        if(ready&&!restored&&player!=null&&pendingSeek<0)lastPosition=pos;
         String status = busy ? "正在导入 / 加载音频…" : playing ? (currentTrack.startsWith("netease:")?"正在播放 · 网易云":"正在播放 · 本地音频") : ready ? "已就绪 · 点击播放" : "从歌单选择或导入音乐";
         try {
             JSONObject o = new JSONObject(); o.put("title", title); o.put("status", status); o.put("error", error);
             o.put("position", pos); o.put("duration", length); o.put("playing", playing); o.put("ready", ready); o.put("busy", busy); o.put("overlayAllowed", Settings.canDrawOverlays(this));
             o.put("volume", volume); o.put("selectedOutput", selectedOutput);
             o.put("currentTrack",currentTrack);o.put("loadedTrack",loadedTrack);o.put("loadedQuality",loadedQuality);
+            o.put("requestedTrack",requestedTrack);
             o.put("playbackMode",playbackMode);o.put("lyricOffset",lyricOffset);
             String qualityName = "hires".equals(loadedQuality) ? "Hi-Res" : "lossless".equals(loadedQuality) ? "无损" : "exhigh".equals(loadedQuality) ? "极高" : "higher".equals(loadedQuality) ? "较高" : "标准";
-            o.put("qualityInfo","当前音源请求："+qualityName+" · "+actualFormat); if(importedTrack!=null)o.put("importedTrack",importedTrack);
+            String returned=loadedBitrate>0?" · 源返回："+loadedBitrate+" kbps":"";
+            o.put("qualityInfo",loadedTrack!=null&&"netease".equals(loadedTrack.optString("source"))
+                ?(loadedSource.isEmpty()?"在线音源":loadedSource)+" · 请求："+qualityName+" · "+actualFormat+returned
+                :"音质选项用于在线歌曲；本地文件保持原格式。"); if(importedTrack!=null)o.put("importedTrack",importedTrack);
             org.json.JSONArray outputs = new org.json.JSONArray();
             outputs.put(new JSONObject().put("id", "").put("name", "跟随系统默认"));
             for (AudioDeviceInfo device : audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
@@ -460,7 +478,7 @@ public class PlaybackService extends Service {
     }
     @Override public void onDestroy() {
         saveSession(true);
-        destroyed=true; audio.unregisterAudioDeviceCallback(deviceCallback); generation++; importer.shutdownNow(); handler.removeCallbacks(ticker);
+        destroyed=true; audio.unregisterAudioDeviceCallback(deviceCallback); generation++; audioResolver.cancel(); importer.shutdownNow(); handler.removeCallbacks(ticker);
         if(overlay!=null){overlay.close();overlay=null;}
         if(player != null) { player.release(); player=null; }
         cancelPending(); abandonFocus();

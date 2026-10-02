@@ -26,7 +26,7 @@ static QUrl endpoint(const QString &base, const QList<QPair<QString, QString>> &
     for (const auto &p : params) q.addQueryItem(p.first, p.second);
     u.setQuery(q); return u;
 }
-static QString safeUrl(QUrl u) { u.setQuery(QString()); u.setFragment(QString()); u.setUserInfo(QString()); return u.toString(); }
+static QString safeUrl(const QUrl &u) { return u.scheme() + "://" + u.host() + (u.port() > 0 ? ":" + QString::number(u.port()) : QString()); }
 struct Result { QJsonObject row, json; QByteArray body; QUrl finalUrl; };
 
 class Probe {
@@ -35,6 +35,7 @@ public:
     QJsonArray rows;
     QString output;
     QString mode;
+    QByteArray userAgent = "FloatMusic-API-Probe/0.1";
     void save() {
         QSaveFile f(output);
         if (!f.open(QIODevice::WriteOnly)) qFatal("Cannot open result file");
@@ -50,7 +51,7 @@ public:
         QNetworkRequest req(url);
         req.setTransferTimeout(12000);
         req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-        req.setRawHeader("User-Agent", "FloatMusic-API-Probe/0.1");
+        req.setRawHeader("User-Agent", userAgent);
         if (name.contains("mobile-ua")) req.setRawHeader("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36");
         if (range) req.setRawHeader("Range", "bytes=0-65535");
         auto *reply = head ? network.head(req) : network.get(req);
@@ -72,6 +73,8 @@ public:
             {"contentType", QString::fromLatin1(reply->rawHeader("Content-Type"))},
             {"contentLength", QString::fromLatin1(reply->rawHeader("Content-Length"))},
             {"contentRange", QString::fromLatin1(reply->rawHeader("Content-Range"))},
+            {"server", QString::fromLatin1(reply->rawHeader("Server"))},
+            {"cfRay", QString::fromLatin1(reply->rawHeader("CF-Ray"))},
             {"bodyBytes", body.size()}, {"sampleCapped", capped}, {"timedOut", timedOut},
             {"networkError", reply->error() == QNetworkReply::NoError || (capped && range) ? QString() : reply->errorString()}};
         QJsonParseError error;
@@ -193,6 +196,67 @@ int main(int argc, char **argv) {
     else { const QUrl u(p.mode); p.network.setProxy(QNetworkProxy(QNetworkProxy::HttpProxy, u.host(), u.port(7897))); }
     const QString keyword = arg("--keyword", QString::fromUtf8("纯音乐"));
     const QString seed = arg("--song", "347230");
+    p.userAgent = arg("--ua", QString::fromUtf8(p.userAgent)).toUtf8();
+    if (args.contains("--providers")) {
+        const auto providers = arg("--providers", "gd,injahow,meting,paugram").split(',');
+        bool any = false;
+        for (const auto &provider : providers) {
+            QUrl request;
+            if (provider == "gd") request = endpoint("https://music-api.gdstudio.xyz/api.php",
+                {{"types", "url"}, {"source", "netease"}, {"id", seed}, {"br", arg("--br", "999")}});
+            else if (provider == "injahow") request = endpoint("https://api.injahow.cn/meting/",
+                {{"server", "netease"}, {"type", "song"}, {"id", seed}});
+            else if (provider == "meting") request = endpoint("https://api.i-meto.com/meting/api",
+                {{"server", "netease"}, {"type", "song"}, {"id", seed}});
+            else if (provider == "paugram") request = endpoint("https://api.paugram.com/netease/", {{"id", seed}});
+            else return 2;
+            auto r = p.get(provider + "-resolve", request, "json");
+            const auto doc = QJsonDocument::fromJson(r.body);
+            const auto json = doc.isArray() && !doc.array().isEmpty() ? doc.array().first().toObject() : doc.object();
+            QString address = json.value("url").toString();
+            if (address.isEmpty()) address = json.value("link").toString();
+            if (address.isEmpty()) address = json.value("data").toObject().value("url").toString();
+            const QUrl media(address, QUrl::StrictMode);
+            if (r.row["httpStatus"].toInt() != 200 || media.host().isEmpty()
+                || (media.scheme() != "https" && media.scheme() != "http")) continue;
+            auto audio = p.get(provider + "-audio", media, "audio", false, true);
+            const bool plausible = audio.body.startsWith("fLaC") || audio.body.startsWith("ID3")
+                || audio.body.startsWith("RIFF") || (audio.body.size() >= 2 && quint8(audio.body[0]) == 0xff);
+            if (audio.row["httpStatus"].toInt() / 100 != 2 || !plausible) continue;
+            const auto before = p.rows.size();
+            if (!args.contains("--no-playback")) {
+                p.playback(provider + "-playback", audio.finalUrl);
+                any |= p.rows.size() > before && p.rows.last().toObject().value("passed").toBool();
+            } else any = true;
+        }
+        return any ? 0 : 1;
+    }
+    if (args.contains("--search-only")) {
+        const auto r = p.get("song-search-https", endpoint("https://music.163.com/api/search/get",
+            {{"s", keyword}, {"type", "1"}, {"limit", "6"}}), "songs");
+        return r.row["schemaValid"].toBool() ? 0 : 1;
+    }
+    if (args.contains("--resolver-only")) {
+        const auto levels = arg("--levels", "hires,standard").split(',');
+        const int repeats = qBound(1, arg("--repeat", "1").toInt(), 3);
+        bool passed = true;
+        for (int attempt = 1; attempt <= repeats; ++attempt) {
+            for (const auto &level : levels) {
+                if (!QStringList{"standard", "higher", "exhigh", "lossless", "hires"}.contains(level)) return 2;
+                auto r = p.get(QString("resolve-%1-attempt-%2").arg(level).arg(attempt),
+                    endpoint("https://www.byfuns.top/api/1/", {{"id", seed}, {"level", level}}), "url");
+                passed &= r.row["httpStatus"].toInt() == 200 && r.row["plainUrlValid"].toBool();
+                // Sample only the header bytes; no full-song download or playback in this mode.
+                if (r.row["httpStatus"].toInt() == 200 && r.row["plainUrlValid"].toBool()) {
+                    auto audio = p.get(QString("audio-%1-attempt-%2").arg(level).arg(attempt),
+                        QUrl(QString::fromUtf8(r.body).trimmed()), "audio", false, true);
+                    passed &= audio.row["httpStatus"].toInt() / 100 == 2 && !audio.body.isEmpty()
+                        && !audio.body.trimmed().startsWith('<');
+                }
+            }
+        }
+        return passed ? 0 : 1;
+    }
     if (args.contains("--diagnostics")) {
         p.get("playlist-search-https", endpoint("https://music.163.com/api/search/get", {{"s", keyword}, {"type", "1000"}, {"limit", "3"}}), "playlists");
         p.get("toplist-https", QUrl("https://music.163.com/api/toplist"), "charts");

@@ -8,8 +8,9 @@ ApplicationWindow {
     visible: true
     width: 390; height: 780
     title: "浮音"
-    font.pixelSize: 15
+    font.pixelSize: 14
     property int themeMode: player.androidThemeMode()
+    property bool animationsEnabled: player.androidAnimationsEnabled()
     readonly property bool dark: themeMode === 2 || (themeMode === 0 && Qt.styleHints.colorScheme === Qt.Dark)
     readonly property color ink: dark ? "#EDF2FA" : "#182338"
     readonly property color muted: dark ? "#ABB8CC" : "#56657A"
@@ -19,27 +20,29 @@ ApplicationWindow {
     readonly property color line: dark ? "#3A465A" : "#D5DEEB"
     color: dark ? "#101722" : "#F3F5F8"
     Component.onCompleted: player.initializeAndroidUi()
+    function animatePress(control, animation, pressed) {
+        animation.stop()
+        if (!animationsEnabled) { control.feedbackScale = 1; return }
+        animation.to = pressed ? 0.96 : 1
+        animation.duration = pressed ? 80 : 160
+        animation.start()
+    }
+    onAnimationsEnabledChanged: {
+        if (!animationsEnabled) {
+            if (overlayPress) overlayPress.stop()
+            if (showOverlay) showOverlay.feedbackScale = 1
+            if (exitPress) exitPress.stop()
+            if (exitButton) exitButton.feedbackScale = 1
+        }
+    }
     onClosing: function(event) { event.accepted = false }
     Connections {
         target: Qt.application
         function onStateChanged() {
-            if (Qt.application.state === Qt.ApplicationActive)
+            if (Qt.application.state === Qt.ApplicationActive) {
                 welcomeWindow.themeMode = player.androidThemeMode()
-        }
-    }
-
-    Item {
-        anchors.fill: parent
-        clip: true
-        Rectangle {
-            width: Math.min(parent.width * 1.4, 620); height: width; radius: width / 2
-            x: parent.width - width * 0.65; y: -width * 0.52
-            color: welcomeWindow.dark ? "#172741" : "#E5EDFB"
-        }
-        Rectangle {
-            width: 260; height: width; radius: width / 2
-            x: -190; y: parent.height * 0.6
-            color: welcomeWindow.dark ? "#152033" : "#E9EEF6"
+                welcomeWindow.animationsEnabled = player.androidAnimationsEnabled()
+            }
         }
     }
 
@@ -53,7 +56,8 @@ ApplicationWindow {
         Item {
             id: page
             width: pageScroll.availableWidth
-            height: Math.max(pageScroll.availableHeight, content.implicitHeight + 48)
+            // Use the fixed viewport: ScrollView's implicit height derives from this page.
+            height: Math.max(welcomeWindow.contentItem.height, content.implicitHeight + 48)
             ColumnLayout {
                 id: content
                 width: Math.min(parent.width - 48, 420)
@@ -63,17 +67,17 @@ ApplicationWindow {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    Layout.bottomMargin: 28
+                    Layout.bottomMargin: 24
                     Label { text: "浮音"; font.pixelSize: 20; font.bold: true; color: welcomeWindow.ink }
                     Item { Layout.fillWidth: true }
-                    Label { text: "FLOATMUSIC"; font.pixelSize: 11; font.letterSpacing: 2; color: welcomeWindow.muted }
+                    Label { text: "FloatMusic 0.8"; font.pixelSize: 12; color: welcomeWindow.muted }
                 }
 
                 Item {
                     Layout.alignment: Qt.AlignHCenter
                     Layout.preferredWidth: 200
                     Layout.preferredHeight: pageScroll.availableHeight < 700 ? 112 : 148
-                    Layout.bottomMargin: 26
+                    Layout.bottomMargin: 24
                     Accessible.ignored: true
                     Rectangle {
                         anchors.centerIn: parent
@@ -115,35 +119,43 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     text: "让音乐留在手边"
                     color: welcomeWindow.ink
-                    font.pixelSize: content.width < 300 ? 25 : 29
+                    font.pixelSize: content.width < 300 ? 24 : 26
                     font.bold: true
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
                 }
                 Label {
                     Layout.fillWidth: true
-                    Layout.topMargin: 12; Layout.bottomMargin: 28
+                    Layout.topMargin: 12; Layout.bottomMargin: 24
                     text: "一个小窗口，陪你听歌、看歌词。\n切换应用，音乐也不必停下。"
                     color: welcomeWindow.muted
-                    font.pixelSize: 15; lineHeight: 1.45
+                    font.pixelSize: 14; lineHeight: 1.45
                     horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
                 }
 
                 Button {
                     id: showOverlay
-                    Layout.fillWidth: true
-                    implicitHeight: 56
+                    Layout.alignment: Qt.AlignHCenter
+                    implicitWidth: 192; implicitHeight: 48
+                    property real feedbackScale: 1
                     text: "显示悬浮窗"
                     Accessible.name: text
+                    onPressed: welcomeWindow.animatePress(showOverlay, overlayPress, true)
+                    onReleased: welcomeWindow.animatePress(showOverlay, overlayPress, false)
+                    onCanceled: { overlayPress.stop(); feedbackScale = 1 }
                     onClicked: player.showFloating()
+                    NumberAnimation { id: overlayPress; target: showOverlay; property: "feedbackScale"; easing.type: Easing.OutCubic }
                     contentItem: Label {
-                        text: showOverlay.text; font.pixelSize: 17; font.bold: true
-                        color: welcomeWindow.accentInk
+                        scale: showOverlay.feedbackScale
+                        text: showOverlay.text; font.pixelSize: 14; font.bold: true
+                        color: welcomeWindow.accent
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        radius: 16
-                        color: showOverlay.down ? Qt.darker(welcomeWindow.accent, 1.15) : welcomeWindow.accent
+                        scale: showOverlay.feedbackScale
+                        anchors.centerIn: parent
+                        width: parent.width; height: 40; radius: 10
+                        color: welcomeWindow.dark ? (showOverlay.down ? "#304C76" : "#243B60") : (showOverlay.down ? "#D5E2FC" : "#E8EFFF")
                         border.width: showOverlay.visualFocus ? 2 : 0
                         border.color: welcomeWindow.ink
                     }
@@ -164,13 +176,13 @@ ApplicationWindow {
                 }
 
                 Rectangle {
-                    Layout.fillWidth: true; Layout.topMargin: 28
-                    implicitHeight: tips.implicitHeight + 36
-                    radius: 20; color: welcomeWindow.surface
+                    Layout.fillWidth: true; Layout.topMargin: 24
+                    implicitHeight: tips.implicitHeight + 32
+                    radius: 16; color: welcomeWindow.surface
                     RowLayout {
                         id: tips
-                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 18 }
-                        spacing: 12
+                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
+                        spacing: 8
                         Repeater {
                             model: [
                                 { heading: "轻点展开", detail: "图标打开播放器" },
@@ -189,7 +201,7 @@ ApplicationWindow {
                                 Label {
                                     Layout.fillWidth: true
                                     text: modelData.heading; color: welcomeWindow.ink
-                                    font.pixelSize: 14; font.bold: true
+                                    font.pixelSize: 13; font.bold: true
                                     horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
                                 }
                                 Label {
@@ -207,14 +219,23 @@ ApplicationWindow {
                     id: exitButton
                     Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 16
                     implicitWidth: 140; implicitHeight: 48
+                    property real feedbackScale: 1
                     text: "退出浮音"
+                    Accessible.name: text
+                    onPressed: welcomeWindow.animatePress(exitButton, exitPress, true)
+                    onReleased: welcomeWindow.animatePress(exitButton, exitPress, false)
+                    onCanceled: { exitPress.stop(); feedbackScale = 1 }
                     onClicked: player.quit()
+                    NumberAnimation { id: exitPress; target: exitButton; property: "feedbackScale"; easing.type: Easing.OutCubic }
                     contentItem: Label {
+                        scale: exitButton.feedbackScale
                         text: exitButton.text; color: welcomeWindow.muted; font.pixelSize: 14
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        radius: 12
+                        scale: exitButton.feedbackScale
+                        anchors.centerIn: parent
+                        width: parent.width; height: 36; radius: 10
                         color: exitButton.down ? welcomeWindow.surface : "transparent"
                         border.width: exitButton.visualFocus ? 1 : 0; border.color: welcomeWindow.accent
                     }

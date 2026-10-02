@@ -45,7 +45,19 @@ void PlayerController::importPlaylistText(const QString &text, const QString &ta
 void PlayerController::libraryAction(const QString &action, const QVariantMap &args) {
     const auto ids = args.value("ids").toStringList();
     const QString target = args.value("target", activePlaylist()).toString();
-    if (action == "searchPlaylists") {
+    if (action == "loadRankings") {
+        if (m_rankingsLoading) return;
+        m_rankingsLoading = true; m_rankingsMessage.clear(); emit rankingsChanged();
+        m_api.fetchRankings([this](QVariantList lists, QString error) {
+            m_rankingsLoading = false;
+            if (error.isEmpty()) m_rankings = lists;
+            m_rankingsMessage = error.isEmpty()
+                ? (lists.isEmpty() ? QStringLiteral("音乐服务暂未提供排行榜，可刷新重试。")
+                                   : QString())
+                : error;
+            emit rankingsChanged();
+        });
+    } else if (action == "searchPlaylists") {
         const auto query = args.value("query").toString().trimmed().left(200);
         m_playlistSearching = !query.isEmpty(); m_playlistResults.clear(); m_playlistSearchMessage.clear();
         emit playlistSearchChanged(); m_api.searchPlaylists(query);

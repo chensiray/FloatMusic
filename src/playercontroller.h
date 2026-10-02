@@ -33,6 +33,9 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList playlistResults READ playlistResults NOTIFY playlistSearchChanged)
     Q_PROPERTY(bool playlistSearching READ playlistSearching NOTIFY playlistSearchChanged)
     Q_PROPERTY(QString playlistSearchMessage READ playlistSearchMessage NOTIFY playlistSearchChanged)
+    Q_PROPERTY(QVariantList rankings READ rankings NOTIFY rankingsChanged)
+    Q_PROPERTY(bool rankingsLoading READ rankingsLoading NOTIFY rankingsChanged)
+    Q_PROPERTY(QString rankingsMessage READ rankingsMessage NOTIFY rankingsChanged)
     Q_PROPERTY(QVariantMap onlinePlaylist READ onlinePlaylist NOTIFY onlinePlaylistChanged)
     Q_PROPERTY(bool onlinePlaylistLoading READ onlinePlaylistLoading NOTIFY onlinePlaylistChanged)
     Q_PROPERTY(QString libraryMessage READ libraryMessage NOTIFY libraryMessageChanged)
@@ -82,6 +85,9 @@ public:
     QVariantList playlistResults() const { return m_playlistResults; }
     bool playlistSearching() const { return m_playlistSearching; }
     QString playlistSearchMessage() const { return m_playlistSearchMessage; }
+    QVariantList rankings() const { return m_rankings; }
+    bool rankingsLoading() const { return m_rankingsLoading; }
+    QString rankingsMessage() const { return m_rankingsMessage; }
     QVariantMap onlinePlaylist() const { return m_onlinePlaylist; }
     bool onlinePlaylistLoading() const { return m_onlinePlaylistLoading; }
     QString libraryMessage() const { return m_libraryMessage; }
@@ -139,6 +145,7 @@ public:
     Q_INVOKABLE void showFloating();
     Q_INVOKABLE void initializeAndroidUi();
     Q_INVOKABLE int androidThemeMode() const;
+    Q_INVOKABLE bool androidAnimationsEnabled() const;
     Q_INVOKABLE void setDarkTheme(bool dark);
     Q_INVOKABLE void quit();
     Q_INVOKABLE void rejectDrop();
@@ -147,6 +154,7 @@ signals:
     void audioSettingsChanged();
     void libraryChanged();
     void playlistSearchChanged();
+    void rankingsChanged();
     void onlinePlaylistChanged();
     void libraryMessageChanged();
     void searchChanged();
@@ -157,7 +165,8 @@ signals:
     void currentLyricChanged();
     void lyricOffsetChanged();
 private:
-    void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false, qint64 resumePosition = -1);
+    void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false, qint64 resumePosition = -1, bool continueSources = false);
+    bool tryNextAudioSource();
     void rebuildLyrics();
     void updateCurrentLyric();
     void saveSession();
@@ -173,6 +182,9 @@ private:
     void importPlaylistText(const QString &text, const QString &target);
     void mergePlaylist(const QVariantMap &playlist, const QString &target, int skipped = 0);
     QVariantList m_playlistResults;
+    QVariantList m_rankings;
+    QString m_rankingsMessage;
+    bool m_rankingsLoading = false;
     QVariantMap m_onlinePlaylist;
     QString m_playlistSearchMessage, m_libraryMessage;
     bool m_playlistSearching = false, m_onlinePlaylistLoading = false;
@@ -196,6 +208,10 @@ private:
     int m_loadGeneration = 0;
     int m_lyricsGeneration = 0;
     QString m_quality = "standard", m_loadedQuality;
+    QString m_loadedSourceId, m_loadedSourceName;
+    int m_loadedBitrate = 0;
+    QStringList m_attemptedSources;
+    bool m_playIntent = false;
     QString m_androidQualityInfo;
     QString m_lyrics, m_translation, m_lyricsMessage = QStringLiteral("播放在线歌曲后显示歌词。");
     bool m_lyricsLoading = false, m_lyricsFailed = false;

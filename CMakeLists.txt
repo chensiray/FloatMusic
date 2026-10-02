@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(FloatMusic VERSION 0.7.0 LANGUAGES CXX)
+project(FloatMusic VERSION 0.8.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Concurrent Network)
@@ -20,8 +20,8 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
         QT_ANDROID_MIN_SDK_VERSION 28
         QT_ANDROID_TARGET_SDK_VERSION 36
-        QT_ANDROID_VERSION_CODE 8
-        QT_ANDROID_VERSION_NAME "0.7.0-preview"
+        QT_ANDROID_VERSION_CODE 11
+        QT_ANDROID_VERSION_NAME "0.8.0-preview.2"
         QT_ANDROID_APP_NAME "浮音 · 功能验证")
 endif()
 option(FLOATMUSIC_TESTS "Build import policy tests (desktop only)" OFF)

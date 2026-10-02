@@ -15,6 +15,7 @@
 #include <QProcess>
 #include <cmath>
 #include "playercontroller.h"
+#include "playlistapi_fixture.h"
 
 class PlayerTests : public QObject {
     Q_OBJECT
@@ -28,6 +29,7 @@ private slots:
         QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");
         QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf");
         QFontDatabase::addApplicationFont("C:/Windows/Fonts/seguisym.ttf");
+        QGuiApplication::setFont(QFont("Microsoft YaHei UI"));
     }
     void importPlaybackAndSeek() {
         QTemporaryDir dir;
@@ -260,6 +262,9 @@ private slots:
         QCOMPARE(window->opacity(), 1.0); // The native window must remain interactive.
         QVERIFY(bar->mapToScene(QPointF(0,bar->height())).y() <= window->height());
         // Reopening the application must retain the selected appearance.
+        QPointer<QQuickWindow> closed(window);
+        window->deleteLater();
+        QTRY_VERIFY(closed.isNull()); // Destroy the first UI, as an actual application exit does.
         QQmlApplicationEngine reopened;
         reopened.rootContext()->setContextProperty("player", &controller);
         reopened.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
@@ -313,6 +318,82 @@ private slots:
         QCOMPARE(warnings.size(), 0);
         controller.toggle();
     }
+    void rankingsNavigationAndMotion() {
+        PlaylistApiFixture mock; QVERIFY(mock.listen(QHostAddress::LocalHost));
+        PlayerController controller; controller.setApiBase(mock.base());
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto *size = window->findChild<QObject *>("windowScaleSlider"); QVERIFY(size);
+        size->setProperty("value", 100.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
+        auto *opacity = window->findChild<QObject *>("backgroundOpacitySlider"); QVERIFY(opacity);
+        opacity->setProperty("value", 100.0); QVERIFY(QMetaObject::invokeMethod(opacity, "moved"));
+        auto *theme = window->findChild<QObject *>("themeSelector"); QVERIFY(theme);
+        auto *rankings = window->findChild<QQuickItem *>("rankingsView"); QVERIFY(rankings);
+        auto *songs = window->findChild<QQuickItem *>("onlinePlaylistTracks"); QVERIFY(songs);
+        const auto artifacts = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        auto capture = [&](const QString &name) {
+            QTest::qWait(200);
+            return artifacts.isEmpty() || window->grabWindow().save(artifacts + "/" + name + ".png");
+        };
+        QVERIFY(QMetaObject::invokeMethod(window, "openDetail", Q_ARG(QVariant, QVariant("rankings"))));
+        QTRY_VERIFY(!controller.rankingsLoading()); QTRY_COMPARE(rankings->property("count").toInt(), 6);
+        QVERIFY(rankings->isVisible());
+        const auto requestCount = mock.requests.size();
+        QVERIFY(QMetaObject::invokeMethod(window, "openDetail", Q_ARG(QVariant, QVariant("rankings"))));
+        QTest::qWait(100); QCOMPARE(mock.requests.size(), requestCount); // Reopening uses the loaded list.
+        for (int mode : {1, 2}) {
+            QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, mode)));
+            QVERIFY(capture(mode == 1 ? "rankings-light" : "rankings-dark"));
+        }
+        // Populate a large rank after unavailable entries to check text width and original numbering.
+        QJsonArray ids;
+        for (int i = 1; i <= 1000; ++i) ids.append(QJsonObject{{"id", i == 1000 ? 104 : 0}});
+        mock.playlist["trackIds"] = ids; mock.playlist["trackCount"] = 1000;
+        QVERIFY(QMetaObject::invokeMethod(window, "openOnlinePlaylist",
+            Q_ARG(QVariant, QVariant("243")), Q_ARG(QVariant, QVariant("rankings"))));
+        QTRY_VERIFY(!controller.onlinePlaylistLoading()); QTRY_COMPARE(songs->property("count").toInt(), 1);
+        QVERIFY(songs->isVisible()); QVERIFY(!rankings->isVisible());
+        QTest::qWait(150);
+        std::function<QQuickItem *(QQuickItem *)> rankText = [&](QQuickItem *item) -> QQuickItem * {
+            if (item->isVisible() && item->property("text").toString() == "1000") return item;
+            for (auto *child : item->childItems()) if (auto *found = rankText(child)) return found;
+            return nullptr;
+        };
+        auto *number = rankText(songs); QVERIFY(number);
+        QVERIFY(number->width() >= number->implicitWidth());
+        QVERIFY(capture("ranking-detail-dark"));
+        QVERIFY(QMetaObject::invokeMethod(window, "closeOnlinePlaylist"));
+        QTRY_VERIFY(rankings->isVisible()); QCOMPARE(window->property("detail").toString(), QString("rankings"));
+        mock.rankingsStatus = 503;
+        auto *refresh = window->findChild<QObject *>("refreshRankings"); QVERIFY(refresh);
+        QVERIFY(QMetaObject::invokeMethod(refresh, "clicked")); QTRY_VERIFY(!controller.rankingsLoading());
+        QCOMPARE(rankings->property("count").toInt(), 6); QVERIFY(controller.rankingsMessage().contains("503"));
+        QVERIFY(capture("rankings-refresh-error"));
+        auto *modeButton = window->findChild<QQuickItem *>("playbackModeButton"); QVERIFY(modeButton);
+        auto *popup = window->findChild<QObject *>("playbackModePopup"); QVERIFY(popup);
+        QVERIFY(QMetaObject::invokeMethod(modeButton, "clicked")); QTRY_VERIFY(popup->property("opened").toBool());
+        auto *popupContent = popup->property("contentItem").value<QQuickItem *>(); QVERIFY(popupContent);
+        const auto top = popupContent->mapToScene(QPointF());
+        const auto bottom = popupContent->mapToScene(QPointF(popupContent->width(), popupContent->height()));
+        QVERIFY(top.y() >= 0 && bottom.y() <= modeButton->mapToScene(QPointF()).y());
+        QVERIFY(top.x() >= 0 && bottom.x() <= window->width());
+        QCOMPARE(popup->property("z").toInt(), 1000);
+        QVERIFY(capture("playback-menu-over-rankings"));
+        QVERIFY(QMetaObject::invokeMethod(popup, "close"));
+        auto *motion = window->findChild<QObject *>("animationsSwitch"); QVERIFY(motion);
+        motion->setProperty("checked", false); QVERIFY(QMetaObject::invokeMethod(motion, "toggled"));
+        modeButton->setProperty("down", true);
+        QCOMPARE(modeButton->property("visualScale").toDouble(), 1.0);
+        motion->setProperty("checked", true); QVERIFY(QMetaObject::invokeMethod(motion, "toggled"));
+        QCOMPARE(modeButton->property("visualScale").toDouble(), .965);
+        modeButton->setProperty("down", false);
+        QCOMPARE(modeButton->property("visualScale").toDouble(), 1.0);
+        QCOMPARE(warnings.size(), 0);
+    }
     void androidWelcomeLayout() {
         // Android now has a dedicated QML welcome page; the overlay is native Java.
         PlayerController controller;
@@ -323,11 +404,35 @@ private slots:
         engine.load(QUrl::fromLocalFile(page));
         QCOMPARE(engine.rootObjects().size(), 1);
         auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
-        for (const auto size : {QSize(360,780), QSize(780,360)}) {
-            window->resize(size); window->show();
-            QVERIFY(QTest::qWaitForWindowExposed(window));
-            QTest::qWait(100);
-            QVERIFY(window->isVisible()); // Launch must not hide the activity page.
+        QQuickItem *flickable = nullptr, *exit = nullptr;
+        for (auto *item : window->findChildren<QQuickItem *>()) {
+            if (item->property("contentY").isValid() && item->property("contentHeight").isValid()) flickable = item;
+            if (item->inherits("QQuickButton") && item->property("text").toString() == QStringLiteral("退出浮音")) exit = item;
+        }
+        QVERIFY(flickable); QVERIFY(exit);
+        const auto artifacts = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        for (int mode : {1, 2}) {
+            window->setProperty("themeMode", mode);
+            for (const auto size : {QSize(360,780), QSize(780,360), QSize(320,568)}) {
+                window->resize(size); window->show();
+                QVERIFY(QTest::qWaitForWindowExposed(window));
+                flickable->setProperty("contentY", 0.0);
+                QTest::qWait(150);
+                QVERIFY(window->isVisible()); // Launch must not hide the activity page.
+                if (!artifacts.isEmpty()) {
+                    QDir().mkpath(artifacts);
+                    QVERIFY(window->grabWindow().save(artifacts + QString("/android-welcome-%1-%2x%3.png")
+                        .arg(mode == 1 ? "light" : "dark").arg(size.width()).arg(size.height())));
+                }
+                const auto end = qMax(0.0, flickable->property("contentHeight").toDouble() - flickable->height());
+                flickable->setProperty("contentY", end); QTest::qWait(80);
+                const auto bottom = exit->mapToScene(QPointF(exit->width(), exit->height()));
+                QVERIFY(bottom.x() <= window->width());
+                QVERIFY(bottom.y() <= window->height() && bottom.y() > 0);
+                if (!artifacts.isEmpty() && size == QSize(780,360))
+                    QVERIFY(window->grabWindow().save(artifacts + QString("/android-welcome-%1-landscape-bottom.png")
+                        .arg(mode == 1 ? "light" : "dark")));
+            }
         }
         QCOMPARE(warnings.size(), 0);
     }
