@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.floatmusic.v09uitest">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="36" />
+    <application android:label="FloatMusic 0.9 UI regression" android:hasCode="true" />
+    <instrumentation android:name="org.floatmusic.v09uitest.OverlayV09UiTest"
+        android:targetPackage="org.floatmusic.player" />
+</manifest>

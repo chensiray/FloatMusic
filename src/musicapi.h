@@ -21,6 +21,8 @@ public:
         int timeoutMs = 15000;
         QString gdStudio;
         QString injahow;
+        QString vkeys;
+        QString ourcraft;
     };
     struct Lyrics { QString original, translation; bool instrumental = false; };
     struct Audio { QUrl url; QString sourceId, sourceName; int bitrate = 0; };
@@ -30,6 +32,7 @@ public:
     QString baseUrl() const { return m_base; }
     bool setBaseUrl(const QString &value);
     void search(const QString &keywords);
+    void search(const QString &keywords, const QStringList &sources);
     void searchPlaylists(const QString &query);
     void fetchRankings(std::function<void(QVariantList, QString)> done);
     void fetchPlaylist(const QString &id, std::function<void(QVariantMap, QString)> done);
@@ -37,9 +40,13 @@ public:
     void resolve(const QString &songId, const QString &quality, std::function<void(QUrl, QString)> done);
     void resolveAudio(const QString &songId, const QString &quality, std::function<void(Audio, QString)> done,
                       const QStringList &excludedSources = {});
+    void resolveAudio(const QString &source, const QString &songId, const QString &quality,
+                      std::function<void(Audio, QString)> done, const QStringList &excludedSources = {});
     bool hasAudioBackups() const { return m_base.isEmpty() && (!m_endpoints.gdStudio.isEmpty() || !m_endpoints.injahow.isEmpty()); }
+    bool hasAudioBackups(const QString &source) const;
     void clearAudioFailures() { m_audioCooldown.clear(); }
     void fetchLyrics(const QString &songId, std::function<void(Lyrics, QString)> done);
+    void fetchLyrics(const QString &source, const QString &songId, std::function<void(Lyrics, QString)> done);
     static bool validQuality(const QString &quality);
 signals:
     void results(QVariantList tracks, QString error);
@@ -48,6 +55,7 @@ private:
     struct PlaylistFetch;
     struct AudioFetch;
     void tryAudioSource(const std::shared_ptr<AudioFetch> &state);
+    void fetchMetingLyrics(const QString &source, const QString &songId, std::function<void(Lyrics, QString)> done);
     void audioRequest(const QUrl &url, bool sample, int timeoutMs, std::function<void(QByteArray, QUrl, QString)> done);
     void fetchPlaylistBatch(const std::shared_ptr<PlaylistFetch> &state);
     void finishPlaylist(const std::shared_ptr<PlaylistFetch> &state);
@@ -62,6 +70,7 @@ private:
     int m_rankingsGeneration = 0;
     int m_sourceGeneration = 0;
     QPointer<QNetworkReply> m_searchReply;
+    QList<QPointer<QNetworkReply>> m_searchReplies;
     QPointer<QNetworkReply> m_playlistSearchReply;
     QPointer<QNetworkReply> m_rankingsReply;
     QPointer<QNetworkReply> m_audioReply;

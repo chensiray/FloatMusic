@@ -43,7 +43,7 @@ Android 当前构建的是调试包。正式分发所需的签名、密钥保管
 
 ## 测试
 
-Windows 构建脚本运行四组 CTest：导入策略、播放器与界面、API 与歌单、单实例。测试使用独立测试数据目录。
+Windows 构建脚本运行七组 CTest：导入策略、播放器与界面、API 与歌单、单实例、多曲库 API、混合歌单文档、多曲库控制器。测试使用独立测试数据目录；网易云专项 fixture 明确选择单库，多曲库 fixture 显式配置本地服务，默认不访问公网。
 
 0.8 在用户追加授权后完成四组 CTest，全部通过；新增排行榜回归及欢迎页横竖屏截图检查，单独实测排行榜与热歌榜读取。范围与限制见[QtTest 验证记录](QtTest-0.8-验证记录.md)及[验证说明](../VERIFICATION.md)。配置和构建时也应将终端工作目录切换到英文暂存路径，避免工具对中文当前目录的兼容问题。
 
@@ -51,9 +51,13 @@ Qt Quick 界面使用 `player_tests -platform offscreen` 和 `QT_QUICK_BACKEND=s
 
 `tests/live_api` 是单独的真实接口探测工具，不属于默认离线测试；使用方法见该目录 README。真实服务结果只代表测试时状态。
 
+0.9 的匿名实测需显式设置 `FLOATMUSIC_LIVE_MULTISOURCE=1`。`multisource_api_tests liveAnonymousQq liveAnonymousKuwo` 检查搜索、解析、歌词；指定 `FLOATMUSIC_QT_PROBE` 为 `tests/music_api_playback_probe.cpp` 编译出的探针时还检查实际解码、暂停、跳转和继续播放。`liveAnonymousQqBackup` 单独检查 QQ 备用解析与 HTTPS 音频头。`multisource_controller_tests liveMixedPlaylistPlayback` 使用实际控制器检查 QQ/酷我混合歌单切歌、歌词、普通音质和恢复；这些测试音量为零，使用隔离数据。默认 CTest 跳过上述联网项。
+
 备用音源回归包含 HTTP 523、错误音频、超时、冷却、取消、签名地址及播放器解码失败的换源。真实解析和播放分别运行 `library_tests liveResolveAudio liveAudioSourcesPlayback`，需设置 `FLOATMUSIC_LIVE_TESTS=1`；`FLOATMUSIC_LIVE_SONG`、`FLOATMUSIC_LIVE_QUALITY` 可指定样本，`FLOATMUSIC_LIVE_EXCLUDED=gd,byfuns` 可对照 INJAHOW。默认解析器遵循系统代理配置，实测网络条件见[备用音源报告](备用音源接入与实测-2026-10-01.md)。
 
 Android 解析器可在桌面 JVM 使用本地 HTTP 响应测试，无需连接手机，步骤见[Android 解析器测试](../tests/android/README.md)。该测试不覆盖 `PlaybackService` 的系统音频焦点、通知和后台生命周期；这些需另行真机验收。
+
+0.9 的 `run-resolver-tests.ps1` 同时执行实际 `AudioResolver` 的 22 项解析回归与服务实际调用的 `TrackState` 的 6 项身份、暂停现场和音质规则检查。`run-overlay-v09-contract-test.ps1` 编译实际悬浮页与原生 fixture，执行四组本地 UI 状态契约。五组实际控件检查另见 [Android 0.9 悬浮 UI fixture](../tests/android/overlay-v09-fixture.md)，需先安装对应 APK。
 
 Android 原生悬浮列表使用独立 Instrumentation 检查已安装 APK，通过系统触摸输入覆盖歌单、歌曲搜索、歌单搜索及多选模式。运行条件和命令见[悬浮列表真机回归](../tests/android/README.md#悬浮列表真机回归)；仅使用内存样本，结束后移除临时测试包，需重新打开浮音。
 
@@ -61,9 +65,9 @@ Android 原生悬浮列表使用独立 Instrumentation 检查已安装 APK，通
 
 ## 可选自定义音乐服务
 
-应用允许配置兼容 API 的根地址，地址不应包含账号密码、查询参数或单个接口路径。默认音频解析实现见 `src/musicapi.cpp` 与 Android 的 `AudioResolver.java`；Android 的 `PlaybackService.java` 负责播放和换源。默认模式使用 GD、原接口、INJAHOW 的有限回退；自定义 API 模式仅访问配置的服务。
+应用允许配置网易云兼容 API 的根地址，地址不应包含账号密码、查询参数或单个接口路径。默认音频解析实现见 `src/musicapi.cpp` 与 Android 的 `AudioResolver.java`；Android 的 `PlaybackService.java` 负责播放和换源。网易云默认模式使用 GD、原接口、INJAHOW 的有限回退；网易云自定义模式仅访问配置的服务。
 
-自定义服务需要提供：
+两端 0.9 的其他曲库服务均不受该地址影响。自定义服务需要提供：
 
 | 请求 | 响应要求 |
 |---|---|
@@ -92,6 +96,7 @@ Android 原生悬浮列表使用独立 Instrumentation 检查已安装 APK，通
 | `android/src/org/floatmusic/player/` | Android 活动、后台服务、独立悬浮页 |
 | `android/src/org/floatmusic/player/OverlayWindow.java` | 音乐卡片、歌单操作面板、共用展开区、等比缩放、窗口尺寸与焦点 |
 | `android/src/org/floatmusic/player/AudioResolver.java` | 在线音源、音频头探测、有限回退、冷却与取消 |
+| `android/src/org/floatmusic/player/TrackState.java` | 三平台曲目身份、保存字段白名单、音质与来源规则 |
 | `android/src/org/floatmusic/player/PlaylistDocuments.java` | Android 歌单文件选择、读取与保存 |
 | `tests/` | 策略、播放、UI、API、持久化和多进程测试 |
 

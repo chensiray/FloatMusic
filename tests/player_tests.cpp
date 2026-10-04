@@ -13,9 +13,48 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QProcess>
+#include <QScopeGuard>
+#include <QSettings>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <cmath>
 #include "playercontroller.h"
 #include "playlistapi_fixture.h"
+
+// Only the network boundary is replaced; lyric parsing, timing and QML stay real.
+class DesktopLyricApiFixture : public QTcpServer {
+public:
+    QString original = QStringLiteral("[00:00.00]让音乐留在手边\n[00:04.00]下一句\n[00:08.00]一首很长的歌词会自然换行，陪你一路向前\n[00:12.00]第四句\n[00:16.00]第五句\n[00:20.00]第六句\n[00:24.00]第七句\n[00:28.00]第八句");
+    QString translation = QStringLiteral("[00:00.00]Keep music close\n[00:04.00]The next line\n[00:08.00]A longer translated lyric wraps without losing its words\n[00:12.00]Line four\n[00:16.00]Line five\n[00:20.00]Line six\n[00:24.00]Line seven\n[00:28.00]Line eight");
+    DesktopLyricApiFixture() {
+        connect(this, &QTcpServer::newConnection, this, [this] {
+            while (auto *socket = nextPendingConnection()) {
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, socket, [this, socket] {
+                    const auto request = socket->property("request").toByteArray() + socket->readAll();
+                    socket->setProperty("request", request);
+                    if (!request.contains("\r\n\r\n") || socket->property("sent").toBool()) return;
+                    socket->setProperty("sent", true);
+                    const auto body = QJsonDocument(QJsonObject{{"code", 200},
+                        {"lrc", QJsonObject{{"lyric", original}}},
+                        {"tlyric", QJsonObject{{"lyric", translation}}}}).toJson();
+                    socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                        + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
+    }
+    QString base() const { return "http://127.0.0.1:" + QString::number(serverPort()); }
+};
+
+static QQuickItem *findVisualItem(QQuickItem *root, const QString &name) {
+    if (!root) return nullptr;
+    if (root->objectName() == name) return root;
+    for (auto *child : root->childItems())
+        if (auto *found = findVisualItem(child, name)) return found;
+    return nullptr;
+}
 
 class PlayerTests : public QObject {
     Q_OBJECT
@@ -164,6 +203,417 @@ private slots:
         // A window close must be accepted, not hidden into the icon as in 0.2.
         QVERIFY(window->close());
         QVERIFY(!window->isVisible());
+    }
+    void desktopLyricPreferences() {
+        const auto previousName = QCoreApplication::applicationName();
+        const auto restoreName = qScopeGuard([previousName] { QCoreApplication::setApplicationName(previousName); });
+        QCoreApplication::setApplicationName("ui-lyrics-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        const QVariantMap track{{"id", "netease:101"}, {"source", "netease"}, {"songId", "101"},
+                                {"name", QStringLiteral("歌词验证")}, {"artist", QStringLiteral("测试歌手")}};
+        QSettings().setValue("playback/session", QJsonDocument(QJsonObject::fromVariantMap(
+            {{"track", track}, {"position", 0}, {"duration", 60000}})).toJson());
+        DesktopLyricApiFixture api; QVERIFY(api.listen(QHostAddress::LocalHost));
+        PlayerController controller; controller.setApiBase(api.base());
+        QTRY_COMPARE(controller.currentTrack(), QString("netease:101"));
+        controller.retryLyrics();
+        QTRY_VERIFY(!controller.lyricsLoading());
+        QVERIFY2(!controller.lyricsFailed(), qPrintable(controller.lyricsMessage()));
+        QCOMPARE(controller.lyricLines().size(), 8);
+        QCOMPARE(controller.currentLyricIndex(), 0);
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        window->setProperty("section", "lyrics"); window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QTest::qWait(80);
+        for (auto *item : window->findChildren<QQuickItem *>()) {
+            const auto label = item->property("displayText").toString();
+            if (item->inherits("QQuickComboBox") && (label == QStringLiteral("原文")
+                    || label == QStringLiteral("译文") || label == QStringLiteral("双语")
+                    || label == QStringLiteral("原文与译文")))
+                QVERIFY2(!item->isVisible(), "Language preferences must not occupy the lyrics page");
+        }
+        auto *mode = window->findChild<QQuickItem *>("lyricModeSelector");
+        auto *size = window->findChild<QQuickItem *>("lyricFontSizeSlider");
+        auto *preview = window->findChild<QQuickItem *>("lyricFontPreview");
+        auto *value = window->findChild<QObject *>("lyricFontSizeValue");
+        auto *view = window->findChild<QQuickItem *>("timedLyrics");
+        auto *plain = window->findChild<QQuickItem *>("lyricsText");
+        QVERIFY(mode); QVERIFY(size); QVERIFY(preview); QVERIFY(value); QVERIFY(view); QVERIFY(plain);
+        QCOMPARE(size->property("value").toInt(), 18);
+        QCOMPARE(mode->property("currentIndex").toInt(), 0);
+        QTRY_VERIFY(findVisualItem(view, "lyricOriginal-0"));
+        auto *original = findVisualItem(view, "lyricOriginal-0");
+        auto *translated = findVisualItem(view, "lyricTranslation-0"); QVERIFY(translated);
+        QCOMPARE(original->property("text").toString(), QStringLiteral("让音乐留在手边"));
+        QCOMPARE(original->property("font").value<QFont>().pixelSize(), 20);
+        QVERIFY(!translated->isVisible());
+        const auto artifacts = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        if (!artifacts.isEmpty()) QVERIFY(QDir().mkpath(artifacts));
+        auto capture = [&](const QString &name) {
+            QTest::qWait(80);
+            return artifacts.isEmpty() || window->grabWindow().save(artifacts + "/" + name + ".png");
+        };
+        QVERIFY(window->setProperty("section", "more")); QVERIFY(window->setProperty("detail", "settings"));
+        QTRY_VERIFY(mode->isVisible() && size->isVisible() && preview->isVisible());
+        auto *theme = window->findChild<QObject *>("themeSelector"); QVERIFY(theme);
+        QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, 1)));
+        QVERIFY(QMetaObject::invokeMethod(mode, "activated", Q_ARG(int, 2)));
+        QTRY_COMPARE(mode->property("currentIndex").toInt(), 2);
+        size->setProperty("value", 26.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
+        QTRY_COMPARE(value->property("text").toString(), QString("26"));
+        QTRY_COMPARE(preview->property("font").value<QFont>().pixelSize(), 28);
+        const auto previewBottom = preview->mapToScene(QPointF(preview->width(), preview->height()));
+        QVERIFY(previewBottom.x() <= window->width() && previewBottom.y() <= window->height());
+        QVERIFY(capture("windows-lyric-settings-26-light"));
+        window->setProperty("section", "lyrics");
+        QTRY_VERIFY(translated->isVisible());
+        QCOMPARE(translated->property("text").toString(), QString("Keep music close"));
+        QTRY_COMPARE(original->property("font").value<QFont>().pixelSize(), 28);
+        QTRY_COMPARE(translated->property("font").value<QFont>().pixelSize(), 28);
+        QVERIFY(capture("windows-timed-lyrics-26-light"));
+        controller.setLyricOffset(5000);
+        QTRY_COMPARE(controller.currentLyricIndex(), 1);
+        QTRY_COMPARE(original->property("font").value<QFont>().pixelSize(), 26);
+        QTRY_VERIFY(findVisualItem(view, "lyricOriginal-1"));
+        auto *current = findVisualItem(view, "lyricOriginal-1");
+        QTRY_COMPARE(current->property("font").value<QFont>().pixelSize(), 28);
+        QCOMPARE(current->property("color").value<QColor>(), window->property("accent").value<QColor>());
+        view->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Down);
+        QTRY_VERIFY(view->property("manualBrowsing").toBool());
+        window->setProperty("section", "more"); window->setProperty("detail", "settings");
+        QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, 2)));
+        size->setProperty("value", 14.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
+        QTRY_COMPARE(preview->property("font").value<QFont>().pixelSize(), 16);
+        QVERIFY(capture("windows-lyric-settings-14-dark"));
+        QVERIFY(QMetaObject::invokeMethod(mode, "activated", Q_ARG(int, 1)));
+        window->setProperty("section", "lyrics");
+        QTRY_COMPARE(current->property("text").toString(), QString("The next line"));
+        QTRY_COMPARE(current->property("font").value<QFont>().pixelSize(), 16);
+        QVERIFY(!translated->isVisible());
+        QVERIFY(view->property("manualBrowsing").toBool());
+        auto *follow = window->findChild<QQuickItem *>("returnToCurrentLyric"); QVERIFY(follow);
+        QTRY_VERIFY(follow->isVisible());
+        QVERIFY(QMetaObject::invokeMethod(follow, "clicked"));
+        QTRY_VERIFY(!view->property("manualBrowsing").toBool());
+        QVERIFY(capture("windows-timed-lyrics-14-dark"));
+        api.original = QStringLiteral("让音乐留在手边\n下一句");
+        api.translation = "Keep music close\nThe next line";
+        controller.retryLyrics(); QTRY_VERIFY(!controller.lyricsLoading());
+        QTRY_VERIFY(controller.lyricLines().isEmpty()); QTRY_VERIFY(plain->isVisible());
+        QTRY_COMPARE(plain->property("text").toString(), QString("Keep music close\nThe next line"));
+        QTRY_COMPARE(plain->property("font").value<QFont>().pixelSize(), 14);
+        for (int choice : {0, 2}) {
+            window->setProperty("section", "more"); window->setProperty("detail", "settings");
+            QVERIFY(QMetaObject::invokeMethod(mode, "activated", Q_ARG(int, choice)));
+            window->setProperty("section", "lyrics");
+            QTRY_VERIFY(plain->property("text").toString().contains(QStringLiteral("让音乐留在手边")));
+            QCOMPARE(plain->property("text").toString().contains("Keep music close"), choice == 2);
+        }
+        size->setProperty("value", 26.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
+        QTRY_COMPARE(plain->property("font").value<QFont>().pixelSize(), 26);
+        QVERIFY(capture("windows-plain-lyrics-26-dark"));
+        QPointer<QQuickWindow> closed(window); window->deleteLater(); QTRY_VERIFY(closed.isNull());
+        QQmlApplicationEngine reopened; QSignalSpy reopenWarnings(&reopened, &QQmlEngine::warnings);
+        reopened.rootContext()->setContextProperty("player", &controller);
+        reopened.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(reopened.rootObjects().size(), 1);
+        auto *restored = reopened.rootObjects().first();
+        QCOMPARE(restored->findChild<QObject *>("lyricModeSelector")->property("currentIndex").toInt(), 2);
+        QCOMPARE(restored->findChild<QObject *>("lyricFontSizeSlider")->property("value").toInt(), 26);
+        QCOMPARE(restored->findChild<QObject *>("lyricsText")->property("font").value<QFont>().pixelSize(), 26);
+        QVERIFY(restored->findChild<QObject *>("lyricsText")->property("text").toString().contains("Keep music close"));
+        QCOMPARE(warnings.size(), 0); QCOMPARE(reopenWarnings.size(), 0);
+    }
+    void desktopLyricPreferenceBounds_data() {
+        QTest::addColumn<int>("storedFont"); QTest::addColumn<int>("storedMode");
+        QTest::addColumn<int>("fontSize"); QTest::addColumn<int>("mode");
+        QTest::newRow("below-minimum") << -40 << -1 << 14 << 0;
+        QTest::newRow("above-maximum") << 90 << 99 << 26 << 2;
+    }
+    void desktopLyricPreferenceBounds() {
+        QFETCH(int, storedFont); QFETCH(int, storedMode); QFETCH(int, fontSize); QFETCH(int, mode);
+        const auto previousName = QCoreApplication::applicationName();
+        const auto restoreName = qScopeGuard([previousName] { QCoreApplication::setApplicationName(previousName); });
+        QCoreApplication::setApplicationName("ui-lyrics-bounds-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        QSettings settings; settings.setValue("lyrics/fontSize", storedFont); settings.setValue("lyrics/displayMode", storedMode); settings.sync();
+        PlayerController controller; QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = engine.rootObjects().first();
+        auto *size = window->findChild<QObject *>("lyricFontSizeSlider");
+        auto *language = window->findChild<QObject *>("lyricModeSelector");
+        auto *preview = window->findChild<QObject *>("lyricFontPreview");
+        auto *text = window->findChild<QObject *>("lyricsText");
+        QVERIFY(size); QVERIFY(language); QVERIFY(preview); QVERIFY(text);
+        QCOMPARE(size->property("value").toInt(), fontSize);
+        QCOMPARE(language->property("currentIndex").toInt(), mode);
+        QCOMPARE(preview->property("font").value<QFont>().pixelSize(), fontSize + 2);
+        QCOMPARE(text->property("font").value<QFont>().pixelSize(), fontSize);
+        // Settings batches property writes. Verify the actual exit/reopen contract
+        // rather than inspecting its backing QSettings during a pending batch.
+        QPointer<QObject> closed(window); window->deleteLater(); QTRY_VERIFY(closed.isNull());
+        QSettings persisted;
+        QCOMPARE(persisted.value("lyrics/fontSize").toInt(), fontSize);
+        QCOMPARE(persisted.value("lyrics/displayMode").toInt(), mode);
+        QQmlApplicationEngine reopened;
+        reopened.rootContext()->setContextProperty("player", &controller);
+        reopened.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(reopened.rootObjects().size(), 1);
+        auto *restored = reopened.rootObjects().first();
+        QCOMPARE(restored->findChild<QObject *>("lyricFontSizeSlider")->property("value").toInt(), fontSize);
+        QCOMPARE(restored->findChild<QObject *>("lyricModeSelector")->property("currentIndex").toInt(), mode);
+        QCOMPARE(warnings.size(), 0);
+    }
+    void desktopAppearanceReset() {
+        const auto previousName = QCoreApplication::applicationName();
+        const auto restoreName = qScopeGuard([previousName] { QCoreApplication::setApplicationName(previousName); });
+        QCoreApplication::setApplicationName("ui-reset-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        QSettings settings; settings.setValue("appearance/windowScale", 1.2); settings.setValue("appearance/backgroundOpacity", .4);
+        settings.setValue("appearance/iconX", 250); settings.setValue("appearance/iconY", 180);
+        settings.setValue("appearance/mode", 2); settings.setValue("appearance/animationsEnabled", false);
+        settings.setValue("lyrics/fontSize", 24); settings.setValue("lyrics/displayMode", 1); settings.sync();
+        PlayerController controller; QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        auto *icon = window->findChild<QQuickWindow *>("floatingIcon"); QVERIFY(icon);
+        auto *reset = window->findChild<QObject *>("resetAppearanceButton"); QVERIFY(reset);
+        window->setProperty("section", "more"); window->setProperty("detail", "settings");
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        QVERIFY(QMetaObject::invokeMethod(reset, "clicked"));
+        QTRY_COMPARE(window->property("contentScale").toDouble(), 1.0);
+        QTest::qWait(200); // Let scale-dependent layout and the existing fit timer settle.
+        const QRect area = controller.desktopWorkArea(80, 152);
+        const QPoint expected(qBound(area.x() + 8, 48, area.x() + area.width() - 64 - 8),
+                              qBound(area.y() + 8, 120, area.y() + area.height() - 64 - 8));
+        QTRY_COMPARE(icon->position(), expected);
+        QTRY_COMPARE(window->position(), QPoint(
+            qBound(area.x() + 8, expected.x(), area.x() + area.width() - window->width() - 8),
+            qBound(area.y() + 8, expected.y(), area.y() + area.height() - window->height() - 8)));
+        QVERIFY(window->property("darkMode").toBool());
+        QVERIFY(!window->findChild<QObject *>("animationsSwitch")->property("checked").toBool());
+        QCOMPARE(window->findChild<QObject *>("lyricFontSizeSlider")->property("value").toInt(), 24);
+        QCOMPARE(window->findChild<QObject *>("lyricModeSelector")->property("currentIndex").toInt(), 1);
+        QPointer<QQuickWindow> closed(window); window->deleteLater(); QTRY_VERIFY(closed.isNull());
+        QSettings persisted;
+        QCOMPARE(persisted.value("appearance/windowScale").toDouble(), 1.0);
+        QCOMPARE(persisted.value("appearance/backgroundOpacity").toDouble(), 1.0);
+        QCOMPARE(persisted.value("appearance/iconX").toInt(), expected.x());
+        QCOMPARE(persisted.value("appearance/iconY").toInt(), expected.y());
+        QQmlApplicationEngine reopened;
+        reopened.rootContext()->setContextProperty("player", &controller);
+        reopened.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(reopened.rootObjects().size(), 1);
+        auto *restored = qobject_cast<QQuickWindow *>(reopened.rootObjects().first()); QVERIFY(restored);
+        QCOMPARE(restored->findChild<QQuickWindow *>("floatingIcon")->position(), expected);
+        QCOMPARE(restored->property("contentScale").toDouble(), 1.0);
+        QVERIFY(restored->property("darkMode").toBool());
+        QVERIFY(!restored->findChild<QObject *>("animationsSwitch")->property("checked").toBool());
+        QCOMPARE(restored->findChild<QObject *>("lyricFontSizeSlider")->property("value").toInt(), 24);
+        QCOMPARE(restored->findChild<QObject *>("lyricModeSelector")->property("currentIndex").toInt(), 1);
+        QCOMPARE(warnings.size(), 0);
+    }
+    void desktopSearchLibrarySelection() {
+        const auto previousApplicationName = QCoreApplication::applicationName();
+        const auto restoreApplicationName = qScopeGuard([previousApplicationName] {
+            QCoreApplication::setApplicationName(previousApplicationName);
+        });
+        QCoreApplication::setApplicationName("ui-multisource-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        MusicApi::Endpoints endpoints;
+        endpoints.metadata = "http://127.0.0.1:1";
+        endpoints.playback = endpoints.metadata;
+        endpoints.gdStudio = endpoints.metadata;
+        endpoints.injahow = endpoints.metadata;
+        endpoints.vkeys = endpoints.metadata;
+        endpoints.ourcraft = endpoints.metadata;
+        endpoints.timeoutMs = 100;
+        PlayerController controller(endpoints);
+        controller.setApiBase("");
+        controller.setSearchSources({"netease"});
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        QVERIFY(window->setProperty("section", "more"));
+        QVERIFY(window->setProperty("detail", "search"));
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto *netease = window->findChild<QQuickItem *>("searchSourceNetease");
+        auto *tencent = window->findChild<QQuickItem *>("searchSourceTencent");
+        auto *kuwo = window->findChild<QQuickItem *>("searchSourceKuwo");
+        auto *searchButton = window->findChild<QQuickItem *>("searchButton");
+        auto *input = window->findChild<QQuickItem *>("searchInput");
+        QVERIFY(netease); QVERIFY(tencent); QVERIFY(kuwo); QVERIFY(searchButton); QVERIFY(input);
+        QTRY_VERIFY(netease->isVisible() && tencent->isVisible() && kuwo->isVisible());
+        QTRY_VERIFY(netease->property("checked").toBool());
+        QVERIFY(!tencent->property("checked").toBool());
+        QVERIFY(!kuwo->property("checked").toBool());
+        QTRY_VERIFY(searchButton->isEnabled());
+        QTest::qWait(50);
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                          tencent->mapToScene(QPointF(tencent->width() / 2, tencent->height() / 2)).toPoint());
+        QTRY_COMPARE(controller.searchSources(), QStringList({"netease", "tencent"}));
+        QTRY_VERIFY(tencent->property("checked").toBool());
+        kuwo->forceActiveFocus();
+        QTRY_VERIFY(kuwo->hasActiveFocus());
+        QTest::keyClick(window, Qt::Key_Space);
+        QTRY_COMPARE(controller.searchSources(), QStringList({"netease", "tencent", "kuwo"}));
+        QTRY_VERIFY(kuwo->property("checked").toBool());
+        const auto artifactDir = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        if (!artifactDir.isEmpty()) {
+            QVERIFY(QDir().mkpath(artifactDir));
+            QTest::qWait(50);
+            QVERIFY(window->grabWindow().save(artifactDir + "/windows-multisource-search.png"));
+        }
+        for (auto *source : {netease, tencent, kuwo}) {
+            source->forceActiveFocus();
+            QTRY_VERIFY(source->hasActiveFocus());
+            QTest::keyClick(window, Qt::Key_Space);
+            QTRY_VERIFY(!source->property("checked").toBool());
+        }
+        QTRY_VERIFY(controller.searchSources().isEmpty());
+        QTRY_VERIFY(!searchButton->isEnabled());
+        QVERIFY(input->setProperty("text", QStringLiteral("接口隔离验证")));
+        QSignalSpy accepted(input, SIGNAL(accepted()));
+        QSignalSpy searchChanges(&controller, &PlayerController::searchChanged);
+        QVERIFY(accepted.isValid());
+        input->forceActiveFocus();
+        QTRY_VERIFY(input->hasActiveFocus());
+        QTest::keyClick(window, Qt::Key_Return);
+        QTRY_COMPARE(accepted.size(), 1);
+        QTRY_VERIFY(!searchChanges.isEmpty());
+        QVERIFY(controller.searchMessage().contains(QStringLiteral("至少选择")));
+        QVERIFY(!controller.searching());
+        QVERIFY(controller.searchResults().isEmpty());
+        if (!artifactDir.isEmpty()) {
+            QTest::qWait(50);
+            QVERIFY(window->grabWindow().save(artifactDir + "/windows-multisource-empty.png"));
+        }
+        QVERIFY(window->setProperty("searchKind", "playlists"));
+        QTRY_VERIFY(!netease->isVisible() && !tencent->isVisible() && !kuwo->isVisible());
+        QTRY_VERIFY(searchButton->isEnabled());
+        QVERIFY(controller.searchSources().isEmpty());
+        if (!artifactDir.isEmpty()) {
+            QTest::qWait(50);
+            QVERIFY(window->grabWindow().save(artifactDir + "/windows-netease-playlist-search.png"));
+        }
+        QTest::qWait(30);
+        QCOMPARE(warnings.size(), 0);
+    }
+    void desktopPlatformQualitySelection() {
+        const auto previousApplicationName = QCoreApplication::applicationName();
+        const auto restoreApplicationName = qScopeGuard([previousApplicationName] {
+            QCoreApplication::setApplicationName(previousApplicationName);
+        });
+        QCoreApplication::setApplicationName("ui-platform-quality-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        MusicApi::Endpoints endpoints;
+        endpoints.metadata = "http://127.0.0.1:1";
+        endpoints.playback = endpoints.metadata;
+        endpoints.gdStudio = endpoints.metadata;
+        endpoints.injahow = endpoints.metadata;
+        endpoints.vkeys = endpoints.metadata;
+        endpoints.ourcraft = endpoints.metadata;
+        endpoints.timeoutMs = 100;
+        QObject controllers;
+        auto *initial = new PlayerController(endpoints, &controllers);
+        initial->setApiBase("");
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", initial);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        QVERIFY(window->setProperty("section", "more"));
+        QVERIFY(window->setProperty("detail", "settings"));
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto *quality = window->findChild<QQuickItem *>("qualitySelector");
+        auto *source = window->findChild<QQuickItem *>("currentSourceName");
+        auto *theme = window->findChild<QObject *>("themeSelector");
+        QVERIFY(quality); QVERIFY(source); QVERIFY(theme);
+        QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, 1)));
+        QQuickItem *viewport = quality->parentItem();
+        while (viewport && !viewport->property("contentY").isValid()) viewport = viewport->parentItem();
+        QVERIFY2(viewport, "The settings page must scroll to the online quality control");
+        auto revealQuality = [&] {
+            const double top = viewport->property("contentY").toDouble()
+                + quality->mapToItem(viewport, QPointF()).y();
+            const double end = qMax(0.0, viewport->property("contentHeight").toDouble() - viewport->height());
+            return viewport->setProperty("contentY", qBound(0.0, top - 40.0, end));
+        };
+        QVERIFY(revealQuality());
+        QTRY_VERIFY(quality->isEnabled());
+        QTRY_COMPARE(quality->property("count").toInt(), 5);
+        quality->forceActiveFocus();
+        QTRY_VERIFY(quality->hasActiveFocus());
+        QTest::keyClick(window, Qt::Key_End);
+        QTRY_COMPARE(initial->quality(), QString("hires"));
+        QTest::keyClick(window, Qt::Key_Up);
+        QTRY_COMPARE(initial->quality(), QString("lossless"));
+        QTRY_COMPARE(quality->property("currentIndex").toInt(), 3);
+        QTRY_COMPARE(quality->property("displayText").toString(), QStringLiteral("无损 FLAC"));
+        const auto artifactDir = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        if (!artifactDir.isEmpty()) QVERIFY(QDir().mkpath(artifactDir));
+        const QList<QPair<QString, QString>> platforms{
+            {"tencent", QStringLiteral("QQ音乐")},
+            {"kuwo", QStringLiteral("酷我音乐")},
+            {"netease", QStringLiteral("网易云")}
+        };
+        for (const auto &platform : platforms) {
+            const QString songId = platform.first == "tencent" ? "004MpJjW07rAPl" : "42";
+            const QVariantMap track{{"id", platform.first + ':' + songId}, {"source", platform.first},
+                                    {"songId", songId}, {"name", QStringLiteral("恢复的测试歌曲")},
+                                    {"artist", QStringLiteral("测试歌手")}};
+            QSettings().setValue("playback/session", QJsonDocument(QJsonObject::fromVariantMap(
+                {{"track", track}, {"position", 3250}, {"duration", 8000}})).toJson());
+            // Rebind the same controls so the model changes from five qualities to one
+            // and back. Restored sessions defer all audio and lyric network requests.
+            auto *restored = new PlayerController(endpoints, &controllers);
+            engine.rootContext()->setContextProperty("player", restored);
+            QTRY_COMPARE(restored->currentTrack(), track.value("id").toString());
+            QVERIFY(restored->ready());
+            QVERIFY(!restored->busy());
+            QVERIFY(!restored->playing());
+            QCOMPARE(restored->quality(), QString("lossless"));
+            QTRY_VERIFY(source->isVisible());
+            QTRY_COMPARE(source->property("text").toString(), platform.second);
+            QVERIFY(revealQuality());
+            if (platform.first == "netease") {
+                QTRY_VERIFY(quality->isEnabled());
+                QTRY_COMPARE(quality->property("count").toInt(), 5);
+                QTRY_COMPARE(quality->property("currentIndex").toInt(), 3);
+                QTRY_COMPARE(quality->property("displayText").toString(), QStringLiteral("无损 FLAC"));
+            } else {
+                QTRY_VERIFY(!quality->isEnabled());
+                QTRY_COMPARE(quality->property("count").toInt(), 1);
+                QTRY_COMPARE(quality->property("currentIndex").toInt(), 0);
+                QTRY_COMPARE(quality->property("displayText").toString(), QStringLiteral("普通音质"));
+                QVERIFY(restored->qualityInfo().contains(QStringLiteral("普通音质")));
+                auto *popup = quality->property("popup").value<QObject *>();
+                QVERIFY(popup);
+                QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                    quality->mapToScene(QPointF(quality->width() / 2, quality->height() / 2)).toPoint());
+                QVERIFY(!popup->property("visible").toBool());
+                QCOMPARE(restored->quality(), QString("lossless"));
+            }
+            QTest::qWait(50); // Also check the queued model-selection synchronization.
+            QCOMPARE(quality->property("currentIndex").toInt(), platform.first == "netease" ? 3 : 0);
+            const auto bottom = quality->mapToScene(QPointF(quality->width(), quality->height()));
+            QVERIFY(bottom.x() <= window->width());
+            QVERIFY(bottom.y() > 0 && bottom.y() <= window->height());
+            if (!artifactDir.isEmpty())
+                QVERIFY(window->grabWindow().save(artifactDir + "/windows-quality-" + platform.first + ".png"));
+        }
+        QCOMPARE(warnings.size(), 0);
     }
     void desktopThemesAndNavigation() {
         PlayerController controller;
@@ -321,6 +771,7 @@ private slots:
     void rankingsNavigationAndMotion() {
         PlaylistApiFixture mock; QVERIFY(mock.listen(QHostAddress::LocalHost));
         PlayerController controller; controller.setApiBase(mock.base());
+        controller.setSearchSources({"netease"});
         QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
         engine.rootContext()->setContextProperty("player", &controller);
         engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));

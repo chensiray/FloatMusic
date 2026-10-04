@@ -30,7 +30,7 @@ final class OverlayWindow {
     private ScaledFrame scaled;
     private ScrollView scroll, detailScroll;
     private LinearLayout shell, drawer, dynamic;
-    private TextView title, artist, time, volumeText, error, feedback, sourceInfo;
+    private TextView title, artist, time, volumeText, error, feedback, sourceInfo, qualityHint, qualitySources;
     private IconButton play, modeButton, lyricReturn;
     private FrameLayout popupLayer;
     private ScrollView lyricScroll;
@@ -44,6 +44,10 @@ final class OverlayWindow {
     private int activeLyric=-1;
     private SeekBar progress, volume;
     private Button lyricsTab, playlistTab, moreTab;
+    private Button searchButton, qualityButton;
+    private final ArrayList<CheckBox> searchSourceButtons=new ArrayList<>();
+    private JSONArray pendingSearchSources;
+    private boolean syncingSourceChoices=false, qualityMenuOpen=false;
     private EditText searchInput, apiInput, nameInput;
     private JSONObject playback=new JSONObject(), ui=new JSONObject();
     private String section="", detail="", searchDraft="", apiDraft=null, nameDraft="", rendered="";
@@ -61,8 +65,10 @@ final class OverlayWindow {
     private View popupFocusReturn;
     private int lyricMode=0, lyricFontSize=18;
     private boolean expanded=false, seeking=false, updating=false, closed=false, keyboard=false;
+    private boolean detailTouching=false, dynamicRefreshQueued=false;
     private float scale=1f;
     private static final int BASE_WIDTH=340;
+    private static final String[] SEARCH_SOURCE_IDS={"netease","tencent","kuwo"};
 
     OverlayWindow(PlaybackService service) {
         this.service=service; manager=(WindowManager)service.getSystemService(Context.WINDOW_SERVICE);
@@ -108,6 +114,7 @@ final class OverlayWindow {
     private TextView text(String content,int size,boolean secondary){
         TextView v=new TextView(service);v.setText(content);v.setTextSize(size);v.setTextColor(secondary?muted():ink());v.setFontFeatureSettings("kern");return v;
     }
+    private void textIfChanged(TextView view,String content){if(!content.contentEquals(view.getText()))view.setText(content);}
     private Button button(String name,Runnable action){
         Button b=new PressButton();b.setText(name);b.setTextSize(13);b.setAllCaps(false);b.setTextColor(ink());b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(0);b.setMinimumWidth(0);
         b.setPadding(dp(8),0,dp(8),0);b.setBackground(buttonBackground(false));b.setOnClickListener(v->action.run());return b;
@@ -125,6 +132,34 @@ final class OverlayWindow {
     private void send(String action,String value){PlayerBridge.event(action,value);}
     private void act(String action,String value){service.dispatch(action,value);}
     private JSONArray array(JSONObject data,String key){JSONArray a=data.optJSONArray(key);return a==null?new JSONArray():a;}
+    private static JSONArray searchSourceIds(JSONObject data){
+        JSONArray selected=data.optJSONArray("searchSources"),result=new JSONArray();
+        for(String source:SEARCH_SOURCE_IDS){
+            if(selected==null){result.put(source);continue;}
+            for(int i=0;i<selected.length();i++)if(source.equals(selected.optString(i))){result.put(source);break;}
+        }
+        return result;
+    }
+    private static String trackSourceName(JSONObject track){
+        String name=track.optString("sourceName");if(!name.isEmpty())return name;
+        String source=track.optString("source");
+        if(source.equals("netease"))return "网易云";
+        if(source.equals("tencent"))return "QQ音乐";
+        if(source.equals("kuwo"))return "酷我音乐";
+        return "本地";
+    }
+    private static String trackSubtitle(JSONObject track){String by=track.optString("artist");return trackSourceName(track)+(by.isEmpty()?"":" · "+by);}
+    private static String currentSourceName(JSONObject playback,JSONObject ui){
+        JSONObject track=playback.optJSONObject("loadedTrack");if(track!=null)return trackSourceName(track);
+        if(playback.optBoolean("busy"))return "";
+        return playback.optString("currentSourceName",ui.optString("currentSourceName"));
+    }
+    private static boolean qualitySelectable(JSONObject playback,JSONObject ui){
+        if(playback.has("qualitySelectable"))return playback.optBoolean("qualitySelectable");
+        if(ui.has("qualitySelectable"))return ui.optBoolean("qualitySelectable");
+        JSONObject track=playback.optJSONObject("loadedTrack");String source=track==null?"":track.optString("source");
+        return !source.equals("tencent")&&!source.equals("kuwo");
+    }
     private JSONObject args(Object... pairs){JSONObject value=new JSONObject();try{for(int i=0;i<pairs.length;i+=2)value.put((String)pairs[i],pairs[i+1]);}catch(JSONException ignored){}return value;}
     private void library(String action,JSONObject value){send("libraryAction",args("action",action,"args",value).toString());}
     private void notice(String message){if(feedback!=null){feedback.setText(message);feedback.setVisibility(View.VISIBLE);}Toast.makeText(service,message,Toast.LENGTH_SHORT).show();}
@@ -186,6 +221,7 @@ final class OverlayWindow {
         drawer=column();
         detailScroll=new ScrollView(service){
             @Override public boolean dispatchTouchEvent(MotionEvent event){
+                int action=event.getActionMasked();if(action==MotionEvent.ACTION_DOWN)detailTouching=true;
                 // Reserve the gesture before a clickable row handles DOWN; otherwise the
                 // outer card intercepts MOVE and the list never starts scrolling.
                 if(event.getActionMasked()==MotionEvent.ACTION_DOWN
@@ -193,7 +229,8 @@ final class OverlayWindow {
                     android.view.ViewParent parent=getParent();
                     if(parent!=null)parent.requestDisallowInterceptTouchEvent(true);
                 }
-                return super.dispatchTouchEvent(event);
+                try{return super.dispatchTouchEvent(event);}
+                finally{if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL){detailTouching=false;if(dynamicRefreshQueued){dynamicRefreshQueued=false;post(()->refreshDynamic());}}}
             }
             @Override protected void onMeasure(int w,int h){
                 int room=Math.max(dp(200),Math.min(dp(520),(int)(available().height()/scale)-dp(330)));
@@ -220,10 +257,9 @@ final class OverlayWindow {
     void update(JSONObject data){
         playback=data;
         if(!expanded || window==null)return;
-        if(sourceInfo!=null)sourceInfo.setText(data.optString("qualityInfo","播放在线歌曲后显示实际来源与格式。"));
+        updateQualityControls();
         updating=true;
-        title.setText(data.optString("title","选择一首音乐"));JSONObject track=data.optJSONObject("loadedTrack");
-        artist.setText(data.optBoolean("busy")?"正在加载…":track==null?"更多里搜索或导入音乐":track.optString("artist","本地音乐"));
+        title.setText(data.optString("title","选择一首音乐"));updateCurrentSource();
         boolean playing=data.optBoolean("playing");play.kind=playing?"pause":"play";play.setContentDescription(playing?"暂停":"播放");play.invalidate();play.setEnabled(data.optBoolean("ready")&&!data.optBoolean("busy"));
         modeButton.kind=data.optString("playbackMode","sequential");modeButton.setContentDescription("播放模式："+modeName(modeButton.kind));modeButton.invalidate();
         if(!seeking){progress.setMax(Math.max(1,data.optInt("duration")));progress.setProgress(data.optInt("position"));time.setText(clock(data.optInt("position"))+" / "+clock(data.optInt("duration")));}
@@ -232,6 +268,12 @@ final class OverlayWindow {
         String message=data.optString("error");error.setText(message.isEmpty()?"":message+"  点击重试");error.setVisibility(message.isEmpty()?View.GONE:View.VISIBLE);
         updating=false;
         updateLyrics(false);
+    }
+    private void updateCurrentSource(){
+        if(artist==null)return;JSONObject track=playback.optJSONObject("loadedTrack");String name=currentSourceName(playback,ui);
+        String by=track==null?"":track.optString("artist");String caption=name+(by.isEmpty()?"":(name.isEmpty()?"":" · ")+by);
+        if(playback.optBoolean("busy"))caption+=(caption.isEmpty()?"":" · ")+"正在加载…";
+        textIfChanged(artist,caption.isEmpty()?"更多里搜索或导入音乐":caption);
     }
     private void toggle(String name){
         hideKeyboard();rememberDrafts();clearSelection();section=section.equals(name)?"":name;detail="";buildDrawer();
@@ -248,6 +290,7 @@ final class OverlayWindow {
         if(drawer==null)return;
         stopReorder();
         dismissPopup();rememberDrafts();searchInput=null;apiInput=null;nameInput=null;dynamic=null;rendered="";
+        searchButton=null;searchSourceButtons.clear();qualityButton=null;qualityHint=null;qualitySources=null;
         selectionCount=null;playlistPicker=null;playlistDescription=null;
         lyricScroll=null;lyricViewport=null;lyricRows=null;lyricReturn=null;lyricMessage=null;lyricTexts.clear();activeLyric=-1;
         drawer.removeAllViews();sourceInfo=null;drawer.setVisibility(section.isEmpty()?View.GONE:View.VISIBLE);
@@ -312,6 +355,7 @@ final class OverlayWindow {
     }
     private static String modeName(String key){return key.equals("loop")?"列表循环":key.equals("single")?"单曲循环":key.equals("shuffle")?"随机播放":"顺序播放";}
     private void dismissPopup(){
+        qualityMenuOpen=false;
         if(popupLayer!=null){if(popupLayer.findFocus() instanceof EditText)hideKeyboard();popupLayer.removeAllViews();popupLayer.setBackgroundColor(Color.TRANSPARENT);popupLayer.setVisibility(View.GONE);}
         if(popupFocusReturn!=null&&popupFocusReturn.isAttachedToWindow())popupFocusReturn.requestFocus();popupFocusReturn=null;timingValue=null;
     }
@@ -417,12 +461,42 @@ final class OverlayWindow {
         return e;
     }
     private void buildSearch(){
-        detailHeader("搜索音乐");LinearLayout kinds=row();
+        detailHeader(searchKind.equals("songs")?"搜索音乐":"网易云歌单");LinearLayout kinds=row();
         for(String kind:new String[]{"songs","playlists"}){Button choice=button(kind.equals("songs")?"歌曲":"歌单",()->{rememberDrafts();hideKeyboard();searchKind=kind;buildDrawer();});boolean selected=searchKind.equals(kind);choice.setSelected(selected);choice.setBackground(buttonBackground(selected));choice.setTextColor(selected?accent():ink());weighted(kinds,choice,48);}add(drawer,kinds,48);gap(drawer,8);
+        if(searchKind.equals("songs")){
+            // Keep the existing palette and 36dp surfaces; all three native checkboxes
+            // share one 48dp touch row inside detailScroll, above the search field.
+            LinearLayout sources=row();String[] labels={"网易云","QQ音乐","酷我音乐"};
+            for(int i=0;i<SEARCH_SOURCE_IDS.length;i++){
+                final String source=SEARCH_SOURCE_IDS[i];CheckBox choice=new SourceCheckBox();
+                choice.setText(labels[i]);choice.setTextSize(12);choice.setTextColor(ink());choice.setSingleLine(true);choice.setEllipsize(TextUtils.TruncateAt.END);
+                choice.setMinHeight(dp(48));choice.setMinimumHeight(dp(48));choice.setMinWidth(0);choice.setMinimumWidth(0);choice.setPadding(dp(4),0,dp(4),0);
+                choice.setButtonTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{accent(),muted()}));
+                choice.setContentDescription(labels[i]+"曲库");choice.setBackground(buttonBackground(false));
+                choice.setOnCheckedChangeListener((v,checked)->{if(!syncingSourceChoices)toggleSearchSource(source,checked);});
+                searchSourceButtons.add(choice);weighted(sources,choice,48);
+            }add(drawer,sources,48);gap(drawer,8);
+        }
         searchInput=field(searchKind.equals("songs")?"输入歌名或歌手":"输入歌单关键词",searchDraft);searchInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);add(drawer,searchInput,48);gap(drawer,8);
-        Runnable submit=()->{searchDraft=searchInput.getText().toString().trim();hideKeyboard();if(searchDraft.isEmpty()){notice("请先输入搜索内容。");return;}if(searchKind.equals("playlists"))library("searchPlaylists",args("query",searchDraft));else send("search",searchDraft);};
-        searchInput.setOnEditorActionListener((v,a,e)->{if(a==EditorInfo.IME_ACTION_SEARCH){submit.run();return true;}return false;});add(drawer,button("搜索",submit),48);
+        Runnable submit=()->{searchDraft=searchInput.getText().toString().trim();if(searchKind.equals("songs")&&selectedSearchSources().length()==0){notice("勾选曲库后即可搜索歌曲。");return;}hideKeyboard();if(searchDraft.isEmpty()){notice("请先输入搜索内容。");return;}if(searchKind.equals("playlists"))library("searchPlaylists",args("query",searchDraft));else send("search",searchDraft);};
+        searchInput.setOnEditorActionListener((v,a,e)->{if(a==EditorInfo.IME_ACTION_SEARCH||(e!=null&&e.getKeyCode()==KeyEvent.KEYCODE_ENTER&&e.getAction()==KeyEvent.ACTION_DOWN)){submit.run();return true;}return false;});searchButton=button("搜索",submit);add(drawer,searchButton,48);updateSearchControls();
         dynamic=column();add(drawer,dynamic,-2);
+    }
+    private JSONArray selectedSearchSources(){return pendingSearchSources==null?searchSourceIds(ui):pendingSearchSources;}
+    private void toggleSearchSource(String source,boolean checked){
+        JSONArray current=selectedSearchSources(),next=new JSONArray();
+        for(String candidate:SEARCH_SOURCE_IDS){boolean selected=candidate.equals(source)?checked:false;if(!candidate.equals(source))for(int i=0;i<current.length();i++)if(candidate.equals(current.optString(i))){selected=true;break;}if(selected)next.put(candidate);}
+        pendingSearchSources=next;resultsPage=0;updateSearchControls();send("searchSources",next.toString());refreshDynamic();
+    }
+    private void updateSearchControls(){
+        if(searchButton==null)return;JSONArray sources=selectedSearchSources();syncingSourceChoices=true;
+        for(int i=0;i<searchSourceButtons.size();i++){
+            CheckBox choice=searchSourceButtons.get(i);boolean checked=false;for(int j=0;j<sources.length();j++)if(SEARCH_SOURCE_IDS[i].equals(sources.optString(j))){checked=true;break;}
+            if(choice.isChecked()!=checked)choice.setChecked(checked);
+            if(choice.isSelected()!=checked){choice.setSelected(checked);choice.setBackground(buttonBackground(checked));choice.setTextColor(checked?accent():ink());}
+        }syncingSourceChoices=false;
+        boolean loading=ui.optBoolean(searchKind.equals("songs")?"searching":"playlistSearching"),enabled=!loading&&(!searchKind.equals("songs")||sources.length()>0);
+        textIfChanged(searchButton,loading?"搜索中":"搜索");searchButton.setEnabled(enabled);searchButton.setAlpha(enabled?1f:.45f);
     }
     private void buildPlaylist(){
         playlistPicker=button("",this::showPlaylistPicker);playlistPicker.setMaxLines(2);playlistPicker.setEllipsize(TextUtils.TruncateAt.END);playlistPicker.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);playlistPicker.setTextSize(15);add(drawer,playlistPicker,48);
@@ -496,11 +570,11 @@ final class OverlayWindow {
     private boolean onlineCurrent(String id){JSONObject online=ui.optJSONObject("onlinePlaylist");if(online!=null&&!ui.optBoolean("onlinePlaylistLoading")&&id.equals(online.optString("id")))return true;notice("在线歌单已更新，请重新打开详情。");return false;}
     private void divider(LinearLayout parent){View line=new View(service);line.setBackgroundColor(color("#D5DEEB","#3A465A"));add(parent,line,1);}
     private void songRows(LinearLayout parent,JSONArray tracks,String source){
-        if(tracks.length()==0){hint(parent,source.equals("results")?"输入歌名，查找想听的音乐。":"这里还没有歌曲。可在更多中搜索或导入。");return;}
+        if(tracks.length()==0){hint(parent,source.equals("results")?(selectedSearchSources().length()==0?"勾选曲库后即可搜索歌曲。":"输入歌名，查找想听的音乐。") :"这里还没有歌曲。可在更多中搜索或导入。");return;}
         LinearLayout songs=column();add(parent,songs,-2);boolean local=source.equals("tracks");String sourceId=activePlaylist();JSONObject online=ui.optJSONObject("onlinePlaylist");String onlineId=online==null?"":online.optString("id");
         int page=Math.min(source.equals("tracks")?tracksPage:source.equals("results")?resultsPage:onlinePage,(tracks.length()-1)/SONG_PAGE_SIZE);setPage(source,page);int start=page*SONG_PAGE_SIZE;
         for(int i=start;i<Math.min(tracks.length(),start+SONG_PAGE_SIZE);i++){
-            final int index=i;JSONObject track=tracks.optJSONObject(i);if(track==null)continue;String id=track.optString("id"),name=track.optString("name"),by=track.optString("artist");
+            final int index=i;JSONObject track=tracks.optJSONObject(i);if(track==null)continue;String id=track.optString("id"),name=track.optString("name"),by=trackSubtitle(track);
             LinearLayout song=row();song.setTag(index);
             if(local&&selecting){CheckBox choice=new CheckBox(service);choice.setText(songCaption(name,by));choice.setTextColor(ink());choice.setTextSize(14);choice.setMaxLines(2);choice.setEllipsize(TextUtils.TruncateAt.END);choice.setButtonTintList(ColorStateList.valueOf(accent()));choice.setChecked(selectedIds.contains(id));choice.setContentDescription(name+"，"+by);choice.setPadding(0,0,dp(8),0);choice.setMinHeight(dp(48));choice.setOnCheckedChangeListener((v,checked)->{if(checked)selectedIds.add(id);else selectedIds.remove(id);updateSelectionCount();});choice.setOnLongClickListener(v->{showSelectionMenu();return true;});song.addView(choice,new LinearLayout.LayoutParams(-1,dp(48)));}
             else{
@@ -586,18 +660,35 @@ final class OverlayWindow {
         hint(drawer,"背景不透明度（文字和按钮保持清晰）");SeekBar opacity=slider();opacity.setMax(80);opacity.setProgress(Math.max(0,Math.min(80,prefs.getInt("opacity",100)-20)));add(drawer,opacity,48);
         opacity.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}public void onProgressChanged(SeekBar b,int n,boolean user){if(user){prefs.edit().putInt("opacity",20+n).apply();applyOpacity();}}});
         add(drawer,button("恢复大小、背景和位置",()->{prefs.edit().putInt("scale",100).putInt("opacity",100).putInt("x",dp(12)).putInt("y",dp(80)).apply();params.x=dp(12);params.y=dp(80);rebuild();}),48);
-        hint(drawer,"在线音质");String[] keys={"standard","higher","exhigh","lossless","hires"},labels={"标准","较高","极高","无损 FLAC","Hi-Res"};
-        for(int i=0;i<keys.length;i++){String key=keys[i];add(drawer,button((ui.optString("quality").equals(key)?"✓ ":"")+labels[i],()->send("quality",key)),48);gap(drawer,4);}
-        hint(drawer,"Hi-Res 为请求档位，实际音源可能回落。");
-        sourceInfo=hint(drawer,playback.optString("qualityInfo","播放在线歌曲后显示实际来源与格式。"));
-        hint(drawer,"内置播放来源：GD 音乐台、原接口、INJAHOW；不可用时自动尝试备用。GD 音乐台：music.gdstudio.xyz");
+        hint(drawer,"在线音质");qualityButton=button("",this::showQualityChoices);add(drawer,qualityButton,48);
+        qualityHint=hint(drawer,"Hi-Res 为请求档位，实际音源可能回落。");
+        sourceInfo=hint(drawer,"");qualitySources=hint(drawer,"");updateQualityControls();
         hint(drawer,"音频输出");JSONArray outputs=array(playback,"outputs");for(int i=0;i<outputs.length();i++){JSONObject output=outputs.optJSONObject(i);if(output==null)continue;String id=output.optString("id");add(drawer,button((playback.optString("selectedOutput").equals(id)?"✓ ":"")+output.optString("name"),()->{act("output",id);buildDrawer();}),48);gap(drawer,4);}
-        hint(drawer,"自定义音乐服务（留空使用内置）");apiInput=field("https://你的服务地址",apiDraft==null?ui.optString("api"):apiDraft);apiInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);add(drawer,apiInput,48);gap(drawer,8);
+        hint(drawer,"自定义音乐服务（仅影响网易云，留空使用内置）");apiInput=field("https://你的服务地址",apiDraft==null?ui.optString("api"):apiDraft);apiInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);add(drawer,apiInput,48);gap(drawer,8);
         LinearLayout apiActions=row();weighted(apiActions,button("保存地址",()->{apiDraft=apiInput.getText().toString();hideKeyboard();send("api",apiDraft);}),48);weighted(apiActions,button("恢复内置",()->{apiDraft="";apiInput.setText("");hideKeyboard();send("api","");}),48);add(drawer,apiActions,48);
-        hint(drawer,"浮音 0.8 · 悬浮播放");
+        hint(drawer,"浮音 0.9.0-preview · 悬浮播放");
+    }
+    private static String qualityLabel(String key){
+        if(key.equals("higher"))return "较高";if(key.equals("exhigh"))return "极高";if(key.equals("lossless"))return "无损 FLAC";if(key.equals("hires"))return "Hi-Res";return "标准";
+    }
+    private void showQualityChoices(){
+        if(!qualitySelectable(playback,ui)||playback.optBoolean("busy"))return;
+        LinearLayout choices=column();String[] keys={"standard","higher","exhigh","lossless","hires"};
+        for(String key:keys)menuItem(choices,(ui.optString("quality").equals(key)?"✓ ":"")+qualityLabel(key),()->{dismissPopup();if(qualitySelectable(playback,ui)&&!playback.optBoolean("busy"))send("quality",key);});
+        showPanel("在线音质",choices);qualityMenuOpen=popupLayer!=null&&popupLayer.getVisibility()==View.VISIBLE;
+    }
+    private void updateQualityControls(){
+        if(qualityButton==null)return;boolean selectable=qualitySelectable(playback,ui),enabled=selectable&&!playback.optBoolean("busy");
+        if(!enabled&&qualityMenuOpen)dismissPopup();
+        textIfChanged(qualityButton,selectable?qualityLabel(ui.optString("quality"))+"  ▾":"普通音质");qualityButton.setEnabled(enabled);qualityButton.setAlpha(enabled?1f:.45f);
+        qualityButton.setContentDescription(selectable?"在线音质，"+qualityLabel(ui.optString("quality"))+"，点击选择":"在线音质，普通音质，QQ音乐与酷我音乐固定使用普通音质");
+        qualityHint.setVisibility(selectable&&ui.optString("quality").equals("hires")?View.VISIBLE:View.GONE);
+        String info=playback.optString("qualityInfo",ui.optString("qualityInfo"));textIfChanged(sourceInfo,info.isEmpty()?"播放在线歌曲后显示实际来源与格式。":info);
+        textIfChanged(qualitySources,selectable?"网易云音源不可用时自动尝试备用。GD 音乐台：music.gdstudio.xyz / INJAHOW。":"QQ音乐、酷我音乐使用普通音质。");
     }
     void refreshData(JSONObject next){
         JSONObject previous=ui;ui=next;
+        if(pendingSearchSources!=null&&pendingSearchSources.toString().equals(searchSourceIds(next).toString()))pendingSearchSources=null;
         boolean apiChanged=!previous.optString("api").equals(next.optString("api"));if(apiChanged)rankingsRequested=false;
         if(!expanded || window==null)return;
         boolean switched=!previous.optString("activePlaylist").equals(next.optString("activePlaylist"));
@@ -606,9 +697,8 @@ final class OverlayWindow {
         if(!array(previous,"playlistResults").toString().equals(array(next,"playlistResults").toString()))playlistResultsPage=0;
         if(selecting){LinkedHashSet<String> valid=new LinkedHashSet<>();JSONArray tracks=array(ui,"tracks");for(int i=0;i<tracks.length();i++){JSONObject track=tracks.optJSONObject(i);if(track!=null)valid.add(track.optString("id"));}selectedIds.retainAll(valid);}
         boolean rebuildLists=section.equals("playlist")&&switched;
-        boolean rebuildSettings=section.equals("more")&&detail.equals("settings")&&!previous.optString("quality").equals(next.optString("quality"));
-        if(rebuildLists||rebuildSettings){int y=scroll.getScrollY();buildDrawer();if(rebuildLists)detailScroll.scrollTo(0,0);scroll.post(()->scroll.scrollTo(0,y));}
-        updatePlaylistHeader();updateSelectionCount();
+        if(rebuildLists){int y=scroll.getScrollY();buildDrawer();detailScroll.scrollTo(0,0);scroll.post(()->scroll.scrollTo(0,y));}
+        updatePlaylistHeader();updateSelectionCount();updateSearchControls();updateQualityControls();updateCurrentSource();
         if(feedback!=null){feedback.setText(feedbackMessage());feedback.setVisibility(feedbackMessage().isEmpty()?View.GONE:View.VISIBLE);}
         refreshDynamic();
         if(apiChanged&&section.equals("more")&&detail.equals("rankings"))ensureRankings();
@@ -620,14 +710,15 @@ final class OverlayWindow {
             return;
         }
         if(dynamic==null||dragReorder!=null)return;
+        if(detailTouching){dynamicRefreshQueued=true;return;}
         String signature=section+detail+searchKind;
         if(section.equals("playlist"))signature+=array(ui,"tracks").toString()+selecting;
-        else if(detail.equals("search"))signature+=searchKind.equals("songs")?array(ui,"results").toString()+ui.optString("searchMessage")+ui.optBoolean("searching"):array(ui,"playlistResults").toString()+ui.optString("playlistSearchMessage")+ui.optBoolean("playlistSearching");
+        else if(detail.equals("search"))signature+=searchKind.equals("songs")?array(ui,"results").toString()+ui.optString("searchMessage")+ui.optBoolean("searching")+selectedSearchSources().toString()+(pendingSearchSources!=null):array(ui,"playlistResults").toString()+ui.optString("playlistSearchMessage")+ui.optBoolean("playlistSearching");
         else if(detail.equals("rankings"))signature+=array(ui,"rankings").toString()+ui.optBoolean("rankingsLoading")+ui.optString("rankingsMessage");
         else if(detail.equals("online"))signature+=ui.optString("onlinePlaylist")+ui.optBoolean("onlinePlaylistLoading")+requestedOnlineId+onlineSource;
         if(signature.equals(rendered))return;rendered=signature;int scrollY=detailScroll.getScrollY();dynamic.removeAllViews();
         if(section.equals("playlist")){songRows(dynamic,array(ui,"tracks"),"tracks");updateSelectionCount();}
-        else if(detail.equals("search")){boolean songs=searchKind.equals("songs");hint(dynamic,ui.optBoolean(songs?"searching":"playlistSearching")?"正在搜索…":ui.optString(songs?"searchMessage":"playlistSearchMessage"));if(songs)songRows(dynamic,array(ui,"results"),"results");else playlistResults(dynamic);}
+        else if(detail.equals("search")){boolean songs=searchKind.equals("songs"),waiting=songs&&pendingSearchSources!=null;hint(dynamic,waiting?"":ui.optBoolean(songs?"searching":"playlistSearching")?"正在搜索…":ui.optString(songs?"searchMessage":"playlistSearchMessage"));if(songs)songRows(dynamic,waiting?new JSONArray():array(ui,"results"),"results");else playlistResults(dynamic);}
         else if(detail.equals("rankings"))rankingRows(dynamic);
         else if(detail.equals("online"))onlineRows(dynamic);
         detailScroll.post(()->{if(detailScroll!=null)detailScroll.scrollTo(0,scrollY);});
@@ -690,6 +781,11 @@ final class OverlayWindow {
         @Override public boolean onTouchEvent(MotionEvent event){pressFeedback(this,event.getActionMasked(),true);return super.onTouchEvent(event);}
         @Override protected void onDetachedFromWindow(){resetPress(this);super.onDetachedFromWindow();}
         @Override public void setEnabled(boolean enabled){super.setEnabled(enabled);if(!enabled)resetPress(this);}
+    }
+    private final class SourceCheckBox extends CheckBox {
+        SourceCheckBox(){super(service);}
+        @Override public boolean onTouchEvent(MotionEvent event){pressFeedback(this,event.getActionMasked(),true);return super.onTouchEvent(event);}
+        @Override protected void onDetachedFromWindow(){resetPress(this);super.onDetachedFromWindow();}
     }
     private final class PressRow extends LinearLayout {
         PressRow(){super(service);}

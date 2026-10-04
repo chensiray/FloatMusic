@@ -43,6 +43,9 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList searchResults READ searchResults NOTIFY searchChanged)
     Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
     Q_PROPERTY(QString searchMessage READ searchMessage NOTIFY searchChanged)
+    Q_PROPERTY(QStringList searchSources READ searchSources WRITE setSearchSources NOTIFY searchSourcesChanged)
+    Q_PROPERTY(QString currentSourceName READ currentSourceName NOTIFY changed)
+    Q_PROPERTY(bool qualitySelectable READ qualitySelectable NOTIFY changed)
     Q_PROPERTY(QString apiBase READ apiBase NOTIFY searchChanged)
     Q_PROPERTY(QString quality READ quality NOTIFY changed)
     Q_PROPERTY(QString qualityInfo READ qualityInfo NOTIFY changed)
@@ -96,6 +99,10 @@ public:
     QVariantList searchResults() const { return m_searchResults; }
     bool searching() const { return m_searching; }
     QString searchMessage() const { return m_searchMessage; }
+    QStringList searchSources() const { return m_searchSources; }
+    void setSearchSources(const QStringList &sources);
+    QString currentSourceName() const;
+    bool qualitySelectable() const { return !m_online || m_loadedTrack.value("source").toString() == "netease"; }
     QString apiBase() const { return m_api.baseUrl(); }
     QString quality() const { return m_quality; }
     QString qualityInfo() const;
@@ -158,6 +165,7 @@ signals:
     void onlinePlaylistChanged();
     void libraryMessageChanged();
     void searchChanged();
+    void searchSourcesChanged();
     void lyricsChanged();
     void lyricLinesChanged();
     void favoritesChanged();
@@ -203,6 +211,7 @@ private:
     PlaylistStore m_library;
     MusicApi m_api;
     QVariantList m_searchResults;
+    QStringList m_searchSources;
     QString m_currentTrack, m_searchMessage;
     bool m_searching = false, m_autoplay = false, m_resolving = false, m_importing = false, m_online = false;
     int m_loadGeneration = 0;

@@ -36,6 +36,7 @@ Parsed parse(const QString &text) {
     }
     const auto songs = root.value("tracks").toArray();
     if (songs.size() > 10000) { result.error = QStringLiteral("每次最多导入 10000 首歌曲，请分拆文件。"); return result; }
+    static const QRegularExpression midPattern("^[A-Za-z0-9]{1,64}$");
     QVariantList tracks; QSet<QString> seen;
     for (const auto &value : songs) {
         const auto raw = value.toObject();
@@ -43,11 +44,13 @@ Parsed parse(const QString &text) {
         QString name = raw.value("name").toString().trimmed().left(300);
         const QString source = raw.value("source").toString();
         if (name.isEmpty()) { ++result.skipped; continue; }
-        if (source == "netease") {
+        if (source == "netease" || source == "tencent" || source == "kuwo") {
             QString id = raw.value("songId").toVariant().toString();
-            if (id.isEmpty() && raw.value("id").toString().startsWith("netease:")) id = raw.value("id").toString().mid(8);
-            if (!idPattern.match(id).hasMatch()) { ++result.skipped; continue; }
-            track = {{"id", "netease:" + id}, {"source", source}, {"songId", id}};
+            const QString prefix = source + ':';
+            if (id.isEmpty() && raw.value("id").toString().startsWith(prefix)) id = raw.value("id").toString().mid(prefix.size());
+            const bool validId = source == "tencent" ? midPattern.match(id).hasMatch() : idPattern.match(id).hasMatch();
+            if (!validId) { ++result.skipped; continue; }
+            track = {{"id", prefix + id}, {"source", source}, {"songId", id}};
         } else if (source == "local") {
             const QString path = raw.value("path").toString();
             QFile file(path); const QFileInfo info(path);

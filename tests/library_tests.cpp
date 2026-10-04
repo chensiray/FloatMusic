@@ -221,7 +221,7 @@ private slots:
         MockApi mock(15); QVERIFY(mock.listen(QHostAddress::LocalHost)); mock.gdStatus=503; mock.legacyStatus=523;
         MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",500};
         endpoints.gdStudio=mock.base()+"/gd"; endpoints.injahow=mock.base()+"/meting";
-        PlayerController player(endpoints); player.setApiBase(""); player.setQuality("standard");
+        PlayerController player(endpoints); player.setSearchSources({"netease"}); player.setApiBase(""); player.setQuality("standard");
         player.search("Fallback track"); QTRY_VERIFY(!player.searching()); player.playSearchResult(0);
         QTRY_VERIFY_WITH_TIMEOUT(!player.busy(),5000); QVERIFY2(player.error().isEmpty(),qPrintable(player.error())); QTRY_VERIFY(player.playing());
         QVERIFY(player.qualityInfo().contains("INJAHOW"));
@@ -233,7 +233,7 @@ private slots:
     void decoderFailureTriesNextSource() {
         MockApi mock(15); QVERIFY(mock.listen(QHostAddress::LocalHost)); mock.corruptGdAudio=true; mock.legacyStatus=523;
         MusicApi::Endpoints endpoints{mock.base(),mock.base()+"/api/1/",500};endpoints.gdStudio=mock.base()+"/gd";endpoints.injahow=mock.base()+"/meting";
-        PlayerController player(endpoints);player.setApiBase("");player.search("Corrupt source");QTRY_VERIFY(!player.searching());
+        PlayerController player(endpoints);player.setSearchSources({"netease"});player.setApiBase("");player.search("Corrupt source");QTRY_VERIFY(!player.searching());
         player.playSearchResult(0);QTRY_VERIFY_WITH_TIMEOUT(player.playing(),6000);
         QVERIFY2(player.error().isEmpty(),qPrintable(player.error()));QVERIFY(player.qualityInfo().contains("INJAHOW"));
         QCOMPARE(player.currentTrack(),QString("netease:101"));
@@ -367,6 +367,7 @@ private slots:
     }
     void directPlaybackQualityAndLyrics() {
         MockApi mock(12); QVERIFY(mock.listen(QHostAddress::LocalHost)); PlayerController player;
+        player.setSearchSources({"netease"});
         QVERIFY2(player.metaObject()->indexOfProperty("quality") >= 0, "Missing quality selection");
         player.setApiBase(mock.base()); player.search("Network track"); QTRY_VERIFY(!player.searching());
         const auto count = player.tracks().size();
@@ -420,7 +421,7 @@ private slots:
     void staleLyricsAndFailedQualityKeepPlaying() {
         MockApi mock(12); QVERIFY(mock.listen(QHostAddress::LocalHost)); mock.firstLyricDelay=1600;
         PlayerController player(MusicApi::Endpoints{mock.base(),mock.base()+"/api/1/",3000});
-        player.setApiBase(""); player.setQuality("standard"); player.search("two songs"); QTRY_VERIFY(!player.searching());
+        player.setSearchSources({"netease"}); player.setApiBase(""); player.setQuality("standard"); player.search("two songs"); QTRY_VERIFY(!player.searching());
         player.playSearchResult(0); QTRY_VERIFY(player.playing());
         player.playSearchResult(1); QTRY_COMPARE(player.currentTrack(),QString("netease:102")); QTRY_VERIFY(player.playing());
         QTRY_VERIFY(player.lyrics().contains("original-102")); QTest::qWait(1700);
@@ -434,7 +435,7 @@ private slots:
     }
     void liveBuiltinWindows() {
         if (!qEnvironmentVariableIsSet("FLOATMUSIC_LIVE_TESTS")) QSKIP("Live network test is opt-in.");
-        PlayerController player; player.setApiBase(""); player.setQuality("standard"); player.setVolume(0);
+        PlayerController player; player.setSearchSources({"netease"}); player.setApiBase(""); player.setQuality("standard"); player.setVolume(0);
         player.search(QStringLiteral("海阔天空")); QTRY_VERIFY_WITH_TIMEOUT(!player.searching(),20000);
         QVERIFY2(!player.searchResults().isEmpty(),qPrintable(player.searchMessage()));
         int chosen=0;
@@ -464,6 +465,7 @@ private slots:
     }
     void streamingQueueAndLocalPersistence() {
         MockApi mock; QVERIFY(mock.listen(QHostAddress::LocalHost)); PlayerController player;
+        player.setSearchSources({"netease"});
         player.createPlaylist("Playback tests"); player.setApiBase(mock.base()); player.search("Network track");
         QTRY_VERIFY(!player.searching()); QCOMPARE(player.searchResults().size(),3);
         player.addSearchResult(0); player.addSearchResult(0); player.addSearchResult(1); QCOMPARE(player.tracks().size(),2);

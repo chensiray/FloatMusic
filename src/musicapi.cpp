@@ -25,6 +25,50 @@ bool validId(const QString &id) {
     static const QRegularExpression pattern("^[1-9][0-9]{0,18}$");
     return pattern.match(id).hasMatch();
 }
+bool validPlatformId(const QString &source, const QString &id) {
+    static const QRegularExpression mid("^[A-Za-z0-9]{1,64}$");
+    return source == "tencent" ? mid.match(id).hasMatch()
+        : (source == "netease" || source == "kuwo") && validId(id);
+}
+QString platformName(const QString &source) {
+    if (source == "tencent") return QStringLiteral("QQ 音乐");
+    if (source == "kuwo") return QStringLiteral("酷我音乐");
+    return QStringLiteral("网易云音乐");
+}
+QJsonObject providerObject(const QByteArray &bytes, const QString &source, QString &error) {
+    QJsonParseError parse;
+    const auto doc = QJsonDocument::fromJson(bytes, &parse);
+    if (parse.error != QJsonParseError::NoError || !doc.isObject()) {
+        error = QStringLiteral("服务返回的 JSON 格式无效。"); return {};
+    }
+    const auto json = doc.object();
+    const bool success = source == "tencent" ? json.value("code").toInt(-1) == 0 : json.value("ok").toBool();
+    if (!success) error = QStringLiteral("服务暂未返回可用内容，歌曲可能受权限限制或来源暂不可用。");
+    return json;
+}
+QString singerNames(const QJsonValue &value) {
+    if (value.isString()) return value.toString().trimmed().left(1000);
+    QStringList singers;
+    for (const auto &entry : value.toArray()) {
+        const QString name = entry.isString() ? entry.toString() : entry.toObject().value("name").toString();
+        if (!name.trimmed().isEmpty()) singers.append(name.trimmed());
+    }
+    return singers.join(" / ").left(1000);
+}
+QString wordTimedToLrc(const QString &value) {
+    static const QRegularExpression line("^\\[(\\d+),(\\d+)\\](.*)$"), word("\\(\\d+,\\d+,\\d+\\)");
+    QStringList lines;
+    for (const auto &raw : value.split('\n')) {
+        const auto match = line.match(raw.trimmed());
+        if (!match.hasMatch()) continue;
+        const qint64 ms = match.captured(1).toLongLong();
+        QString text = match.captured(3); text.remove(word);
+        if (!text.trimmed().isEmpty()) lines.append(QString("[%1:%2.%3]%4")
+            .arg(ms / 60000, 2, 10, QChar('0')).arg(ms / 1000 % 60, 2, 10, QChar('0'))
+            .arg(ms % 1000, 3, 10, QChar('0')).arg(text));
+    }
+    return lines.join('\n');
+}
 QString jsonId(const QJsonValue &value) {
     const QString id = value.isString() ? value.toString() : QString::number(value.toInteger(-1));
     return validId(id) ? id : QString();
@@ -40,7 +84,7 @@ QVariantMap songTrack(const QJsonObject &song) {
         if (!artistName.isEmpty()) artists.append(artistName);
     }
     return {{"id", "netease:" + id}, {"songId", id}, {"source", "netease"},
-            {"name", name}, {"artist", artists.join(" / ")}};
+            {"name", name}, {"artist", artists.join(" / ")}, {"sourceName", platformName("netease")}};
 }
 QUrl withQuery(QUrl url, const QList<QPair<QString, QString>> &query) {
     QUrlQuery params;
@@ -80,6 +124,8 @@ MusicApi::Endpoints MusicApi::builtinEndpoints() {
     Endpoints endpoints;
     endpoints.gdStudio = "https://music-api.gdstudio.xyz/api.php";
     endpoints.injahow = "https://api.injahow.cn/meting/";
+    endpoints.vkeys = "https://api.vkeys.cn";
+    endpoints.ourcraft = "https://music.yuncan.xyz/api";
     return endpoints;
 }
 MusicApi::MusicApi(QObject *parent) : MusicApi(builtinEndpoints(), parent) {}
@@ -100,6 +146,8 @@ bool MusicApi::setBaseUrl(const QString &value) {
     m_audioCooldown.clear();
     if (m_audioReply) m_audioReply->abort();
     if (m_searchReply) m_searchReply->abort();
+    for (const auto &reply : std::as_const(m_searchReplies)) if (reply) reply->abort();
+    m_searchReplies.clear();
     if (m_playlistSearchReply) m_playlistSearchReply->abort();
     if (m_rankingsReply) m_rankingsReply->abort();
     QSettings().setValue("netease/apiBase", m_base);
@@ -115,7 +163,9 @@ QNetworkReply *MusicApi::get(const QUrl &url, const QString &operation, std::fun
     QNetworkRequest req(url);
     req.setTransferTimeout(m_endpoints.timeoutMs);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    req.setRawHeader("User-Agent", "FloatMusic/0.8");
+    req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
+    req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
+    req.setRawHeader("User-Agent", "FloatMusic/0.9");
     auto *reply = m_network.get(req);
     reply->setReadBufferSize(64 * 1024);
     struct Response { QByteArray body; bool oversized = false, timedOut = false; };
@@ -158,33 +208,75 @@ QJsonObject MusicApi::parseJson(const QByteArray &bytes, QString &error) {
     return object;
 }
 void MusicApi::search(const QString &keywords) {
+    search(keywords, {"netease"});
+}
+void MusicApi::search(const QString &keywords, const QStringList &sources) {
     const int ticket = ++m_searchGeneration;
     if (m_searchReply) m_searchReply->abort();
-    if (keywords.trimmed().isEmpty()) { emit results({}, {}); return; }
-    const bool builtin = m_base.isEmpty();
-    m_searchReply = get(endpoint(builtin ? "/api/search/get" : "/cloudsearch",
-        {{builtin ? "s" : "keywords", keywords.trimmed()}, {"type", "1"}, {"offset", "0"}, {"limit", "30"}}),
-        QStringLiteral("搜索"), [this, ticket](QByteArray bytes, QString error) {
+    for (const auto &reply : std::as_const(m_searchReplies)) if (reply) reply->abort();
+    m_searchReplies.clear();
+    QStringList selected;
+    for (const auto &source : sources)
+        if (QStringList{"netease", "tencent", "kuwo"}.contains(source) && !selected.contains(source)) selected.append(source);
+    if (keywords.trimmed().isEmpty() || selected.isEmpty()) { emit results({}, {}); return; }
+    struct Batch { int remaining = 0; QStringList order; QHash<QString, QVariantList> tracks; QHash<QString, QString> errors; };
+    const auto batch = std::make_shared<Batch>(); batch->remaining = selected.size(); batch->order = selected;
+    const auto complete = [this, batch, ticket](const QString &source, QVariantList tracks, QString error) {
         if (ticket != m_searchGeneration) return;
-        QJsonObject json;
-        if (error.isEmpty()) json = parseJson(bytes, error);
-        QVariantList tracks;
-        if (error.isEmpty()) {
-            const auto result = json.value("result").toObject();
-            if (!result.value("songs").isArray() && result.value("songCount").toInt(-1) != 0)
-                error = QStringLiteral("搜索响应缺少歌曲列表，请重试或检查 API 服务。");
-            for (const auto &value : result.value("songs").toArray()) {
-                const auto song = value.toObject(); const QString id = QString::number(song.value("id").toInteger());
-                if (!validId(id) || song.value("name").toString().isEmpty()) continue;
-                QStringList artists;
-                const auto array = song.contains("ar") ? song.value("ar").toArray() : song.value("artists").toArray();
-                for (const auto &artist : array) artists << artist.toObject().value("name").toString();
-                tracks << QVariantMap{{"id", "netease:" + id}, {"songId", id}, {"source", "netease"},
-                    {"name", song.value("name").toString()}, {"artist", artists.join(" / ")}};
-            }
+        batch->tracks[source] = tracks; batch->errors[source] = error;
+        if (--batch->remaining) return;
+        QVariantList combined; QStringList warnings;
+        for (const auto &platform : batch->order) {
+            combined.append(batch->tracks.value(platform));
+            if (!batch->errors.value(platform).isEmpty()) warnings.append(platformName(platform) + QStringLiteral("：") + batch->errors.value(platform));
         }
-        emit results(tracks, error);
-    });
+        m_searchReplies.clear(); emit results(combined, warnings.join('\n'));
+    };
+    for (const auto &source : selected) {
+        QUrl url;
+        if (source == "netease") {
+            const bool builtin = m_base.isEmpty();
+            url = endpoint(builtin ? "/api/search/get" : "/cloudsearch",
+                {{builtin ? "s" : "keywords", keywords.trimmed()}, {"type", "1"}, {"offset", "0"}, {"limit", "30"}});
+        } else if (source == "tencent" && !m_endpoints.vkeys.isEmpty())
+            url = withQuery(QUrl(m_endpoints.vkeys + "/music/tencent/search/song"), {{"keyword", keywords.trimmed()}, {"page", "1"}, {"limit", "30"}});
+        else if (source == "kuwo" && !m_endpoints.ourcraft.isEmpty())
+            url = withQuery(QUrl(m_endpoints.ourcraft), {{"server", "kuwo"}, {"type", "search"}, {"id", keywords.trimmed()}, {"limit", "30"}});
+        if (!validHttpUrl(url)) { complete(source, {}, QStringLiteral("该曲库未配置搜索服务。")); continue; }
+        auto *reply = get(url, QStringLiteral("搜索"), [this, source, complete](QByteArray bytes, QString error) {
+            QJsonObject json;
+            if (error.isEmpty()) json = source == "netease" ? parseJson(bytes, error) : providerObject(bytes, source, error);
+            QJsonArray songs;
+            if (error.isEmpty()) {
+                QJsonValue list;
+                if (source == "netease") {
+                    const auto result = json.value("result").toObject(); list = result.value("songs");
+                    if (!list.isArray() && result.value("songCount").toInt(-1) == 0) list = QJsonArray{};
+                } else if (source == "tencent") list = json.value("data").toObject().value("list");
+                else list = json.value("songs");
+                if (!list.isArray()) error = QStringLiteral("搜索响应缺少歌曲列表，请重试或检查音乐服务。");
+                else songs = list.toArray();
+            }
+            QVariantList tracks; QSet<QString> seen;
+            for (const auto &value : songs) {
+                const auto song = value.toObject(); QVariantMap track;
+                if (source == "netease") track = songTrack(song);
+                else {
+                    const QString id = source == "tencent" ? song.value("songMID").toString() : jsonId(song.value("id"));
+                    const QString name = song.value(source == "tencent" ? "title" : "name").toString().trimmed().left(1000);
+                    if (!validPlatformId(source, id) || name.isEmpty()) continue;
+                    track = {{"id", source + ':' + id}, {"source", source}, {"songId", id}, {"name", name},
+                        {"artist", singerNames(song.value("singer"))}, {"sourceName", platformName(source)}};
+                }
+                const QString id = track.value("id").toString();
+                if (id.isEmpty() || seen.contains(id)) continue;
+                seen.insert(id); tracks.append(track);
+                if (tracks.size() >= 30) break;
+            }
+            complete(source, tracks, error);
+        });
+        m_searchReplies.append(reply); if (source == "netease") m_searchReply = reply;
+    }
 }
 void MusicApi::searchPlaylists(const QString &query) {
     const int ticket = ++m_playlistSearchGeneration;
@@ -417,16 +509,26 @@ struct MusicApi::AudioFetch {
     struct Source { QString id, name, format; QUrl request; };
     QList<Source> sources;
     int index = 0, generation = 0;
+    bool qualitySelectable = true;
     QElapsedTimer elapsed;
     QStringList errors;
     std::function<void(Audio, QString)> done;
 };
 
+bool MusicApi::hasAudioBackups(const QString &source) const {
+    if (source == "netease") return hasAudioBackups();
+    if (source == "tencent") return !m_endpoints.vkeys.isEmpty() || !m_endpoints.injahow.isEmpty();
+    if (source == "kuwo") return !m_endpoints.ourcraft.isEmpty();
+    return false;
+}
+
 void MusicApi::audioRequest(const QUrl &url, bool sample, int timeoutMs, std::function<void(QByteArray, QUrl, QString)> done) {
     QNetworkRequest request(url);
     request.setTransferTimeout(timeoutMs);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setRawHeader("User-Agent", "FloatMusic/0.8");
+    request.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
+    request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
+    request.setRawHeader("User-Agent", "FloatMusic/0.9");
     if (sample) request.setRawHeader("Range", "bytes=0-63");
     auto *reply = m_network.get(request); m_audioReply = reply;
     reply->setReadBufferSize(16 * 1024);
@@ -441,7 +543,7 @@ void MusicApi::audioRequest(const QUrl &url, bool sample, int timeoutMs, std::fu
         if (sample && data->bytes.size() >= 16) { data->sampled = true; data->bytes.truncate(64); reply->abort(); }
         else if (data->bytes.size() > limit) { data->oversized = true; reply->abort(); }
     });
-    connect(reply, &QNetworkReply::finished, this, [reply, timer, data, sample, done] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, timer, data, sample, done, timeoutMs, url] {
         timer->stop();
         if (reply->isOpen() && !data->sampled && !data->oversized) data->bytes += reply->readAll();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -451,22 +553,50 @@ void MusicApi::audioRequest(const QUrl &url, bool sample, int timeoutMs, std::fu
         else if (data->oversized || data->bytes.size() > (sample ? 64 : 64 * 1024)) error = QStringLiteral("响应过大");
         else if (reply->error() != QNetworkReply::NoError && !(sample && data->sampled)) error = QStringLiteral("连接失败，请检查网络或系统代理");
         else if (sample && !audioHeader(data->bytes)) error = QStringLiteral("地址已失效或返回的不是音频");
-        const QUrl finalUrl = reply->url(); reply->deleteLater();
+        const QUrl finalUrl = reply->url();
+        const QUrl redirect = finalUrl.resolved(reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl());
+        const bool blockedQqDowngrade = sample && reply->error() == QNetworkReply::InsecureRedirectError
+            && url.scheme() == "https" && redirect.scheme() == "http"
+            && QStringList{"aqqmusic.tc.qq.com", "ws.stream.qqmusic.qq.com", "isure.stream.qqmusic.qq.com"}.contains(redirect.host())
+            && redirect.userInfo().isEmpty();
+        reply->deleteLater();
+        // INJAHOW may return a HTTP QQ CDN redirect. Validate the exact HTTPS equivalent;
+        // do not relax the global redirect policy or discard signed query parameters.
+        if (blockedQqDowngrade) {
+            QUrl secure = redirect; secure.setScheme("https");
+            if (secure != url) { audioRequest(secure, true, timeoutMs, done); return; }
+        }
         done(data->bytes, finalUrl, error);
     });
 }
 
 void MusicApi::resolveAudio(const QString &songId, const QString &quality, std::function<void(Audio, QString)> done, const QStringList &excluded) {
-    if (!validId(songId) || !validQuality(quality)) { done({}, QStringLiteral("歌曲 ID 或音质参数无效。")); return; }
+    resolveAudio("netease", songId, quality, std::move(done), excluded);
+}
+void MusicApi::resolveAudio(const QString &platform, const QString &songId, const QString &quality,
+                            std::function<void(Audio, QString)> done, const QStringList &excluded) {
+    if (!validPlatformId(platform, songId) || !validQuality(quality)) { done({}, QStringLiteral("歌曲来源、ID 或音质参数无效。")); return; }
     const auto state = std::make_shared<AudioFetch>();
     state->generation = ++m_audioGeneration;
+    state->qualitySelectable = platform == "netease";
     if (m_audioReply) m_audioReply->abort();
     state->done = std::move(done); state->elapsed.start();
     const auto add = [&](QString id, QString name, QString format, QUrl request) {
         if (!excluded.contains(id)) state->sources.append({id, name, format, request});
     };
     const QList<QPair<QString, QString>> query{{"id", songId}, {"level", quality}};
-    if (!m_base.isEmpty()) add("custom", QStringLiteral("自定义服务"), "custom", endpoint("/song/url/v1", query));
+    if (platform == "tencent") {
+        if (!m_endpoints.vkeys.isEmpty()) add("qq-vkeys", QStringLiteral("QQ 音乐 · 落月普通音质"), "vkeys",
+            withQuery(QUrl(m_endpoints.vkeys + "/music/tencent/song/link"), {{"mid", songId}, {"quality", "4"}, {"type", "0"}}));
+        if (!m_endpoints.injahow.isEmpty()) add("qq-injahow", QStringLiteral("QQ 音乐 · INJAHOW 普通音质"), "meting",
+            withQuery(QUrl(m_endpoints.injahow), {{"server", "tencent"}, {"type", "song"}, {"id", songId}}));
+    } else if (platform == "kuwo") {
+        if (!m_endpoints.ourcraft.isEmpty()) {
+            const auto request = withQuery(QUrl(m_endpoints.ourcraft), {{"server", "kuwo"}, {"type", "url"}, {"id", songId}, {"json", "1"}});
+            add("kuwo-origin", QStringLiteral("酷我音乐 · 原始音频"), "kuwo-origin", request);
+            add("kuwo-proxy", QStringLiteral("酷我音乐 · 中转备用"), "kuwo-proxy", request);
+        }
+    } else if (!m_base.isEmpty()) add("custom", QStringLiteral("自定义服务"), "custom", endpoint("/song/url/v1", query));
     else {
         const QHash<QString, QString> bitrates{{"standard", "128"}, {"higher", "192"}, {"exhigh", "320"}, {"lossless", "740"}, {"hires", "999"}};
         if (!m_endpoints.gdStudio.isEmpty()) add("gd", QStringLiteral("GD 音乐台"), "gd", withQuery(QUrl(m_endpoints.gdStudio),
@@ -484,8 +614,10 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
         state->errors.append(state->sources[state->index].name + QStringLiteral("：暂不可用，稍后重试")); ++state->index;
     }
     if (state->index >= state->sources.size() || state->elapsed.elapsed() >= 24000) {
-        state->done({}, QStringLiteral("暂未取得可播放音频。%1。请检查网络后重试或更换音质。")
-            .arg(state->errors.isEmpty() ? QStringLiteral("没有更多可用来源") : state->errors.join(QStringLiteral("；")))); return;
+        const QString recovery = state->qualitySelectable
+            ? QStringLiteral("请检查网络后重试或更换音质。") : QStringLiteral("请检查网络后重试或尝试其他歌曲。");
+        state->done({}, QStringLiteral("暂未取得可播放音频。%1。%2")
+            .arg(state->errors.isEmpty() ? QStringLiteral("没有更多可用来源") : state->errors.join(QStringLiteral("；")), recovery)); return;
     }
     const auto source = state->sources[state->index++];
     if (source.id == "gd") {
@@ -509,7 +641,23 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
             if (parse.error == QJsonParseError::NoError) {
                 if (source.format == "gd" && doc.isObject()) { address = doc.object().value("url").toString(); bitrate = doc.object().value("br").toInt(); }
                 else if (source.format == "meting" && doc.isArray() && !doc.array().isEmpty()) address = doc.array().first().toObject().value("url").toString();
-                else if (source.format == "custom" && doc.object().value("code").toInt() == 200) {
+                else if (source.format == "vkeys" && doc.isObject() && doc.object().value("code").toInt(-1) == 0) {
+                    const auto data = doc.object().value("data").toObject(); address = data.value("url").toString();
+                    static const QRegularExpression digits("[0-9]+");
+                    bitrate = digits.match(data.value("kbps").toString()).captured().toInt();
+                } else if (source.format.startsWith("kuwo-") && doc.isObject() && doc.object().value("ok").toBool()) {
+                    const QUrl supplied(doc.object().value("url").toString(), QUrl::StrictMode);
+                    const QUrl provider(m_endpoints.ourcraft);
+                    const bool wrapped = validHttpUrl(supplied) && supplied.scheme() == provider.scheme() && supplied.host() == provider.host()
+                        && supplied.port() == provider.port() && supplied.path() == "/proxy";
+                    if (source.format == "kuwo-proxy") {
+                        if (wrapped) address = supplied.toString(QUrl::FullyEncoded);
+                    } else if (!wrapped) address = supplied.toString(QUrl::FullyEncoded);
+                    else {
+                        const QUrl origin(QUrlQuery(supplied).queryItemValue("url", QUrl::FullyDecoded), QUrl::StrictMode);
+                        if (validHttpUrl(origin)) address = origin.toString(QUrl::FullyEncoded);
+                    }
+                } else if (source.format == "custom" && doc.object().value("code").toInt() == 200) {
                     const auto array = doc.object().value("data").toArray();
                     if (!array.isEmpty()) address = array.first().toObject().value("url").toString();
                 }
@@ -530,7 +678,38 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
     });
 }
 void MusicApi::fetchLyrics(const QString &songId, std::function<void(Lyrics, QString)> done) {
-    if (!validId(songId)) { done({}, QStringLiteral("歌曲 ID 无效。")); return; }
+    fetchLyrics("netease", songId, std::move(done));
+}
+void MusicApi::fetchLyrics(const QString &source, const QString &songId, std::function<void(Lyrics, QString)> done) {
+    if (!validPlatformId(source, songId)) { done({}, QStringLiteral("歌曲来源或 ID 无效。")); return; }
+    if (source == "kuwo") {
+        if (m_endpoints.ourcraft.isEmpty()) { done({}, QStringLiteral("酷我歌词服务未配置。")); return; }
+        get(withQuery(QUrl(m_endpoints.ourcraft), {{"server", "kuwo"}, {"type", "lrc"}, {"id", songId}}),
+            QStringLiteral("获取酷我歌词"), [done](QByteArray bytes, QString error) {
+            const QString original = QString::fromUtf8(bytes).trimmed();
+            if (error.isEmpty() && (original.isEmpty() || original.startsWith('<') || original.startsWith('{')))
+                error = QStringLiteral("该歌曲暂未取得歌词。");
+            done({error.isEmpty() ? original : QString(), {}, false}, error);
+        });
+        return;
+    }
+    if (source == "tencent") {
+        if (m_endpoints.vkeys.isEmpty()) { fetchMetingLyrics(source, songId, std::move(done)); return; }
+        get(withQuery(QUrl(m_endpoints.vkeys + "/v2/music/tencent/lyric"), {{"mid", songId}}), QStringLiteral("获取 QQ 歌词"),
+            [this, source, songId, done](QByteArray bytes, QString error) {
+            QJsonParseError parse; const auto doc = QJsonDocument::fromJson(bytes, &parse);
+            Lyrics lyrics;
+            if (error.isEmpty() && parse.error == QJsonParseError::NoError && doc.isObject() && doc.object().value("code").toInt() == 200) {
+                const auto data = doc.object().value("data").toObject();
+                lyrics.original = data.value("lrc").toString();
+                if (lyrics.original.trimmed().isEmpty()) lyrics.original = wordTimedToLrc(data.value("yrc").toString());
+                lyrics.translation = data.value("trans").toString();
+            }
+            if (!lyrics.original.trimmed().isEmpty()) done(lyrics, {});
+            else fetchMetingLyrics(source, songId, done);
+        });
+        return;
+    }
     get(endpoint(m_base.isEmpty() ? "/api/song/lyric" : "/lyric", {{"id", songId}, {"tv", "-1"}, {"lv", "-1"}}),
         QStringLiteral("获取歌词"), [done](QByteArray bytes, QString error) {
         if (!error.isEmpty()) { done({}, error); return; }
@@ -539,5 +718,30 @@ void MusicApi::fetchLyrics(const QString &songId, std::function<void(Lyrics, QSt
             error = QStringLiteral("歌词响应格式错误，请重试。");
         done({json.value("lrc").toObject().value("lyric").toString(),
               json.value("tlyric").toObject().value("lyric").toString(), json.value("nolyric").toBool()}, error);
+    });
+}
+
+void MusicApi::fetchMetingLyrics(const QString &source, const QString &songId, std::function<void(Lyrics, QString)> done) {
+    if (m_endpoints.injahow.isEmpty()) { done({}, QStringLiteral("该歌曲暂未取得歌词。")); return; }
+    get(withQuery(QUrl(m_endpoints.injahow), {{"server", source}, {"type", "song"}, {"id", songId}}),
+        QStringLiteral("获取备用歌词"), [this, done](QByteArray bytes, QString error) {
+        if (!error.isEmpty()) { done({}, error); return; }
+        QJsonParseError parse; const auto doc = QJsonDocument::fromJson(bytes, &parse);
+        const auto rows = doc.array();
+        const QUrl lyricUrl(rows.isEmpty() ? QString() : rows.first().toObject().value("lrc").toString(), QUrl::StrictMode);
+        if (parse.error != QJsonParseError::NoError || !doc.isArray() || !validHttpUrl(lyricUrl)) {
+            done({}, QStringLiteral("该歌曲暂未取得歌词。")); return;
+        }
+        get(lyricUrl, QStringLiteral("获取备用歌词"), [done](QByteArray lyricBytes, QString lyricError) {
+            Lyrics lyrics; lyrics.original = QString::fromUtf8(lyricBytes).trimmed();
+            const auto lyricDoc = QJsonDocument::fromJson(lyricBytes);
+            if (lyricDoc.isObject()) {
+                lyrics.original = lyricDoc.object().value("lyric").toString();
+                lyrics.translation = lyricDoc.object().value("tlyric").toString();
+            }
+            if (lyricError.isEmpty() && (lyrics.original.trimmed().isEmpty() || lyrics.original.startsWith('<') || lyrics.original.startsWith('{')))
+                lyricError = QStringLiteral("该歌曲暂未取得歌词。");
+            done(lyricError.isEmpty() ? lyrics : Lyrics{}, lyricError);
+        });
     });
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(FloatMusic VERSION 0.8.0 LANGUAGES CXX)
+project(FloatMusic VERSION 0.9.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Concurrent Network)
@@ -20,8 +20,8 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
         QT_ANDROID_MIN_SDK_VERSION 28
         QT_ANDROID_TARGET_SDK_VERSION 36
-        QT_ANDROID_VERSION_CODE 11
-        QT_ANDROID_VERSION_NAME "0.8.0-preview.2"
+        QT_ANDROID_VERSION_CODE 12
+        QT_ANDROID_VERSION_NAME "0.9.0-preview"
         QT_ANDROID_APP_NAME "浮音 · 功能验证")
 endif()
 option(FLOATMUSIC_TESTS "Build import policy tests (desktop only)" OFF)
@@ -48,4 +48,18 @@ if(FLOATMUSIC_TESTS AND NOT ANDROID)
     target_link_libraries(instance_tests PRIVATE Qt6::Test Qt6::Network)
     add_test(NAME single_instance COMMAND instance_tests -o instance-tests.txt,txt)
     set_tests_properties(search_and_playlists single_instance PROPERTIES TIMEOUT 90)
+    qt_add_executable(multisource_api_tests tests/multisource_api_tests.cpp src/musicapi.cpp src/musicapi.h)
+    target_include_directories(multisource_api_tests PRIVATE src)
+    target_link_libraries(multisource_api_tests PRIVATE Qt6::Test Qt6::Network)
+    add_test(NAME multisource_api COMMAND multisource_api_tests -o multisource-api-tests.txt,txt)
+    qt_add_executable(playlistdocument_tests tests/playlistdocument_tests.cpp src/playlistdocument.cpp src/playlistdocument.h src/playliststore.cpp src/playliststore.h src/audiofilepolicy.cpp src/audiofilepolicy.h)
+    target_include_directories(playlistdocument_tests PRIVATE src)
+    target_link_libraries(playlistdocument_tests PRIVATE Qt6::Test)
+    add_test(NAME mixed_playlist_documents COMMAND playlistdocument_tests -o playlistdocument-tests.txt,txt)
+    qt_add_executable(multisource_controller_tests tests/multisource_controller_tests.cpp ${PLAYER_SOURCES})
+    target_include_directories(multisource_controller_tests PRIVATE src)
+    target_link_libraries(multisource_controller_tests PRIVATE Qt6::Test Qt6::Multimedia Qt6::Concurrent Qt6::Network)
+    add_test(NAME multisource_controller COMMAND multisource_controller_tests -o multisource-controller-tests.txt,txt)
+    set_target_properties(multisource_api_tests playlistdocument_tests multisource_controller_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    set_tests_properties(multisource_api mixed_playlist_documents multisource_controller PROPERTIES TIMEOUT 90)
 endif()
