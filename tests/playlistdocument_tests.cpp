@@ -102,6 +102,34 @@ private slots:
         }
         QCOMPARE(PlaylistDocument::parse("https://music.163.com/#/playlist?id=42").onlineId, QString("42"));
     }
+    void publicPlaylistLinksKeepTheirPlatform_data() {
+        QTest::addColumn<QString>("text");
+        QTest::addColumn<QString>("id");
+        QTest::newRow("netease-numeric") << QString("42") << QString("42");
+        QTest::newRow("netease-share") << QStringLiteral("推荐：https://music.163.com/#/playlist?id=42&uid=100") << QString("42");
+        QTest::newRow("qq-desktop") << QString("https://y.qq.com/n/ryqq/playlist/7593082970") << QString("tencent:playlist:7593082970");
+        QTest::newRow("qq-mobile") << QString("https://y.qq.com/n/m/detail/taoge/index.html?id=7593082970") << QString("tencent:playlist:7593082970");
+        QTest::newRow("qq-mobile-share") << QString("https://i.y.qq.com/n2/m/share/details/taoge.html?id=7593082970&ADTAG=copy") << QString("tencent:playlist:7593082970");
+        QTest::newRow("kuwo-desktop") << QString("https://www.kuwo.cn/playlist_detail/3677150229") << QString("kuwo:playlist:3677150229");
+        QTest::newRow("kuwo-mobile") << QString("https://m.kuwo.cn/h5app/playlist/3677150229") << QString("kuwo:playlist:3677150229");
+    }
+    void publicPlaylistLinksKeepTheirPlatform() {
+        QFETCH(QString, text); QFETCH(QString, id);
+        const auto parsed = PlaylistDocument::parse(text);
+        QVERIFY2(parsed.error.isEmpty(), qPrintable(parsed.error));
+        QCOMPARE(parsed.onlineId, id);
+        QVERIFY(parsed.playlist.isEmpty());
+    }
+    void rejectsUnrelatedLinksAndInvalidContainerIds() {
+        for (const auto &link : {"https://y.qq.com.example/n/ryqq/playlist/42",
+             "https://example.com/https://music.163.com/playlist?id=42",
+             "https://y.qq.com/n/ryqq/songDetail/42", "https://www.kuwo.cn/play_detail/42",
+             "https://y.qq.com/n/ryqq/playlist/0", "https://www.kuwo.cn/playlist_detail/-1"}) {
+            const auto parsed = PlaylistDocument::parse(link);
+            QVERIFY2(!parsed.error.isEmpty(), link);
+            QVERIFY(parsed.onlineId.isEmpty());
+        }
+    }
     void localAudioAndOnlineSongsCanRoundTripTogether() {
         QTemporaryDir files; QVERIFY(files.isValid());
         QFile audio(files.filePath("sample.wav")); QVERIFY(audio.open(QIODevice::WriteOnly));

@@ -66,7 +66,7 @@ ApplicationWindow {
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: "浮音 0.9.0-preview.2 · 桌面预览"
+    title: "浮音 1.0.0-preview · 桌面预览"
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -152,6 +152,7 @@ ApplicationWindow {
         return player.activePlaylist === id
     }
     function startSearch() {
+        if (player.searchSources.length === 0 || (searchKind === "songs" ? player.searching : player.playlistSearching)) return
         showingOnlinePlaylist = false
         if (searchKind === "playlists") player.libraryAction("searchPlaylists", { query: keywords.text })
         else player.search(keywords.text)
@@ -161,7 +162,16 @@ ApplicationWindow {
         var sources = player.searchSources.slice(), at = sources.indexOf(source)
         if (at >= 0) sources.splice(at, 1); else sources.push(source)
         player.searchSources = sources
-        Qt.callLater(function() { results.positionViewAtBeginning() })
+        Qt.callLater(function() { (root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning() })
+    }
+    function musicSourceName(source) {
+        if (source === "netease") return "网易云"
+        if (source === "tencent") return "QQ音乐"
+        if (source === "kuwo") return "酷我音乐"
+        return "在线音乐"
+    }
+    function onlineSourceName(resource) {
+        return resource.sourceName || musicSourceName(resource.source || "netease")
     }
     function trackSourceName(track) {
         if (track.sourceName) return track.sourceName
@@ -1048,23 +1058,23 @@ ApplicationWindow {
                                             Layout.fillWidth: true
                                             Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail = "" }
                                             Item { Layout.fillWidth: true }
-                                            Copy { text: root.searchKind === "songs" ? "搜索音乐" : "网易云歌单"; font.weight: Font.DemiBold }
+                                            Copy { text: root.searchKind === "songs" ? "搜索音乐" : "搜索歌单"; font.weight: Font.DemiBold }
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 6
                                             Action { text: "歌曲"; selected: root.searchKind === "songs"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "songs" }
                                             Action { text: "歌单"; selected: root.searchKind === "playlists"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "playlists" }
                                         }
-                                        RowLayout {
-                                            visible: root.searchKind === "songs"; Layout.fillWidth: true; spacing: 6
-                                            SourceChoice { objectName: "searchSourceNetease"; sourceId: "netease"; text: "网易云"; Layout.fillWidth: true }
-                                            SourceChoice { objectName: "searchSourceTencent"; sourceId: "tencent"; text: "QQ音乐"; Layout.fillWidth: true }
-                                            SourceChoice { objectName: "searchSourceKuwo"; sourceId: "kuwo"; text: "酷我音乐"; Layout.fillWidth: true }
+                                        Flow {
+                                            objectName: "searchSourceChoices"; Layout.fillWidth: true; spacing: 6
+                                            SourceChoice { objectName: "searchSourceNetease"; sourceId: "netease"; text: "网易云" }
+                                            SourceChoice { objectName: "searchSourceTencent"; sourceId: "tencent"; text: "QQ音乐" }
+                                            SourceChoice { objectName: "searchSourceKuwo"; sourceId: "kuwo"; text: "酷我音乐" }
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 6
                                             Field { id: keywords; objectName: "searchInput"; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: root.searchKind === "songs" ? "输入歌名或歌手" : "输入歌单名称"; Accessible.name: placeholderText; onAccepted: root.startSearch() }
-                                            Action { objectName: "searchButton"; glyph: "search"; text: (root.searchKind === "songs" ? player.searching : player.playlistSearching) ? "搜索中" : "搜索"; enabled: root.searchKind === "songs" ? !player.searching && player.searchSources.length > 0 : !player.playlistSearching; onClicked: root.startSearch() }
+                                            Action { objectName: "searchButton"; glyph: "search"; text: (root.searchKind === "songs" ? player.searching : player.playlistSearching) ? "搜索中" : "搜索"; enabled: player.searchSources.length > 0 && !(root.searchKind === "songs" ? player.searching : player.playlistSearching); onClicked: root.startSearch() }
                                         }
                                         Hint { text: root.searchKind === "songs" ? player.searchMessage : player.playlistSearchMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                                     }
@@ -1097,21 +1107,21 @@ ApplicationWindow {
                                             delegate: PressRow {
                                                 id: onlineResult
                                                 required property var modelData
-                                                width: playlistResults.width - 10; height: 78
-                                                Accessible.name: modelData.name + "，" + modelData.trackCount + " 首，查看歌单"
+                                                width: playlistResults.width - 10; height: Math.max(78, contentItem.implicitHeight + 20)
+                                                Accessible.name: root.onlineSourceName(modelData) + "，" + modelData.name + "，" + modelData.trackCount + " 首，查看歌单"
                                                 contentItem: ColumnLayout {
                                                     spacing: 4
                                                     scale: onlineResult.visualScale
                                                     Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: onlineResult.down ? 80 : 150; easing.type: Easing.OutCubic } }
-                                                    Copy { text: onlineResult.modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold }
-                                                    Copy { text: onlineResult.modelData.trackCount + " 首" + (onlineResult.modelData.creator ? " · " + onlineResult.modelData.creator : ""); Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+                                                    Copy { text: onlineResult.modelData.name; Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold; wrapMode: Text.Wrap; maximumLineCount: 2 }
+                                                    Copy { objectName: "playlistResultMetadata"; text: root.onlineSourceName(onlineResult.modelData) + " · " + onlineResult.modelData.trackCount + " 首" + (onlineResult.modelData.creator ? " · " + onlineResult.modelData.creator : ""); Layout.fillWidth: true; Layout.minimumWidth: 0; wrapMode: Text.Wrap; maximumLineCount: 2; color: root.muted; font.pixelSize: 12 }
                                                     Copy { text: onlineResult.modelData.description || "暂无简介"; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
                                                 }
                                                 onClicked: root.openOnlinePlaylist(modelData.id, "search")
                                             }
                                             footer: Item {
                                                 width: playlistResults.width; height: playlistResults.count === 0 ? 80 : 0
-                                                Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: playlistResults.count === 0; text: player.playlistSearching ? "正在查找歌单…" : "输入歌单名称，发现想听的音乐" }
+                                                Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: playlistResults.count === 0; text: player.playlistSearching ? "正在查找歌单…" : player.searchSources.length === 0 ? "勾选曲库后即可搜索歌单" : "输入歌单名称，发现想听的音乐" }
                                             }
                                         }
                                     }
@@ -1228,6 +1238,20 @@ ApplicationWindow {
                                         Hint { text: "当前："+player.outputName }
                                         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
                                         Copy { text: "音乐服务"; font.weight: Font.DemiBold }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 8
+                                            Copy { text: "搜索显示数量"; Layout.fillWidth: true }
+                                            Choice {
+                                                id: searchLimitSelector; objectName: "searchResultLimitSelector"
+                                                Layout.preferredWidth: 104; implicitHeight: 32
+                                                Accessible.name: "搜索显示数量"
+                                                property var limits: [10, 20, 30, 50, 100]
+                                                model: ["10 条", "20 条", "30 条", "50 条", "100 条"]
+                                                Binding { target: searchLimitSelector; property: "currentIndex"; value: searchLimitSelector.limits.indexOf(player.searchResultLimit) }
+                                                onActivated: function(index) { player.searchResultLimit = limits[index] }
+                                            }
+                                        }
+                                        Hint { objectName: "searchResultLimitHint"; text: "所选曲库合计最多显示 " + player.searchResultLimit + " 条结果，歌曲与歌单共用；修改后从下次搜索生效。" }
                                         Hint { text: player.apiBase.length===0 ? "网易云使用内置接口；QQ 音乐、酷我音乐按搜索中的勾选查询。" : "自定义地址仅用于网易云；QQ 音乐、酷我音乐仍按勾选查询。" }
                                         Field {
                                             id: apiAddress; objectName: "apiAddress"; Layout.fillWidth: true
@@ -1240,7 +1264,7 @@ ApplicationWindow {
                                         }
                                         Hint { text: player.searchMessage; visible: text.length>0 }
                                         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
-                                        Copy { text: "浮音 0.9.0-preview.2 · Windows"; font.weight: Font.DemiBold }
+                                        Copy { text: "浮音 1.0.0-preview · Windows"; font.weight: Font.DemiBold }
                                         Hint { text: "拖动顶部移动窗口，减号收为图标。\n更多中的“退出浮音”会停止播放并退出。\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起" }
                                     }
                                 }
@@ -1251,9 +1275,33 @@ ApplicationWindow {
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 6
                                             Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail = "" }
-                                            Copy { text: "网易云排行榜"; font.pixelSize: 16; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                                            Copy { text: "排行榜"; font.pixelSize: 16; font.weight: Font.DemiBold; Layout.fillWidth: true }
                                             Action { objectName: "refreshRankings"; glyph: "refresh"; text: player.rankingsLoading ? "刷新中" : "刷新"; quiet: true; enabled: !player.rankingsLoading; Accessible.name: "刷新排行榜"; onClicked: player.libraryAction("loadRankings", {}) }
                                         }
+                                        Flow {
+                                            objectName: "rankingSourceChoices"; Layout.fillWidth: true; spacing: 6
+                                            Repeater {
+                                                model: ["netease", "tencent", "kuwo"]
+                                                Action {
+                                                    required property string modelData
+                                                    objectName: "rankingSource_" + modelData
+                                                    implicitWidth: 90; implicitHeight: 30; padding: 6; quiet: true
+                                                    text: root.musicSourceName(modelData)
+                                                    selected: player.rankingSource === modelData
+                                                    glyph: selected ? "check" : ""
+                                                    Accessible.name: text + "排行榜"
+                                                    Accessible.role: Accessible.RadioButton
+                                                    Accessible.checkable: true; Accessible.checked: selected
+                                                    onClicked: {
+                                                        if (player.rankingSource !== modelData) {
+                                                            player.libraryAction("loadRankings", { source: modelData })
+                                                            rankingResults.positionViewAtBeginning()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Copy { objectName: "rankingSourceLabel"; text: root.musicSourceName(player.rankingSource) + "排行榜"; color: root.accent; font.pixelSize: 12; Layout.fillWidth: true }
                                         Hint { text: "选择榜单，听听此刻的热门与新声。" }
                                         RowLayout {
                                             visible: player.rankingsMessage.length > 0; Layout.fillWidth: true; spacing: 8
@@ -1273,9 +1321,9 @@ ApplicationWindow {
                                         delegate: PressRow {
                                             id: rankingResult
                                             required property var modelData
-                                            width: rankingResults.width - 12; height: emphasized ? 82 : 76
+                                            width: rankingResults.width - 12; height: Math.max(emphasized ? 82 : 76, contentItem.implicitHeight + 20)
                                             emphasized: root.isFeaturedRanking(modelData.name)
-                                            Accessible.name: modelData.name + (modelData.updateFrequency ? "，" + modelData.updateFrequency : "") + (modelData.trackCount >= 0 ? "，" + modelData.trackCount + " 首" : "") + "，查看榜单"
+                                            Accessible.name: root.onlineSourceName(modelData) + "，" + modelData.name + (modelData.updateFrequency ? "，" + modelData.updateFrequency : "") + (modelData.trackCount >= 0 ? "，" + modelData.trackCount + " 首" : "") + "，查看榜单"
                                             contentItem: RowLayout {
                                                 spacing: 12; scale: rankingResult.visualScale
                                                 Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: rankingResult.down ? 80 : 150; easing.type: Easing.OutCubic } }
@@ -1286,8 +1334,8 @@ ApplicationWindow {
                                                 }
                                                 ColumnLayout {
                                                     Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
-                                                    Copy { text: rankingResult.modelData.name; Layout.fillWidth: true; font.pixelSize: 14; font.weight: Font.DemiBold }
-                                                    Copy { text: (rankingResult.modelData.updateFrequency || "") + (rankingResult.modelData.trackCount >= 0 ? (rankingResult.modelData.updateFrequency ? " · " : "") + rankingResult.modelData.trackCount + " 首" : ""); visible: text.length > 0; Layout.fillWidth: true; color: rankingResult.emphasized ? root.accent : root.muted; font.pixelSize: 12 }
+                                                    Copy { text: rankingResult.modelData.name; Layout.fillWidth: true; Layout.minimumWidth: 0; font.pixelSize: 14; font.weight: Font.DemiBold; wrapMode: Text.Wrap; maximumLineCount: 2 }
+                                                    Copy { objectName: "rankingResultMetadata"; text: root.onlineSourceName(rankingResult.modelData) + (rankingResult.modelData.updateFrequency ? " · " + rankingResult.modelData.updateFrequency : "") + (rankingResult.modelData.trackCount >= 0 ? " · " + rankingResult.modelData.trackCount + " 首" : ""); Layout.fillWidth: true; Layout.minimumWidth: 0; wrapMode: Text.Wrap; maximumLineCount: 2; color: rankingResult.emphasized ? root.accent : root.muted; font.pixelSize: 12 }
                                                     Copy { text: rankingResult.modelData.description || rankingResult.modelData.creator || "点击查看榜单歌曲"; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
                                                 }
                                                 Glyph { kind: "forward"; tint: root.muted; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
@@ -1316,10 +1364,11 @@ ApplicationWindow {
                                             RowLayout {
                                                 Layout.fillWidth: true; spacing: 6
                                                 Action { glyph: "back"; quiet: true; Accessible.name: root.onlinePlaylistSource === "rankings" ? "返回排行榜" : "返回歌单搜索结果"; ToolTip.text: Accessible.name; onClicked: root.closeOnlinePlaylist() }
-                                                Copy { text: player.onlinePlaylistLoading ? "读取歌单…" : (player.onlinePlaylist.name || "歌单详情"); Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold }
+                                                Copy { objectName: "onlinePlaylistTitle"; text: player.onlinePlaylistLoading ? "读取歌单…" : (player.onlinePlaylist.name || "歌单详情"); Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold; wrapMode: Text.Wrap; maximumLineCount: 3 }
                                                 Action { glyph: "import"; text: "导入"; enabled: !player.onlinePlaylistLoading && !!player.onlinePlaylist.tracks && player.onlinePlaylist.tracks.length > 0; onClicked: root.showOnlineImport() }
                                             }
-                                            Copy { text: (player.onlinePlaylist.trackCount || 0) + " 首" + (onlineTracks.count !== (player.onlinePlaylist.trackCount || 0) ? " · 已读取 " + onlineTracks.count + " 首" : ""); color: root.accent; font.pixelSize: 12 }
+                                            Copy { objectName: "onlinePlaylistMetadata"; text: root.onlineSourceName(player.onlinePlaylist) + (player.onlinePlaylist.kind === "ranking" || root.onlinePlaylistSource === "rankings" ? " · 榜单" : " · 歌单") + " · " + (player.onlinePlaylist.trackCount || 0) + " 首" + (onlineTracks.count !== (player.onlinePlaylist.trackCount || 0) ? " · 已读取 " + onlineTracks.count + " 首" : ""); Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.accent; font.pixelSize: 12 }
+                                            Hint { objectName: "onlinePlaylistCreator"; text: (player.onlinePlaylist.creator || "") + (player.onlinePlaylist.updateFrequency ? (player.onlinePlaylist.creator ? " · " : "") + player.onlinePlaylist.updateFrequency : ""); visible: text.length > 0 }
                                             Hint { text: player.onlinePlaylist.description || "暂无简介"; maximumLineCount: 5; elide: Text.ElideRight }
                                             Hint { text: player.onlinePlaylist.warning || ""; visible: text.length > 0; color: root.danger }
                                             Hint { text: player.onlinePlaylistLoading ? "正在读取歌单与歌曲…" : player.libraryMessage; visible: text.length > 0 }
@@ -1440,7 +1489,7 @@ ApplicationWindow {
         property var targets: []
         Copy { text: "导入到" }
         Choice { id: importTarget; Layout.fillWidth: true; model: importSheet.targets; textRole: "name"; valueRole: "id"; Accessible.name: "导入目标歌单" }
-        Hint { text: "支持歌单 JSON 文件或文本，也可粘贴网易云歌单链接 / ID。已有歌曲会自动跳过。" }
+        Hint { text: "支持歌单 JSON，也可粘贴网易云、QQ 或酷我歌单链接；数字 ID 默认按网易云读取。已有歌曲会自动跳过。" }
         RowLayout {
             Layout.fillWidth: true; spacing: 8
             Action { text: "选择文件"; Layout.fillWidth: true; enabled: importTarget.currentIndex >= 0; onClicked: { playlistImportFile.targetId = importTarget.currentValue; importSheet.close(); playlistImportFile.open() } }
@@ -1452,7 +1501,7 @@ ApplicationWindow {
             TextArea {
                 id: importText; selectByMouse: true; wrapMode: TextEdit.Wrap; textFormat: TextEdit.PlainText
                 color: root.ink; placeholderTextColor: root.muted; selectionColor: root.accent; selectedTextColor: root.accentInk
-                placeholderText: "粘贴 JSON、网易云歌单链接或 ID"; Accessible.name: "歌单导入内容"; padding: 10
+                placeholderText: "粘贴 JSON 或网易云 / QQ / 酷我歌单链接"; Accessible.name: "歌单导入内容"; padding: 10
                 background: Rectangle { color: root.backdrop; radius: 8; border.color: importText.activeFocus ? root.accent : root.fieldBorder; border.width: importText.activeFocus ? 2 : 1 }
             }
         }

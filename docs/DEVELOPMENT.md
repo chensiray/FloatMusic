@@ -43,11 +43,15 @@ Android 当前构建的是调试包。正式分发所需的签名、密钥保管
 
 ## 测试
 
-Windows 构建脚本运行七组 CTest：导入策略、播放器与界面、API 与歌单、单实例、多曲库 API、混合歌单文档、多曲库控制器。测试使用独立测试数据目录；网易云专项 fixture 明确选择单库，多曲库 fixture 显式配置本地服务，默认不访问公网。
+Windows 构建脚本运行八组 CTest：导入策略、播放器与界面、API 与歌单、单实例、多曲库 API、平台歌单与榜单协议、混合歌单文档、多曲库控制器。测试使用独立测试数据目录；网易云专项 fixture 明确选择单库，多曲库 fixture 显式配置本地服务，默认不访问公网。
 
 0.8 在用户追加授权后完成四组 CTest，全部通过；新增排行榜回归及欢迎页横竖屏截图检查，单独实测排行榜与热歌榜读取。范围与限制见[QtTest 验证记录](QtTest-0.8-验证记录.md)及[验证说明](../VERIFICATION.md)。配置和构建时也应将终端工作目录切换到英文暂存路径，避免工具对中文当前目录的兼容问题。
 
 Qt Quick 界面使用 `player_tests -platform offscreen` 和 `QT_QUICK_BACKEND=software` 离屏渲染，设置 `FLOATMUSIC_TEST_ARTIFACTS` 可保存截图。排行榜联网检查需显式设置 `FLOATMUSIC_LIVE_TESTS=1`，仅运行 `library_tests liveRankings`；默认 CTest 跳过联网检查。
+
+1.0 新增 `catalog_api_tests`，使用本地 HTTP 夹具验证 QQ POST、酷我非标准对象与 AES 客户端协议、分页、平台身份、合计搜索上限、过期请求、超时和读取上限。真实歌单/榜单元数据检查使用 `FLOATMUSIC_LIVE_CATALOGS=1` 并运行 `catalog_api_tests liveCatalogSmoke`，不涉及登录、付费或音频播放；该测试默认跳过。
+
+Android 1.0 桥接回归运行 `tests/android/run-overlay-v1-contract-test.ps1`；真实原生悬浮页测试运行 `run-overlay-v1-ui-test.ps1 -DeviceSerial <序列号> -Screenshots`，包含曲库选择、数量设置、榜单平台和来源信息。必须明确选择已连接测试设备，不能把 Java 编译通过当作真机布局验证。
 
 `tests/live_api` 是单独的真实接口探测工具，不属于默认离线测试；使用方法见该目录 README。真实服务结果只代表测试时状态。
 

@@ -36,6 +36,7 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList rankings READ rankings NOTIFY rankingsChanged)
     Q_PROPERTY(bool rankingsLoading READ rankingsLoading NOTIFY rankingsChanged)
     Q_PROPERTY(QString rankingsMessage READ rankingsMessage NOTIFY rankingsChanged)
+    Q_PROPERTY(QString rankingSource READ rankingSource NOTIFY rankingsChanged)
     Q_PROPERTY(QVariantMap onlinePlaylist READ onlinePlaylist NOTIFY onlinePlaylistChanged)
     Q_PROPERTY(bool onlinePlaylistLoading READ onlinePlaylistLoading NOTIFY onlinePlaylistChanged)
     Q_PROPERTY(QString libraryMessage READ libraryMessage NOTIFY libraryMessageChanged)
@@ -44,6 +45,7 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
     Q_PROPERTY(QString searchMessage READ searchMessage NOTIFY searchChanged)
     Q_PROPERTY(QStringList searchSources READ searchSources WRITE setSearchSources NOTIFY searchSourcesChanged)
+    Q_PROPERTY(int searchResultLimit READ searchResultLimit WRITE setSearchResultLimit NOTIFY searchSettingsChanged)
     Q_PROPERTY(QString currentSourceName READ currentSourceName NOTIFY changed)
     Q_PROPERTY(bool qualitySelectable READ qualitySelectable NOTIFY changed)
     Q_PROPERTY(QString apiBase READ apiBase NOTIFY searchChanged)
@@ -91,6 +93,7 @@ public:
     QVariantList rankings() const { return m_rankings; }
     bool rankingsLoading() const { return m_rankingsLoading; }
     QString rankingsMessage() const { return m_rankingsMessage; }
+    QString rankingSource() const { return m_rankingSource; }
     QVariantMap onlinePlaylist() const { return m_onlinePlaylist; }
     bool onlinePlaylistLoading() const { return m_onlinePlaylistLoading; }
     QString libraryMessage() const { return m_libraryMessage; }
@@ -101,6 +104,8 @@ public:
     QString searchMessage() const { return m_searchMessage; }
     QStringList searchSources() const { return m_searchSources; }
     void setSearchSources(const QStringList &sources);
+    int searchResultLimit() const { return m_searchResultLimit; }
+    void setSearchResultLimit(int limit);
     QString currentSourceName() const;
     bool qualitySelectable() const { return !m_online || m_loadedTrack.value("source").toString() == "netease"; }
     QString apiBase() const { return m_api.baseUrl(); }
@@ -166,6 +171,7 @@ signals:
     void libraryMessageChanged();
     void searchChanged();
     void searchSourcesChanged();
+    void searchSettingsChanged();
     void lyricsChanged();
     void lyricLinesChanged();
     void favoritesChanged();
@@ -192,6 +198,8 @@ private:
     QVariantList m_playlistResults;
     QVariantList m_rankings;
     QString m_rankingsMessage;
+    QString m_rankingSource = "netease";
+    int m_rankingsRequest = 0;
     bool m_rankingsLoading = false;
     QVariantMap m_onlinePlaylist;
     QString m_playlistSearchMessage, m_libraryMessage;
@@ -212,6 +220,7 @@ private:
     MusicApi m_api;
     QVariantList m_searchResults;
     QStringList m_searchSources;
+    int m_searchResultLimit = 30;
     QString m_currentTrack, m_searchMessage;
     bool m_searching = false, m_autoplay = false, m_resolving = false, m_importing = false, m_online = false;
     int m_loadGeneration = 0;

@@ -23,6 +23,10 @@ public:
         QString injahow;
         QString vkeys;
         QString ourcraft;
+        QString qqMusicu = "https://u.y.qq.com/cgi-bin/musicu.fcg";
+        QString kuwoPlaylistSearch = "https://search.kuwo.cn/r.s";
+        QString kuwoPlaylistDetail = "https://nplserver.kuwo.cn/pl.svc";
+        QString kuwoRanking = "https://wbd.kuwo.cn/api/bd/bang/bang_info";
     };
     struct Lyrics { QString original, translation; bool instrumental = false; };
     struct Audio { QUrl url; QString sourceId, sourceName; int bitrate = 0; };
@@ -33,8 +37,12 @@ public:
     bool setBaseUrl(const QString &value);
     void search(const QString &keywords);
     void search(const QString &keywords, const QStringList &sources);
+    void search(const QString &keywords, const QStringList &sources, int limit);
     void searchPlaylists(const QString &query);
+    void searchPlaylists(const QString &query, const QStringList &sources);
+    void searchPlaylists(const QString &query, const QStringList &sources, int limit);
     void fetchRankings(std::function<void(QVariantList, QString)> done);
+    void fetchRankings(const QString &source, std::function<void(QVariantList, QString)> done);
     void fetchPlaylist(const QString &id, std::function<void(QVariantMap, QString)> done);
     void resolve(const QString &songId, std::function<void(QUrl, QString)> done);
     void resolve(const QString &songId, const QString &quality, std::function<void(QUrl, QString)> done);
@@ -54,12 +62,25 @@ signals:
 private:
     struct PlaylistFetch;
     struct AudioFetch;
+    struct CatalogFetch;
+    struct TencentSongSearch;
+    struct TencentPlaylistSearch;
+    void fetchTencentSongSearchPage(const std::shared_ptr<TencentSongSearch> &state);
+    void fetchTencentPlaylistSearchPage(const std::shared_ptr<TencentPlaylistSearch> &state);
+    void fetchCatalogPage(const std::shared_ptr<CatalogFetch> &state);
+    void fetchCatalogPlaylist(const QString &source, const QString &kind, const QString &id,
+                              std::function<void(QVariantMap, QString)> done);
+    void fetchNeteaseRankings(std::function<void(QVariantList, QString)> done);
     void tryAudioSource(const std::shared_ptr<AudioFetch> &state);
     void fetchMetingLyrics(const QString &source, const QString &songId, std::function<void(Lyrics, QString)> done);
     void audioRequest(const QUrl &url, bool sample, int timeoutMs, std::function<void(QByteArray, QUrl, QString)> done);
     void fetchPlaylistBatch(const std::shared_ptr<PlaylistFetch> &state);
     void finishPlaylist(const std::shared_ptr<PlaylistFetch> &state);
     QNetworkReply *get(const QUrl &url, const QString &operation, std::function<void(QByteArray, QString)> done);
+    QNetworkReply *request(const QUrl &url, const QByteArray &body, bool post, const QString &operation,
+                           std::function<void(QByteArray, QString)> done);
+    QNetworkReply *qqRequest(const QString &module, const QString &method, const QJsonObject &params,
+                             std::function<void(QByteArray, QString)> done);
     static QJsonObject parseJson(const QByteArray &bytes, QString &error);
     QUrl endpoint(const QString &path, const QList<QPair<QString, QString>> &query) const;
     Endpoints m_endpoints;
@@ -72,6 +93,7 @@ private:
     QPointer<QNetworkReply> m_searchReply;
     QList<QPointer<QNetworkReply>> m_searchReplies;
     QPointer<QNetworkReply> m_playlistSearchReply;
+    QList<QPointer<QNetworkReply>> m_playlistSearchReplies;
     QPointer<QNetworkReply> m_rankingsReply;
     QPointer<QNetworkReply> m_audioReply;
     int m_audioGeneration = 0;

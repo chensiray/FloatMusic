@@ -7,6 +7,8 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QSet>
+#include <QUrl>
+#include <QUrlQuery>
 
 namespace PlaylistDocument {
 Parsed parse(const QString &text) {
@@ -15,15 +17,48 @@ Parsed parse(const QString &text) {
     if (cleaned.startsWith(QChar(0xfeff))) cleaned.remove(0, 1);
     const auto bytes = cleaned.trimmed().toUtf8();
     if (bytes.isEmpty() || bytes.size() > MaxBytes) {
-        result.error = QStringLiteral("请输入歌单 JSON、网易云歌单链接或 ID，内容不能超过 8 MiB。"); return result;
+        result.error = QStringLiteral("请输入歌单 JSON、网易云 / QQ / 酷我歌单链接或网易云 ID，内容不能超过 8 MiB。"); return result;
     }
     static const QRegularExpression idPattern("^[1-9][0-9]{0,18}$");
     if (idPattern.match(QString::fromUtf8(bytes)).hasMatch()) { result.onlineId = QString::fromUtf8(bytes); return result; }
     if (!bytes.startsWith('{') && !bytes.startsWith('[')) {
-        static const QRegularExpression link(R"(https?://(?:y\.)?music\.163\.com/(?:#/)?(?:m/)?playlist\?(?:[^\s#]*&)?id=([1-9][0-9]{0,18})(?![0-9]))");
-        const auto match = link.match(QString::fromUtf8(bytes));
-        if (match.hasMatch()) { result.onlineId = match.captured(1); return result; }
-        result.error = QStringLiteral("无法识别内容。支持浮音 JSON 或 music.163.com 的歌单链接 / 数字 ID。"); return result;
+        // Check the URL host and path instead of a platform URL nested in another URL.
+        static const QRegularExpression links(R"(https?://[^\s<>"`]+)", QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression qqPath(R"(^/n/ryqq/playlist/([1-9][0-9]{0,18})/?$)");
+        static const QRegularExpression kuwoPath(R"(^/(?:playlist_detail|h5app/playlist)/([1-9][0-9]{0,18})/?$)");
+        auto matches = links.globalMatch(QString::fromUtf8(bytes));
+        while (matches.hasNext()) {
+            QString token = matches.next().captured();
+            const QString trailing = QStringLiteral(",.)]，。！：）】");
+            while (!token.isEmpty() && trailing.contains(token.back())) token.chop(1);
+            const QUrl url(token, QUrl::StrictMode);
+            if (!url.isValid() || !url.userInfo().isEmpty()) continue;
+            const auto host = url.host().toLower();
+            QString path = url.path();
+            QUrlQuery query(url);
+            QString id, source;
+            if (host == "music.163.com" || host == "y.music.163.com" || host == "www.music.163.com") {
+                if (url.fragment().startsWith("/playlist?")) {
+                    const QUrl section(url.fragment()); path = section.path(); query = QUrlQuery(section);
+                }
+                if (path == "/playlist" || path == "/m/playlist") id = query.queryItemValue("id");
+                source = "netease";
+            } else if (host == "y.qq.com" || host == "i.y.qq.com") {
+                const auto match = qqPath.match(path);
+                if (match.hasMatch()) id = match.captured(1);
+                else if (path == "/n/m/detail/taoge/index.html" || path == "/n2/m/share/details/taoge.html")
+                    id = query.queryItemValue("id");
+                source = "tencent";
+            } else if (host == "www.kuwo.cn" || host == "kuwo.cn" || host == "m.kuwo.cn") {
+                const auto match = kuwoPath.match(path);
+                if (match.hasMatch()) id = match.captured(1);
+                source = "kuwo";
+            }
+            if (!idPattern.match(id).hasMatch()) continue;
+            result.onlineId = source == "netease" ? id : source + ":playlist:" + id;
+            return result;
+        }
+        result.error = QStringLiteral("无法识别内容。支持浮音 JSON、网易云 / QQ / 酷我歌单链接；数字 ID 默认按网易云读取。"); return result;
     }
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(bytes, &parseError);

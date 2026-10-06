@@ -30,6 +30,9 @@ namespace {
 bool onlineSource(const QString &source) {
     return source == "netease" || source == "tencent" || source == "kuwo";
 }
+bool supportedResultLimit(int limit) {
+    return limit == 10 || limit == 20 || limit == 30 || limit == 50 || limit == 100;
+}
 QStringList orderedSources(const QStringList &sources) {
     QStringList result;
     for (const QString &source : {QString("netease"), QString("tencent"), QString("kuwo")})
@@ -82,6 +85,10 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
     const QString savedQuality = QSettings().value("netease/quality", "standard").toString();
     if (MusicApi::validQuality(savedQuality)) m_quality = savedQuality;
     m_searchSources = orderedSources(QSettings().value("search/sources", QStringList{"netease", "tencent", "kuwo"}).toStringList());
+    const int savedLimit = QSettings().value("search/resultLimit", 30).toInt();
+    if (supportedResultLimit(savedLimit)) m_searchResultLimit = savedLimit;
+    const QString savedRankingSource = QSettings().value("rankings/source", "netease").toString();
+    if (onlineSource(savedRankingSource)) m_rankingSource = savedRankingSource;
     connect(&m_library, &PlaylistStore::changed, this, [this] {
         if (!m_library.error().isEmpty()) { m_error = m_library.error(); emit changed(); }
         emit libraryChanged(); emit favoritesChanged(); emit changed(); syncQueue();
@@ -162,7 +169,7 @@ void PlayerController::setApiBase(const QString &url) {
     if (m_busy) { m_searchMessage = QStringLiteral("请等待当前加载完成后切换服务。"); emit searchChanged(); return; }
     if (!m_api.setBaseUrl(url)) m_searchMessage = QStringLiteral("请输入 http(s) 服务地址，不要包含账号、密码或查询参数。");
     else { ++m_playlistGeneration; m_onlinePlaylistLoading = false; m_onlinePlaylist.clear();
-        m_rankingsLoading = false; m_rankings.clear(); m_rankingsMessage.clear(); emit rankingsChanged();
+        ++m_rankingsRequest; m_rankingsLoading = false; m_rankings.clear(); m_rankingsMessage.clear(); emit rankingsChanged();
         m_playlistSearching = false; m_playlistResults.clear(); m_playlistSearchMessage.clear();
         emit playlistSearchChanged(); emit onlinePlaylistChanged();
         m_searching = false; m_searchResults.clear(); m_searchMessage = url.trimmed().isEmpty() ? QStringLiteral("已恢复网易云内置接口，可选择曲库搜索。"): QStringLiteral("自定义网易云服务已保存，其他曲库按勾选搜索。"); syncQueue(); }
@@ -171,7 +178,7 @@ void PlayerController::setApiBase(const QString &url) {
 void PlayerController::search(const QString &keywords) {
     m_searching = !keywords.trimmed().isEmpty() && !m_searchSources.isEmpty();
     m_searchResults.clear(); m_searchMessage.clear(); emit searchChanged();
-    m_api.search(keywords, m_searchSources);
+    m_api.search(keywords, m_searchSources, m_searchResultLimit);
     if (m_searchSources.isEmpty()) { m_searchMessage = QStringLiteral("请至少选择一个曲库后搜索。"); emit searchChanged(); }
 }
 void PlayerController::setSearchSources(const QStringList &sources) {
@@ -180,9 +187,18 @@ void PlayerController::setSearchSources(const QStringList &sources) {
     m_searchSources = selected;
     QSettings().setValue("search/sources", selected);
     if (m_searching) m_api.search(QString(), selected);
+    if (m_playlistSearching) m_api.searchPlaylists(QString(), selected, m_searchResultLimit);
     m_searching = false; m_searchResults.clear();
+    m_playlistSearching = false; m_playlistResults.clear();
     m_searchMessage = selected.isEmpty() ? QStringLiteral("请至少选择一个曲库后搜索。") : QStringLiteral("曲库已更新，输入关键词后搜索。");
-    emit searchSourcesChanged(); emit searchChanged();
+    m_playlistSearchMessage = m_searchMessage;
+    emit searchSourcesChanged(); emit searchChanged(); emit playlistSearchChanged();
+}
+void PlayerController::setSearchResultLimit(int limit) {
+    if (!supportedResultLimit(limit) || limit == m_searchResultLimit) return;
+    m_searchResultLimit = limit;
+    QSettings().setValue("search/resultLimit", limit);
+    emit searchSettingsChanged();
 }
 QString PlayerController::currentSourceName() const {
     const auto source = m_loadedTrack.value("source").toString();
@@ -663,6 +679,10 @@ void PlayerController::processOverlayEvents() {
             QStringList sources;
             for (const auto &source : document.array()) if (source.isString()) sources.append(source.toString());
             setSearchSources(sources);
+        } else if (action == "searchResultLimit") {
+            bool valid = false;
+            const int limit = value.toInt(&valid);
+            if (valid) setSearchResultLimit(limit);
         } else if (action == "search") search(value);
         else if (action == "playResult" || action == "addResult") {
             const auto track = findTrack(m_searchResults, value);
@@ -693,7 +713,8 @@ void PlayerController::processOverlayEvents() {
 }
 void PlayerController::publishOverlayUi() {
     const QVariantMap data{{"results",m_searchResults},{"searching",m_searching},{"searchMessage",m_searchMessage},
-        {"searchSources",m_searchSources},{"currentSourceName",currentSourceName()},{"qualitySelectable",qualitySelectable()},
+        {"searchSources",m_searchSources},{"searchResultLimit",m_searchResultLimit},
+        {"currentSourceName",currentSourceName()},{"qualitySelectable",qualitySelectable()},
         {"playlists",playlists()},{"tracks",tracks()},{"activePlaylist",activePlaylist()},
         {"lyrics",m_lyrics},{"translation",m_translation},{"lyricsMessage",m_lyricsMessage},
         {"lyricTrack",m_currentTrack},{"lyricLines",m_lyricLines},
@@ -701,7 +722,7 @@ void PlayerController::publishOverlayUi() {
         {"quality",m_quality},{"qualityInfo",qualityInfo()},{"api",apiBase()},
         {"favorites",favorites()},{"message",m_overlayMessage},
         {"playlistResults",m_playlistResults},{"playlistSearching",m_playlistSearching},{"playlistSearchMessage",m_playlistSearchMessage},
-        {"rankings",m_rankings},{"rankingsLoading",m_rankingsLoading},{"rankingsMessage",m_rankingsMessage},
+        {"rankings",m_rankings},{"rankingsLoading",m_rankingsLoading},{"rankingsMessage",m_rankingsMessage},{"rankingSource",m_rankingSource},
         {"onlinePlaylist",m_onlinePlaylist},{"onlinePlaylistLoading",m_onlinePlaylistLoading},{"libraryMessage",m_libraryMessage}};
     const auto json=QJsonDocument(QJsonObject::fromVariantMap(data)).toJson(QJsonDocument::Compact);
     if(json==m_overlayUi)return;

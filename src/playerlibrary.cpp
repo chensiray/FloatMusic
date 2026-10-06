@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUuid>
+#include <QSettings>
 
 void PlayerController::setLibraryMessage(const QString &message) {
     m_libraryMessage = message;
@@ -33,7 +34,9 @@ void PlayerController::importPlaylistText(const QString &text, const QString &ta
     const auto parsed = PlaylistDocument::parse(text);
     if (!parsed.error.isEmpty()) { setLibraryMessage(parsed.error); return; }
     if (!parsed.onlineId.isEmpty()) {
-        setLibraryMessage(QStringLiteral("正在读取网易云歌单…"));
+        const auto label = parsed.onlineId.startsWith("tencent:") ? QStringLiteral("QQ音乐")
+            : parsed.onlineId.startsWith("kuwo:") ? QStringLiteral("酷我音乐") : QStringLiteral("网易云");
+        setLibraryMessage(QStringLiteral("正在读取%1歌单…").arg(label));
         const auto api = apiBase();
         m_api.fetchPlaylist(parsed.onlineId, [this, target, api](QVariantMap playlist, QString error) {
             if (api != apiBase()) { setLibraryMessage(QStringLiteral("服务地址已改变，请重新导入。")); return; }
@@ -46,9 +49,19 @@ void PlayerController::libraryAction(const QString &action, const QVariantMap &a
     const auto ids = args.value("ids").toStringList();
     const QString target = args.value("target", activePlaylist()).toString();
     if (action == "loadRankings") {
-        if (m_rankingsLoading) return;
+        const QString source = args.value("source", m_rankingSource).toString();
+        if (source != "netease" && source != "tencent" && source != "kuwo") {
+            m_rankingsMessage = QStringLiteral("请选择网易云、QQ音乐或酷我音乐的排行榜。");
+            emit rankingsChanged(); return;
+        }
+        if (m_rankingsLoading && source == m_rankingSource) return;
+        if (source != m_rankingSource) m_rankings.clear();
+        m_rankingSource = source;
+        QSettings().setValue("rankings/source", source);
+        const int ticket = ++m_rankingsRequest;
         m_rankingsLoading = true; m_rankingsMessage.clear(); emit rankingsChanged();
-        m_api.fetchRankings([this](QVariantList lists, QString error) {
+        m_api.fetchRankings(source, [this, ticket](QVariantList lists, QString error) {
+            if (ticket != m_rankingsRequest) return;
             m_rankingsLoading = false;
             if (error.isEmpty()) m_rankings = lists;
             m_rankingsMessage = error.isEmpty()
@@ -59,8 +72,11 @@ void PlayerController::libraryAction(const QString &action, const QVariantMap &a
         });
     } else if (action == "searchPlaylists") {
         const auto query = args.value("query").toString().trimmed().left(200);
-        m_playlistSearching = !query.isEmpty(); m_playlistResults.clear(); m_playlistSearchMessage.clear();
-        emit playlistSearchChanged(); m_api.searchPlaylists(query);
+        m_playlistSearching = !query.isEmpty() && !m_searchSources.isEmpty(); m_playlistResults.clear(); m_playlistSearchMessage.clear();
+        emit playlistSearchChanged(); m_api.searchPlaylists(query, m_searchSources, m_searchResultLimit);
+        if (m_searchSources.isEmpty()) {
+            m_playlistSearchMessage = QStringLiteral("请至少选择一个曲库后搜索。"); emit playlistSearchChanged();
+        }
     } else if (action == "openOnline") {
         const int ticket = ++m_playlistGeneration;
         m_onlinePlaylist.clear(); m_onlinePlaylistLoading = true; setLibraryMessage({}); emit onlinePlaylistChanged();

@@ -1,4 +1,5 @@
 #include "musicapi.h"
+#include "catalogcodec.h"
 #include <QUrlQuery>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -119,6 +120,13 @@ struct MusicApi::PlaylistFetch {
     qint64 expectedCount = 0;
     std::function<void(QVariantMap, QString)> done;
 };
+struct MusicApi::TencentSongSearch {
+    QString keywords;
+    int generation = 0, page = 1;
+    QVariantList tracks;
+    QSet<QString> seen;
+    std::function<void(QVariantList, QString)> done;
+};
 
 MusicApi::Endpoints MusicApi::builtinEndpoints() {
     Endpoints endpoints;
@@ -149,6 +157,8 @@ bool MusicApi::setBaseUrl(const QString &value) {
     for (const auto &reply : std::as_const(m_searchReplies)) if (reply) reply->abort();
     m_searchReplies.clear();
     if (m_playlistSearchReply) m_playlistSearchReply->abort();
+    for (const auto &reply : std::as_const(m_playlistSearchReplies)) if (reply) reply->abort();
+    m_playlistSearchReplies.clear();
     if (m_rankingsReply) m_rankingsReply->abort();
     QSettings().setValue("netease/apiBase", m_base);
     return true;
@@ -160,13 +170,19 @@ QUrl MusicApi::endpoint(const QString &path, const QList<QPair<QString, QString>
     return withQuery(QUrl((m_base.isEmpty() ? m_endpoints.metadata : m_base) + path), query);
 }
 QNetworkReply *MusicApi::get(const QUrl &url, const QString &operation, std::function<void(QByteArray, QString)> done) {
+    return request(url, {}, false, operation, std::move(done));
+}
+QNetworkReply *MusicApi::request(const QUrl &url, const QByteArray &body, bool post, const QString &operation,
+                                std::function<void(QByteArray, QString)> done) {
+    if (!validHttpUrl(url)) { done({}, operation + QStringLiteral("失败：服务地址无效。")); return nullptr; }
     QNetworkRequest req(url);
     req.setTransferTimeout(m_endpoints.timeoutMs);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
     req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
-    req.setRawHeader("User-Agent", "FloatMusic/0.9");
-    auto *reply = m_network.get(req);
+    req.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36");
+    if (post) { req.setRawHeader("Referer", "https://y.qq.com/"); req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json"); }
+    auto *reply = post ? m_network.post(req, body) : m_network.get(req);
     reply->setReadBufferSize(64 * 1024);
     struct Response { QByteArray body; bool oversized = false, timedOut = false; };
     const auto data = std::make_shared<Response>();
@@ -182,7 +198,7 @@ QNetworkReply *MusicApi::get(const QUrl &url, const QString &operation, std::fun
         if (reply->isOpen()) data->body += reply->readAll();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const auto code = reply->error(); QString error;
-        if (data->oversized) error = QStringLiteral("响应超过 2 MiB，已停止读取。");
+        if (data->oversized || data->body.size() > 2 * 1024 * 1024) error = QStringLiteral("响应超过 2 MiB，已停止读取。");
         else if (data->timedOut || code == QNetworkReply::TimeoutError) error = QStringLiteral("连接超时，请检查网络后重试。");
         else if (status >= 400) error = QStringLiteral("服务器返回 HTTP %1，请稍后重试。").arg(status);
         else if (code == QNetworkReply::SslHandshakeFailedError) error = QStringLiteral("TLS 安全连接失败，请检查系统时间、代理或证书。");
@@ -211,6 +227,10 @@ void MusicApi::search(const QString &keywords) {
     search(keywords, {"netease"});
 }
 void MusicApi::search(const QString &keywords, const QStringList &sources) {
+    search(keywords, sources, 30);
+}
+void MusicApi::search(const QString &keywords, const QStringList &sources, int limit) {
+    if (!QList<int>{10,20,30,50,100}.contains(limit)) limit = 30;
     const int ticket = ++m_searchGeneration;
     if (m_searchReply) m_searchReply->abort();
     for (const auto &reply : std::as_const(m_searchReplies)) if (reply) reply->abort();
@@ -221,29 +241,46 @@ void MusicApi::search(const QString &keywords, const QStringList &sources) {
     if (keywords.trimmed().isEmpty() || selected.isEmpty()) { emit results({}, {}); return; }
     struct Batch { int remaining = 0; QStringList order; QHash<QString, QVariantList> tracks; QHash<QString, QString> errors; };
     const auto batch = std::make_shared<Batch>(); batch->remaining = selected.size(); batch->order = selected;
-    const auto complete = [this, batch, ticket](const QString &source, QVariantList tracks, QString error) {
+    const auto complete = [this, batch, ticket, limit](const QString &source, QVariantList tracks, QString error) {
         if (ticket != m_searchGeneration) return;
         batch->tracks[source] = tracks; batch->errors[source] = error;
         if (--batch->remaining) return;
         QVariantList combined; QStringList warnings;
         for (const auto &platform : batch->order) {
-            combined.append(batch->tracks.value(platform));
             if (!batch->errors.value(platform).isEmpty()) warnings.append(platformName(platform) + QStringLiteral("：") + batch->errors.value(platform));
+        }
+        for (int row = 0; combined.size() < limit; ++row) {
+            bool appended = false;
+            for (const auto &platform : batch->order) {
+                const auto &rows = batch->tracks[platform];
+                if (row < rows.size() && combined.size() < limit) { combined.append(rows[row]); appended = true; }
+            }
+            if (!appended) break;
         }
         m_searchReplies.clear(); emit results(combined, warnings.join('\n'));
     };
     for (const auto &source : selected) {
+        if (source == "tencent" && limit == 100 && !m_endpoints.vkeys.isEmpty()) {
+            const auto state = std::make_shared<TencentSongSearch>();
+            state->keywords = keywords.trimmed();
+            state->generation = ticket;
+            state->done = [complete](QVariantList tracks, QString error) {
+                complete("tencent", std::move(tracks), std::move(error));
+            };
+            fetchTencentSongSearchPage(state);
+            continue;
+        }
         QUrl url;
         if (source == "netease") {
             const bool builtin = m_base.isEmpty();
             url = endpoint(builtin ? "/api/search/get" : "/cloudsearch",
-                {{builtin ? "s" : "keywords", keywords.trimmed()}, {"type", "1"}, {"offset", "0"}, {"limit", "30"}});
+                {{builtin ? "s" : "keywords", keywords.trimmed()}, {"type", "1"}, {"offset", "0"}, {"limit", QString::number(limit)}});
         } else if (source == "tencent" && !m_endpoints.vkeys.isEmpty())
-            url = withQuery(QUrl(m_endpoints.vkeys + "/music/tencent/search/song"), {{"keyword", keywords.trimmed()}, {"page", "1"}, {"limit", "30"}});
+            url = withQuery(QUrl(m_endpoints.vkeys + "/music/tencent/search/song"), {{"keyword", keywords.trimmed()}, {"page", "1"}, {"limit", QString::number(limit)}});
         else if (source == "kuwo" && !m_endpoints.ourcraft.isEmpty())
-            url = withQuery(QUrl(m_endpoints.ourcraft), {{"server", "kuwo"}, {"type", "search"}, {"id", keywords.trimmed()}, {"limit", "30"}});
+            url = withQuery(QUrl(m_endpoints.ourcraft), {{"server", "kuwo"}, {"type", "search"}, {"id", keywords.trimmed()}, {"limit", QString::number(limit)}});
         if (!validHttpUrl(url)) { complete(source, {}, QStringLiteral("该曲库未配置搜索服务。")); continue; }
-        auto *reply = get(url, QStringLiteral("搜索"), [this, source, complete](QByteArray bytes, QString error) {
+        auto *reply = get(url, QStringLiteral("搜索"), [this, source, complete, limit](QByteArray bytes, QString error) {
             QJsonObject json;
             if (error.isEmpty()) json = source == "netease" ? parseJson(bytes, error) : providerObject(bytes, source, error);
             QJsonArray songs;
@@ -271,47 +308,51 @@ void MusicApi::search(const QString &keywords, const QStringList &sources) {
                 const QString id = track.value("id").toString();
                 if (id.isEmpty() || seen.contains(id)) continue;
                 seen.insert(id); tracks.append(track);
-                if (tracks.size() >= 30) break;
+                if (tracks.size() >= limit) break;
             }
             complete(source, tracks, error);
         });
         m_searchReplies.append(reply); if (source == "netease") m_searchReply = reply;
     }
 }
-void MusicApi::searchPlaylists(const QString &query) {
-    const int ticket = ++m_playlistSearchGeneration;
-    if (m_playlistSearchReply) m_playlistSearchReply->abort();
-    if (query.trimmed().isEmpty()) { emit playlistResults({}, {}); return; }
-    const bool builtin = m_base.isEmpty();
-    m_playlistSearchReply = get(endpoint(builtin ? "/api/search/get" : "/search",
-        {{builtin ? "s" : "keywords", query.trimmed()}, {"type", "1000"}, {"offset", "0"}, {"limit", "30"}}),
-        QStringLiteral("搜索歌单"), [this, ticket](QByteArray bytes, QString error) {
-        if (ticket != m_playlistSearchGeneration) return;
-        QVariantList playlists;
-        QJsonObject json;
-        if (error.isEmpty()) json = parseJson(bytes, error);
+void MusicApi::fetchTencentSongSearchPage(const std::shared_ptr<TencentSongSearch> &state) {
+    if (state->generation != m_searchGeneration) return;
+    const QUrl url = withQuery(QUrl(m_endpoints.vkeys + "/music/tencent/search/song"),
+        {{"keyword", state->keywords}, {"page", QString::number(state->page)}, {"limit", "50"}});
+    auto *reply = get(url, QStringLiteral("搜索 QQ 歌曲"), [this, state](QByteArray bytes, QString error) {
+        if (state->generation != m_searchGeneration) return;
+        QJsonArray songs;
         if (error.isEmpty()) {
-            const auto result = json.value("result").toObject();
-            if (!result.value("playlists").isArray() && result.value("playlistCount").toInt(-1) != 0)
-                error = QStringLiteral("搜索响应缺少歌单列表，请重试或检查 API 服务。");
-            QSet<QString> seen;
-            for (const auto &value : result.value("playlists").toArray()) {
-                const auto list = value.toObject();
-                const QString id = jsonId(list.value("id"));
-                const QString name = list.value("name").toString().trimmed();
-                if (id.isEmpty() || name.isEmpty() || seen.contains(id)) continue;
-                seen.insert(id);
-                playlists.append(QVariantMap{{"id", id}, {"name", name},
-                    {"description", list.value("description").toString()},
-                    {"trackCount", qMax<qint64>(0, list.value("trackCount").toInteger())},
-                    {"creator", list.value("creator").toObject().value("nickname").toString()}});
-            }
+            const auto json = providerObject(bytes, "tencent", error);
+            const auto list = json.value("data").toObject().value("list");
+            if (error.isEmpty() && !list.isArray())
+                error = QStringLiteral("搜索响应缺少歌曲列表，请重试或检查音乐服务。");
+            songs = list.toArray();
         }
-        emit playlistResults(playlists, error);
+        if (!error.isEmpty()) {
+            state->done(state->tracks, error);
+            return;
+        }
+        for (const auto &value : songs) {
+            const auto song = value.toObject();
+            const QString id = song.value("songMID").toString();
+            const QString name = song.value("title").toString().trimmed().left(1000);
+            if (!validPlatformId("tencent", id) || name.isEmpty() || state->seen.contains(id)) continue;
+            state->seen.insert(id);
+            state->tracks.append(QVariantMap{{"id", "tencent:" + id}, {"source", "tencent"},
+                {"songId", id}, {"name", name}, {"artist", singerNames(song.value("singer"))},
+                {"sourceName", platformName("tencent")}});
+            if (state->tracks.size() >= 100) break;
+        }
+        // Raw page fullness controls continuation; filtered tracks must not shift the page boundary.
+        if (state->page < 2 && songs.size() >= 50 && state->tracks.size() < 100) {
+            ++state->page;
+            fetchTencentSongSearchPage(state);
+        } else state->done(state->tracks, {});
     });
+    if (reply) m_searchReplies.append(reply);
 }
-
-void MusicApi::fetchRankings(std::function<void(QVariantList, QString)> done) {
+void MusicApi::fetchNeteaseRankings(std::function<void(QVariantList, QString)> done) {
     const int ticket = ++m_rankingsGeneration;
     if (m_rankingsReply) m_rankingsReply->abort();
     const bool builtin = m_base.isEmpty();
@@ -332,8 +373,8 @@ void MusicApi::fetchRankings(std::function<void(QVariantList, QString)> done) {
                 const QString name = list.value("name").toString().trimmed().left(200);
                 if (id.isEmpty() || name.isEmpty() || seen.contains(id)) continue;
                 seen.insert(id);
-                rankings.append(QVariantMap{{"id", id}, {"name", name},
-                    {"description", list.value("description").toString().left(4000)},
+                rankings.append(QVariantMap{{"id", id}, {"name", name}, {"source", "netease"}, {"sourceName", platformName("netease")}, {"kind", "ranking"}, {"resourceId", id},
+                    {"description", CatalogCodec::descriptionText(list.value("description").toString())},
                     {"trackCount", qMax<qint64>(-1, list.value("trackCount").toInteger(-1))},
                     {"updateFrequency", list.value("updateFrequency").toString().left(100)},
                     {"updateTime", qMax<qint64>(0, list.value("updateTime").toInteger())},
@@ -357,6 +398,15 @@ void MusicApi::fetchRankings(std::function<void(QVariantList, QString)> done) {
 }
 
 void MusicApi::fetchPlaylist(const QString &id, std::function<void(QVariantMap, QString)> done) {
+    if (id.contains(':')) {
+        const auto parts = id.split(':');
+        if (parts.size() != 3 || !QStringList{"netease", "tencent", "kuwo"}.contains(parts[0])
+            || !QStringList{"playlist", "ranking"}.contains(parts[1]) || !validId(parts[2])) {
+            done({}, QStringLiteral("歌单 ID 无效。")); return;
+        }
+        if (parts[0] == "netease") { fetchPlaylist(parts[2], std::move(done)); return; }
+        fetchCatalogPlaylist(parts[0], parts[1], parts[2], std::move(done)); return;
+    }
     if (!validId(id)) { done({}, QStringLiteral("歌单 ID 无效。")); return; }
     const auto state = std::make_shared<PlaylistFetch>();
     state->builtin = m_base.isEmpty();
@@ -384,7 +434,7 @@ void MusicApi::fetchPlaylist(const QString &id, std::function<void(QVariantMap, 
         const auto rawIds = list.value("trackIds").toArray();
         const qint64 reportedCount = list.value("trackCount").toInteger(-1);
         state->expectedCount = qMax<qint64>(qMax<qint64>(0, reportedCount), qMax(rawIds.size(), rawTracks.size()));
-        state->playlist = {{"id", id}, {"name", name}, {"description", list.value("description").toString()},
+        state->playlist = {{"id", id}, {"name", name}, {"source", "netease"}, {"sourceName", platformName("netease")}, {"kind", "playlist"}, {"resourceId", id}, {"description", CatalogCodec::descriptionText(list.value("description").toString())},
             {"trackCount", state->expectedCount},
             {"creator", list.value("creator").toObject().value("nickname").toString()}};
 

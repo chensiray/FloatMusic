@@ -489,7 +489,7 @@ private slots:
         QTRY_VERIFY(input->hasActiveFocus());
         QTest::keyClick(window, Qt::Key_Return);
         QTRY_COMPARE(accepted.size(), 1);
-        QTRY_VERIFY(!searchChanges.isEmpty());
+        QCOMPARE(searchChanges.size(), 0);
         QVERIFY(controller.searchMessage().contains(QStringLiteral("至少选择")));
         QVERIFY(!controller.searching());
         QVERIFY(controller.searchResults().isEmpty());
@@ -498,12 +498,21 @@ private slots:
             QVERIFY(window->grabWindow().save(artifactDir + "/windows-multisource-empty.png"));
         }
         QVERIFY(window->setProperty("searchKind", "playlists"));
-        QTRY_VERIFY(!netease->isVisible() && !tencent->isVisible() && !kuwo->isVisible());
-        QTRY_VERIFY(searchButton->isEnabled());
+        QTRY_VERIFY(netease->isVisible() && tencent->isVisible() && kuwo->isVisible());
+        QTRY_VERIFY(!searchButton->isEnabled());
         QVERIFY(controller.searchSources().isEmpty());
+        QSignalSpy playlistChanges(&controller, &PlayerController::playlistSearchChanged);
+        input->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(playlistChanges.size(), 0);
+        QVERIFY(controller.playlistSearchMessage().contains(QStringLiteral("至少选择")));
+        QVERIFY(!controller.playlistSearching());
+        QVERIFY(controller.playlistResults().isEmpty());
+        tencent->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_COMPARE(controller.searchSources(), QStringList({"tencent"}));
+        QTRY_VERIFY(searchButton->isEnabled());
         if (!artifactDir.isEmpty()) {
             QTest::qWait(50);
-            QVERIFY(window->grabWindow().save(artifactDir + "/windows-netease-playlist-search.png"));
+            QVERIFY(window->grabWindow().save(artifactDir + "/windows-multisource-playlist-search.png"));
         }
         QTest::qWait(30);
         QCOMPARE(warnings.size(), 0);
@@ -613,6 +622,59 @@ private slots:
             if (!artifactDir.isEmpty())
                 QVERIFY(window->grabWindow().save(artifactDir + "/windows-quality-" + platform.first + ".png"));
         }
+        QCOMPARE(warnings.size(), 0);
+    }
+    void desktopSearchLimitSettingAndPlatformSwitch() {
+        const auto previousName = QCoreApplication::applicationName();
+        const auto restoreName = qScopeGuard([previousName] { QCoreApplication::setApplicationName(previousName); });
+        QCoreApplication::setApplicationName("ui-v1-settings-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        MusicApi::Endpoints endpoints;
+        endpoints.metadata = "http://127.0.0.1:1"; endpoints.timeoutMs = 100;
+        PlayerController controller(endpoints);
+        controller.setApiBase(""); controller.setSearchResultLimit(50);
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        window->setProperty("section", "more"); window->setProperty("detail", "settings");
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto *selector = window->findChild<QQuickItem *>("searchResultLimitSelector"); QVERIFY(selector);
+        QTRY_COMPARE(selector->property("currentIndex").toInt(), 3);
+        auto *theme = window->findChild<QObject *>("themeSelector"); QVERIFY(theme);
+        QQuickItem *viewport = selector->parentItem();
+        while (viewport && !viewport->property("contentY").isValid()) viewport = viewport->parentItem();
+        QVERIFY(viewport);
+        const auto artifacts = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        auto capture = [&](const QString &name) {
+            QTest::qWait(120);
+            return artifacts.isEmpty() || window->grabWindow().save(artifacts + "/" + name + ".png");
+        };
+        for (int mode : {1, 2}) {
+            QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, mode)));
+            const double top = viewport->property("contentY").toDouble() + selector->mapToItem(viewport, QPointF()).y();
+            viewport->setProperty("contentY", qBound(0.0, top - 40.0,
+                qMax(0.0, viewport->property("contentHeight").toDouble() - viewport->height())));
+            QTest::qWait(80);
+            selector->forceActiveFocus();
+            QTRY_VERIFY(selector->hasActiveFocus());
+            QTest::keyClick(window, Qt::Key_Space);
+            QVERIFY(capture(mode == 1 ? "v1-search-limit-dropdown-light" : "v1-search-limit-dropdown-dark"));
+            QTest::keyClick(window, Qt::Key_Escape);
+        }
+        selector->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Down);
+        QTRY_COMPARE(controller.searchResultLimit(), 100);
+        QTRY_COMPARE(selector->property("currentIndex").toInt(), 4);
+        PlayerController restored(endpoints); QCOMPARE(restored.searchResultLimit(), 100);
+        // Changing the provider uses the same route as an actual ranking platform click.
+        window->setProperty("detail", "rankings");
+        auto *kuwo = findVisualItem(window->contentItem(), "rankingSource_kuwo"); QVERIFY(kuwo);
+        QVERIFY(QMetaObject::invokeMethod(kuwo, "clicked"));
+        QTRY_VERIFY(!controller.rankingsLoading());
+        QCOMPARE(controller.rankingSource(), QString("kuwo"));
+        QCOMPARE(controller.rankings().size(), 3);
+        QVERIFY(capture("v1-kuwo-rankings-dark"));
+        QVERIFY(kuwo->property("selected").toBool());
         QCOMPARE(warnings.size(), 0);
     }
     void desktopThemesAndNavigation() {
