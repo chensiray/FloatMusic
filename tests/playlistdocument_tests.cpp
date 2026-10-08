@@ -58,6 +58,23 @@ private slots:
         QCOMPARE(tracks[0].toMap().value("songId").toString(), QString("004MpJjW07rAPl"));
         QCOMPARE(tracks[1].toMap().value("songId").toString(), QString("397242799"));
     }
+    void roundTripPreservesOnlyValidOnlineDurations() {
+        auto shortSong = song("kuwo", "42", "Short song"); shortSong["duration"] = 11;
+        auto qqSong = song("tencent", "MID42", "QQ song"); qqSong["duration"] = 254.47;
+        auto invalid = song("kuwo", "43", "Invalid duration"); invalid["duration"] = -5;
+        auto oversized = song("kuwo", "44", "Invalid duration"); oversized["duration"] = 86401;
+        const auto parsed = PlaylistDocument::parse(QString::fromUtf8(document({shortSong, qqSong, invalid, oversized})));
+        QVERIFY2(parsed.error.isEmpty(), qPrintable(parsed.error));
+        const auto tracks = parsed.playlist.value("tracks").toList();
+        QCOMPARE(tracks[0].toMap().value("duration").toDouble(), 11.0);
+        QCOMPARE(tracks[1].toMap().value("duration").toDouble(), 254.47);
+        QVERIFY(!tracks[2].toMap().contains("duration")); QVERIFY(!tracks[3].toMap().contains("duration"));
+        QString error;
+        const auto encoded = PlaylistDocument::encode(parsed.playlist, {}, error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        const auto reopened = PlaylistDocument::parse(QString::fromUtf8(encoded));
+        QCOMPARE(reopened.playlist, parsed.playlist);
+    }
     void sourceNamespacesDeduplicateOnlyWithinTheirOwnCatalog() {
         const auto netease = song("netease", "42", "网易云歌曲");
         const auto kuwo = song("kuwo", "42", "酷我歌曲");

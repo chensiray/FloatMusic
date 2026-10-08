@@ -4,6 +4,7 @@
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <algorithm>
+#include <cmath>
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
@@ -21,6 +22,11 @@
 #include <QScreen>
 #include <QAudioDevice>
 #include <QMediaMetaData>
+#include <QQuickTextDocument>
+#include <QTextBlock>
+#include <QTextBlockFormat>
+#include <QTextCursor>
+#include <QScopeGuard>
 #ifdef Q_OS_ANDROID
 #include <QJniObject>
 #include <QJniEnvironment>
@@ -32,6 +38,14 @@ bool onlineSource(const QString &source) {
 }
 bool supportedResultLimit(int limit) {
     return limit == 10 || limit == 20 || limit == 30 || limit == 50 || limit == 100;
+}
+QString qualityLabel(const QString &quality, const QString &source) {
+    if (quality == "higher") return QStringLiteral("较高");
+    if (quality == "exhigh") return source == "netease" ? QStringLiteral("极高") : QStringLiteral("高音质 320");
+    if (quality == "lossless") return QStringLiteral("无损 FLAC");
+    if (quality == "hires") return QStringLiteral("Hi-Res");
+    if (quality == "master") return QStringLiteral("实验母带");
+    return QStringLiteral("标准");
 }
 QStringList orderedSources(const QStringList &sources) {
     QStringList result;
@@ -84,6 +98,10 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
     }
     const QString savedQuality = QSettings().value("netease/quality", "standard").toString();
     if (MusicApi::validQuality(savedQuality)) m_quality = savedQuality;
+    for (const QString &source : {QString("tencent"), QString("kuwo")}) {
+        const auto saved = QSettings().value("audio/quality/" + source, "standard").toString();
+        m_sourceQualities.insert(source, MusicApi::validQuality(source, saved) ? saved : QString("standard"));
+    }
     m_searchSources = orderedSources(QSettings().value("search/sources", QStringList{"netease", "tencent", "kuwo"}).toStringList());
     const int savedLimit = QSettings().value("search/resultLimit", 30).toInt();
     if (supportedResultLimit(savedLimit)) m_searchResultLimit = savedLimit;
@@ -140,6 +158,10 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
             m_busy = false;
             m_ready = m_player.hasAudio() && !m_player.hasVideo();
             if (!m_ready) { m_player.stop(); m_error = QStringLiteral("请选择纯音频文件，不支持视频。"); }
+            if (rejectUnexpectedDuration()) return;
+            if (m_ready && m_loadedTrack.value("source").toString() == "kuwo" && m_player.duration() <= 0) {
+                m_busy = true; m_mediaTimeout.start(); sync(); return;
+            }
             if (m_ready && m_pendingPosition >= 0 && m_player.isSeekable() && m_player.duration() > 0) {
                 const auto resume = m_pendingPosition; m_pendingPosition = -1;
                 m_player.setPosition(qBound<qint64>(0, resume, qMax<qint64>(0, m_player.duration() - 1)));
@@ -212,10 +234,61 @@ void PlayerController::playSearchResult(int index) {
     if (m_busy || index < 0 || index >= m_searchResults.size()) return;
     loadTrack(m_searchResults[index].toMap(), true);
 }
+void PlayerController::applyLyricLineSpacing(QObject *textDocument, qreal factor) {
+    auto *quickDocument = qobject_cast<QQuickTextDocument *>(textDocument);
+    auto *document = quickDocument ? quickDocument->textDocument() : nullptr;
+    if (!document || document->property("floatMusicApplyingLineSpacing").toBool()) return;
+    factor = std::isfinite(factor) && factor >= .8 && factor <= 3.0 ? std::round(factor * 10) / 10 : 1.0;
+    bool changed = false;
+    for (auto block = document->begin(); block.isValid(); block = block.next()) {
+        const auto format = block.blockFormat();
+        if (format.lineHeightType() != QTextBlockFormat::ProportionalHeight
+            || !qFuzzyCompare(format.lineHeight(), factor * 100)) { changed = true; break; }
+    }
+    if (!changed) return;
+    // Keep the selectable lyrics as plain text; only adjust the document's layout.
+    document->setProperty("floatMusicApplyingLineSpacing", true);
+    const auto clearApplying = qScopeGuard([document] { document->setProperty("floatMusicApplyingLineSpacing", false); });
+    QTextBlockFormat format;
+    format.setLineHeight(factor * 100, QTextBlockFormat::ProportionalHeight);
+    QTextCursor cursor(document);
+    cursor.beginEditBlock();
+    cursor.select(QTextCursor::Document);
+    cursor.mergeBlockFormat(format);
+    cursor.endEditBlock();
+}
 void PlayerController::setQuality(const QString &quality) {
-    if (m_busy || !MusicApi::validQuality(quality) || quality == m_quality) return;
-    m_quality = quality; QSettings().setValue("netease/quality", quality); emit changed();
-    if (m_online && qualitySelectable() && !m_loadedTrack.isEmpty()) loadTrack(m_loadedTrack, m_playing, true);
+    setSourceQuality("netease", quality);
+}
+bool PlayerController::qualitySelectable() const {
+    return !m_online || onlineSource(m_loadedTrack.value("source").toString());
+}
+QString PlayerController::qualityForSource(const QString &source) const {
+    return source == "netease" ? m_quality : m_sourceQualities.value(source, "standard").toString();
+}
+QVariantMap PlayerController::sourceQualities() const {
+    return {{"netease", m_quality}, {"tencent", qualityForSource("tencent")}, {"kuwo", qualityForSource("kuwo")}};
+}
+void PlayerController::setSourceQuality(const QString &source, const QString &quality) {
+    if (!MusicApi::validQuality(source, quality) || quality == qualityForSource(source)) return;
+    if (source == "netease") m_quality = quality;
+    else m_sourceQualities.insert(source, quality);
+    QSettings().setValue(source == "netease" ? QString("netease/quality") : "audio/quality/" + source, quality);
+    emit sourceQualitiesChanged(); emit changed();
+#ifndef Q_OS_ANDROID
+    // The idle preferences do not resolve URLs. Only reload the matching song,
+    // preserving its play/pause intent and any pending resume position.
+    if (m_importing) return;
+    const auto track = m_busy ? m_requestedTrack : m_loadedTrack;
+    if (track.isEmpty() || track.value("source").toString() != source || (m_sessionDeferred && !m_busy)) return;
+    const bool sameTrack = track.value("id") == m_loadedTrack.value("id");
+    const qint64 resume = sameTrack ? (m_pendingPosition >= 0 ? m_pendingPosition : m_position) : -1;
+    const bool followPosition = sameTrack && m_pendingPosition < 0;
+    loadTrack(track, m_busy ? m_playIntent : m_playing, followPosition, followPosition ? -1 : resume);
+#else
+    androidCommand("sourceQuality", QString::fromUtf8(QJsonDocument(QJsonObject{
+        {"source", source}, {"quality", quality}}).toJson(QJsonDocument::Compact)));
+#endif
 }
 QString PlayerController::qualityInfo() const {
 #ifdef Q_OS_ANDROID
@@ -223,17 +296,22 @@ QString PlayerController::qualityInfo() const {
 #else
     const QString codec = m_player.metaData().stringValue(QMediaMetaData::AudioCodec);
     const int bitrate = m_player.metaData().value(QMediaMetaData::AudioBitRate).toInt();
-    const QString actual = codec.isEmpty() ? QStringLiteral("等待音频信息") : codec + (bitrate > 0 ? QStringLiteral(" · %1 kbps").arg(bitrate / 1000) : QString());
     if (!m_online) return QStringLiteral("音质选项用于在线歌曲；本地文件保持原格式。");
-    if (!qualitySelectable()) return QStringLiteral("%1 · 普通音质 · 播放格式：%2").arg(
-        m_loadedSourceName.isEmpty() ? currentSourceName() : m_loadedSourceName, actual);
-    const QStringList keys{"standard", "higher", "exhigh", "lossless", "hires"};
-    const QStringList labels{QStringLiteral("标准"), QStringLiteral("较高"), QStringLiteral("极高"), QStringLiteral("无损"), QStringLiteral("Hi-Res")};
-    const int index = keys.indexOf(m_loadedQuality);
-    QString returned;
-    if (m_loadedBitrate > 0) returned = QStringLiteral(" · 源返回：%1 kbps").arg(m_loadedBitrate);
-    return QStringLiteral("%1 · 请求：%2 · 播放格式：%3%4").arg(m_loadedSourceName.isEmpty() ? QStringLiteral("在线音源") : m_loadedSourceName,
-        index >= 0 ? labels[index] : QStringLiteral("未知"), actual, returned);
+    const auto source = m_loadedTrack.value("source").toString();
+    if (m_sessionDeferred) return QStringLiteral("%1 · 偏好：%2\n播放后显示实际音质。").arg(
+        currentSourceName(), qualityLabel(qualityForSource(source), source));
+    QStringList specs;
+    if (!m_loadedFormat.isEmpty()) specs.append(m_loadedFormat);
+    else if (!codec.isEmpty()) specs.append(codec);
+    if (m_loadedBitsPerSample > 0) specs.append(QStringLiteral("%1 bit").arg(m_loadedBitsPerSample));
+    if (m_loadedSampleRate > 0) specs.append(QStringLiteral("%1 kHz").arg(QString::number(m_loadedSampleRate / 1000.0, 'g', 5)));
+    const int actualBitrate = bitrate > 0 ? bitrate / 1000 : m_loadedBitrate;
+    if (actualBitrate > 0) specs.append(QStringLiteral("%1 kbps").arg(actualBitrate));
+    QString info = QStringLiteral("%1 · 请求：%2\n实际：%3").arg(
+        m_loadedSourceName.isEmpty() ? currentSourceName() : m_loadedSourceName,
+        qualityLabel(m_requestedQuality, source), specs.isEmpty() ? QStringLiteral("等待音频信息") : specs.join(" · "));
+    if (!m_qualityNotice.isEmpty()) info += '\n' + m_qualityNotice;
+    return info;
 #endif
 }
 void PlayerController::retryPlayback() {
@@ -360,6 +438,10 @@ void PlayerController::saveSession() {
     QVariantMap savedTrack;
     for (const auto &key : {"id", "source", "songId", "name", "artist", "path", "sourceName"})
         if (m_loadedTrack.contains(key)) savedTrack[key] = m_loadedTrack.value(key);
+    const double seconds = m_loadedTrack.value("duration").toDouble();
+    const auto source = m_loadedTrack.value("source").toString();
+    if ((source == "tencent" || source == "kuwo") && std::isfinite(seconds) && seconds > 0 && seconds <= 86400)
+        savedTrack["duration"] = seconds;
     const QVariantMap session{{"track", savedTrack}, {"position", m_pendingPosition >= 0 ? m_pendingPosition : m_position}, {"duration", m_duration}};
     settings.setValue("playback/session", QJsonDocument(QJsonObject::fromVariantMap(session)).toJson(QJsonDocument::Compact));
     settings.sync();
@@ -410,7 +492,7 @@ void PlayerController::step(int delta, bool automatic) {
 }
 bool PlayerController::tryNextAudioSource() {
 #ifndef Q_OS_ANDROID
-    if (!m_online || !m_api.hasAudioBackups(m_loadedTrack.value("source").toString()) || m_attemptedSources.isEmpty() || m_attemptedSources.size() >= 3) return false;
+    if (!m_online || !m_api.hasAudioBackups(m_loadedTrack.value("source").toString()) || m_attemptedSources.isEmpty() || m_attemptedSources.size() >= 6) return false;
     const int ticket = m_loadGeneration;
     const auto track = m_loadedTrack;
     const bool autoplay = m_playIntent;
@@ -424,6 +506,26 @@ bool PlayerController::tryNextAudioSource() {
     return false;
 #endif
 }
+bool PlayerController::rejectUnexpectedDuration() {
+#ifndef Q_OS_ANDROID
+    if (!m_ready || m_resolving || m_sessionDeferred || !m_online
+        || m_loadedTrack.value("source").toString() != "kuwo") return false;
+    const qint64 actual = m_player.duration();
+    if (actual <= 0) return false;
+    const double expectedSeconds = m_loadedTrack.value("duration").toDouble();
+    const qint64 expected = expectedSeconds > 0 && expectedSeconds <= 86400
+        ? qint64(expectedSeconds * 1000) : m_expectedAudioDuration;
+    const bool mismatch = expected > 0 ? qAbs(actual - expected) > qMax<qint64>(3000, expected / 20) : actual < 20000;
+    if (!mismatch) return false;
+    m_mediaTimeout.stop(); m_autoplay = false; m_playIntent = false; m_pendingPosition = -1;
+    m_ready = false; m_busy = false;
+    m_error = expected > 0 ? QStringLiteral("酷我实际音频时长与目标歌曲不符，已停止加载；请重试或选择其他歌曲。")
+        : QStringLiteral("酷我返回短音频但缺少目标时长，无法确认是否为完整歌曲，已停止加载。");
+    m_player.stop(); sync();
+    return true;
+#endif
+    return false;
+}
 void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, bool preservePosition, qint64 resumePosition, bool continueSources) {
     QVariantMap track = inputTrack;
     if (!normalizeTrackIdentity(track)) { m_error = QStringLiteral("歌曲来源或标识无效，请重新搜索或导入。"); emit changed(); return; }
@@ -433,11 +535,14 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
     androidCommand("play", QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap({{"track", track}, {"autoplay", autoplay}, {"preserve", preservePosition}})).toJson(QJsonDocument::Compact)));
 #else
     saveSession();
+    // The next URL request owns its own loading lifecycle. An earlier media
+    // timeout must not stop playback while the replacement URL is resolving.
+    m_mediaTimeout.stop();
     const int ticket = ++m_loadGeneration;
     if (!continueSources) m_attemptedSources.clear();
     m_playIntent = autoplay;
     m_requestedTrack = track;
-    const QString quality = track.value("source").toString() == "netease" ? m_quality : QString("standard");
+    const QString quality = qualityForSource(track.value("source").toString());
     auto load = [this, track, autoplay, preservePosition, resumePosition, quality, ticket](MusicApi::Audio audio, QString error) {
         if (ticket != m_loadGeneration) return;
         m_resolving = false;
@@ -448,8 +553,12 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
         m_sessionDeferred = false;
         m_error.clear(); m_currentTrack = track.value("id").toString(); m_title = track.value("name").toString();
         m_online = onlineSource(track.value("source").toString());
-        m_loadedTrack = track; m_loadedQuality = quality;
+        m_loadedTrack = track; m_requestedQuality = quality; m_loadedQuality = audio.quality;
         m_loadedSourceId = audio.sourceId; m_loadedSourceName = audio.sourceName; m_loadedBitrate = audio.bitrate;
+        m_loadedFormat = audio.format; m_loadedSampleRate = audio.sampleRate;
+        m_loadedBitsPerSample = audio.bitsPerSample; m_qualityNotice = audio.notice;
+        m_expectedAudioDuration = audio.expectedDurationSeconds > 0 && audio.expectedDurationSeconds <= 86400
+            ? qint64(audio.expectedDurationSeconds * 1000) : 0;
         if (!audio.sourceId.isEmpty() && !m_attemptedSources.contains(audio.sourceId)) m_attemptedSources.append(audio.sourceId);
         m_lyricOffset = qBound(-10000, QSettings().value("lyrics/offsets/" + m_currentTrack, 0).toInt(), 10000);
         emit lyricOffsetChanged();
@@ -462,7 +571,9 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
         if (m_online) retryLyrics();
     };
     if (onlineSource(track.value("source").toString())) {
-        m_busy = true; m_resolving = true; m_error.clear(); sync(); m_api.resolveAudio(track.value("source").toString(), track.value("songId").toString(), quality, load, m_attemptedSources);
+        m_busy = true; m_resolving = true; m_error.clear(); sync();
+        m_api.resolveAudio(track.value("source").toString(), track.value("songId").toString(), quality, load, m_attemptedSources,
+            track.value("source").toString() == "kuwo" ? track.value("duration").toDouble() : 0);
     } else {
         const QString path = track.value("path").toString();
         load({QUrl::fromLocalFile(path), {}, {}, 0}, QFileInfo::exists(path) ? QString() : QStringLiteral("本地音频副本已丢失，请重新导入。"));
@@ -610,6 +721,17 @@ void PlayerController::sync() {
     const auto state = QJniObject::callStaticObjectMethod("org/floatmusic/player/PlayerBridge", "snapshot", "()Ljava/lang/String;");
     const QJsonObject o = QJsonDocument::fromJson(state.toString().toUtf8()).object();
     if (o.isEmpty()) return;
+    if (o.value("sourceQualities").isObject()) {
+        const auto oldQualities = sourceQualities();
+        const auto savedQualities = o.value("sourceQualities").toObject();
+        for (const auto &source : {QString("netease"), QString("tencent"), QString("kuwo")}) {
+            const auto quality = savedQualities.value(source).toString();
+            if (!MusicApi::validQuality(source, quality)) continue;
+            if (source == "netease") m_quality = quality;
+            else m_sourceQualities[source] = quality;
+        }
+        if (oldQualities != sourceQualities()) emit sourceQualitiesChanged();
+    }
     const auto imported = o.value("importedTrack").toObject().toVariantMap();
     if (!imported.isEmpty() && m_library.add(imported)) androidCommand("ackImport");
     m_currentTrack = o.value("currentTrack").toString();
@@ -644,10 +766,16 @@ void PlayerController::sync() {
     publishOverlayUi();
 #else
     if (m_sessionDeferred) { emit changed(); return; }
+    if (rejectUnexpectedDuration()) return;
     // Some backends report seekability/duration after LoadedMedia.
     if (m_ready && !m_resolving && m_pendingPosition >= 0 && m_player.isSeekable() && m_player.duration() > 0) {
         const auto resume = m_pendingPosition; m_pendingPosition = -1;
         m_player.setPosition(qBound<qint64>(0, resume, qMax<qint64>(0, m_player.duration() - 1)));
+    }
+    if (m_ready && !m_resolving && !m_importing && m_busy
+        && m_loadedTrack.value("source").toString() == "kuwo" && m_player.duration() > 0) {
+        m_mediaTimeout.stop(); m_busy = false;
+        if (m_autoplay) { m_autoplay = false; m_player.play(); }
     }
     m_position = m_player.position(); m_duration = m_player.duration();
     m_playing = m_player.playbackState() == QMediaPlayer::PlayingState;
@@ -719,7 +847,7 @@ void PlayerController::publishOverlayUi() {
         {"lyrics",m_lyrics},{"translation",m_translation},{"lyricsMessage",m_lyricsMessage},
         {"lyricTrack",m_currentTrack},{"lyricLines",m_lyricLines},
         {"lyricsLoading",m_lyricsLoading},{"lyricsFailed",m_lyricsFailed},{"online",m_online},
-        {"quality",m_quality},{"qualityInfo",qualityInfo()},{"api",apiBase()},
+        {"quality",m_quality},{"sourceQualities",sourceQualities()},{"qualityInfo",qualityInfo()},{"api",apiBase()},
         {"favorites",favorites()},{"message",m_overlayMessage},
         {"playlistResults",m_playlistResults},{"playlistSearching",m_playlistSearching},{"playlistSearchMessage",m_playlistSearchMessage},
         {"rankings",m_rankings},{"rankingsLoading",m_rankingsLoading},{"rankingsMessage",m_rankingsMessage},{"rankingSource",m_rankingSource},

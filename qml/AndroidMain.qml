@@ -70,7 +70,7 @@ ApplicationWindow {
                     Layout.bottomMargin: 24
                     Label { text: "浮音"; font.pixelSize: 20; font.bold: true; color: welcomeWindow.ink }
                     Item { Layout.fillWidth: true }
-                    Label { text: "FloatMusic 0.9"; font.pixelSize: 12; color: welcomeWindow.muted }
+                    Label { text: "FloatMusic 1.1"; font.pixelSize: 12; color: welcomeWindow.muted }
                 }
 
                 Item {

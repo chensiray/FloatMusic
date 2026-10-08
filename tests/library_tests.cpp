@@ -28,6 +28,7 @@ public:
     bool badGdAudio = false, hangGd = false, corruptGdAudio = false;
     bool failingLyrics = false, noLyrics = false;
     int firstLyricDelay = 0;
+    int audioUrlDelay = 0;
     explicit MockApi(int seconds = 2) {
         QDataStream stream(&wave, QIODevice::WriteOnly); stream.setByteOrder(QDataStream::LittleEndian);
         const quint32 bytes = 16000 * 2 * seconds;
@@ -97,6 +98,7 @@ public:
                         safe->disconnectFromHost();
                     };
                     if(keyword=="slow")QTimer::singleShot(300,socket,send);
+                    else if(url.path()=="/song/url/v1" && audioUrlDelay>0) QTimer::singleShot(audioUrlDelay,socket,send);
                     else if(url.path().endsWith("/lyric") && query.queryItemValue("id")=="101" && firstLyricDelay>0) QTimer::singleShot(firstLyricDelay,socket,send);
                     else send();
                 });
@@ -237,6 +239,33 @@ private slots:
         player.playSearchResult(0);QTRY_VERIFY_WITH_TIMEOUT(player.playing(),6000);
         QVERIFY2(player.error().isEmpty(),qPrintable(player.error()));QVERIFY(player.qualityInfo().contains("INJAHOW"));
         QCOMPARE(player.currentTrack(),QString("netease:101"));
+    }
+    void delayedQualitySwitchKeepsTheCurrentPosition_data() {
+        QTest::addColumn<bool>("startPlaying");
+        QTest::newRow("paused") << false;
+        QTest::newRow("playing") << true;
+    }
+    void delayedQualitySwitchKeepsTheCurrentPosition() {
+        QFETCH(bool, startPlaying);
+        MockApi mock(20); QVERIFY(mock.listen(QHostAddress::LocalHost));
+        MusicApi::Endpoints endpoints{mock.base(), mock.base() + "/api/1/", 3000};
+        PlayerController player(endpoints); player.setApiBase(mock.base());
+        player.setSearchSources({"netease"}); player.setQuality("standard"); player.setVolume(0);
+        player.search("Delayed quality switch"); QTRY_VERIFY(!player.searching());
+        player.playSearchResult(0); QTRY_VERIFY_WITH_TIMEOUT(!player.busy(), 5000);
+        QTRY_VERIFY(player.playing());
+        if (!startPlaying) { player.toggle(); QTRY_VERIFY(!player.playing()); }
+        player.seek(4000); QTRY_VERIFY(qAbs(player.position() - 4000) < 400);
+        const auto before = player.position();
+        mock.audioUrlDelay = 1200;
+        player.setSourceQuality("netease", "lossless");
+        QVERIFY(player.busy());
+        QTRY_VERIFY_WITH_TIMEOUT(!player.busy(), 5000);
+        QVERIFY2(player.error().isEmpty(), qPrintable(player.error()));
+        QCOMPARE(player.playing(), startPlaying);
+        if (startPlaying) QVERIFY(player.position() >= before + 600);
+        else QVERIFY(qAbs(player.position() - before) < 400);
+        QCOMPARE(player.currentTrack(), QString("netease:101"));
     }
     void rankingsParsingAndEndpoints() {
         PlaylistApiFixture mock; QVERIFY(mock.listen(QHostAddress::LocalHost));

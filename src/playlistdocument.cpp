@@ -9,6 +9,7 @@
 #include <QSet>
 #include <QUrl>
 #include <QUrlQuery>
+#include <cmath>
 
 namespace PlaylistDocument {
 Parsed parse(const QString &text) {
@@ -100,7 +101,11 @@ Parsed parse(const QString &text) {
         } else { ++result.skipped; continue; }
         const auto id = track.value("id").toString();
         if (seen.contains(id)) { ++result.skipped; continue; }
-        seen.insert(id); track["name"] = name; track["artist"] = raw.value("artist").toString().left(500); tracks << track;
+        seen.insert(id); track["name"] = name; track["artist"] = raw.value("artist").toString().left(500);
+        const double seconds = raw.value("duration").toVariant().toDouble();
+        if ((source == "tencent" || source == "kuwo") && std::isfinite(seconds) && seconds > 0 && seconds <= 86400)
+            track["duration"] = seconds;
+        tracks << track;
     }
     if (!songs.isEmpty() && tracks.isEmpty()) {
         result.error = QStringLiteral("没有可导入的歌曲。本地音乐需要在本机仍可访问，文件不包含音频本身。"); return result;
@@ -120,6 +125,10 @@ QByteArray encode(const QVariantMap &playlist, const QStringList &ids, QString &
         QVariantMap clean;
         for (const auto &key : {"id", "source", "songId", "name", "artist", "path"})
             if (song.contains(key)) clean[key] = song.value(key);
+        const double seconds = song.value("duration").toDouble();
+        const auto source = song.value("source").toString();
+        if ((source == "tencent" || source == "kuwo") && std::isfinite(seconds) && seconds > 0 && seconds <= 86400)
+            clean["duration"] = seconds;
         tracks << clean;
     }
     if (!selected.isEmpty() && tracks.isEmpty()) { error = QStringLiteral("所选歌曲已不在歌单中，请重新选择。"); return {}; }

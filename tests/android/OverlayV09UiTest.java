@@ -140,7 +140,8 @@ public final class OverlayV09UiTest extends Instrumentation {
             invoke(overlay,"update",new Class<?>[]{JSONObject.class},snapshot("tencent",false,false,"QQ音乐 · 普通音质 · Fixture MP3"));
             invoke(overlay,"refreshData",new Class<?>[]{JSONObject.class},fixture().put("quality","standard").put("qualitySelectable",false).put("currentSourceName","QQ音乐"));
             require(field(overlay,"apiInput")==api&&api.getText().toString().equals("https://typed.example/api")&&api.getSelectionStart()==8,"source and quality refresh keep the API draft, field and cursor");
-            require(field(overlay,"qualityButton")==quality&&!quality.isEnabled()&&quality.getText().toString().equals("普通音质"),"QQ exposes one disabled ordinary-quality surface");
+            require(field(overlay,"qualityButton")==quality&&quality.isEnabled()&&quality.getText().toString().startsWith("标准"),"legacy snapshots retain an editable Net choice without rebuilding settings");
+            require(((List<?>)field(overlay,"sourceQualityButtons")).size()==3,"settings expose independent Net, QQ and Kuwo choices");
             expect("QQ音乐 · 普通音质 · Fixture MP3",((TextView)field(overlay,"sourceInfo")).getText().toString(),"settings show actual service quality information");
             JSONObject pending=snapshot("tencent",false,true,"QQ音乐 · 普通音质 · Fixture MP3").put("currentSourceName","酷我音乐");invoke(overlay,"update",new Class<?>[]{JSONObject.class},pending);
             require(((TextView)field(overlay,"artist")).getText().toString().startsWith("QQ音乐"),"pending Kuwo playback does not relabel the loaded QQ song");

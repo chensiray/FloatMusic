@@ -53,6 +53,8 @@ Qt Quick 界面使用 `player_tests -platform offscreen` 和 `QT_QUICK_BACKEND=s
 
 Android 1.0 桥接回归运行 `tests/android/run-overlay-v1-contract-test.ps1`；真实原生悬浮页测试运行 `run-overlay-v1-ui-test.ps1 -DeviceSerial <序列号> -Screenshots`，包含曲库选择、数量设置、榜单平台和来源信息。必须明确选择已连接测试设备，不能把 Java 编译通过当作真机布局验证。
 
+1.1 新增独立曲库音质、音频格式和时长校验、竖直音量以及 10–30 字号和 0.8–3.0 倍行距回归。Android 运行 `tests/android/run-overlay-v11-contract-test.ps1`，编译全部生产 Java 并检查 11 组本地状态契约；`run-overlay-v11-ui-test.ps1 -DeviceSerial <序列号> -Screenshots` 检查已安装 APK 的 8 个实际控件场景，使用隔离偏好和内存样本，结束后移除临时测试包。可用 `-AdbPort` 选择 ADB 服务端口，工具与边界见 [Android 1.1 fixture](../tests/android/overlay-v11-fixture.md)。
+
 `tests/live_api` 是单独的真实接口探测工具，不属于默认离线测试；使用方法见该目录 README。真实服务结果只代表测试时状态。
 
 0.9 的匿名实测需显式设置 `FLOATMUSIC_LIVE_MULTISOURCE=1`。`multisource_api_tests liveAnonymousQq liveAnonymousKuwo` 检查搜索、解析、歌词；指定 `FLOATMUSIC_QT_PROBE` 为 `tests/music_api_playback_probe.cpp` 编译出的探针时还检查实际解码、暂停、跳转和继续播放。`liveAnonymousQqBackup` 单独检查 QQ 备用解析与 HTTPS 音频头。`multisource_controller_tests liveMixedPlaylistPlayback` 使用实际控制器检查 QQ/酷我混合歌单切歌、歌词、普通音质和恢复；这些测试音量为零，使用隔离数据。默认 CTest 跳过上述联网项。

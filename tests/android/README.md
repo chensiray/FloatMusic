@@ -12,7 +12,7 @@
 .\tests\android\run-resolver-tests.ps1
 ```
 
-成功输出 22 项解析器 `PASS` 与 6 项曲目状态 `PASS`，退出码 0。默认 CTest 不执行此程序；本次运行结果见[验证说明](../../VERIFICATION.md)。
+1.1 将本地回归扩展到 QQ / 酷我逐档请求与回退、音频头和格式规格、曲目身份及目标时长、独立偏好迁移、同曲替换的最新进度，以及加载和普通 seek 的独立身份。成功输出 23 组解析器 / 状态策略 `PASS`，退出码 0。默认 CTest 不执行此程序；本次运行结果见[验证说明](../../VERIFICATION.md)。
 
 ## 悬浮列表真机回归
 
@@ -31,3 +31,9 @@
 ## 0.9 悬浮页状态与控件
 
 `run-overlay-v09-contract-test.ps1` 使用实际 Java 代码检查四组本地状态契约；`run-overlay-v09-ui-test.ps1` 对已安装的 0.9 APK 检查五组实际控件，包括三曲库多选、空选、混合歌曲身份、音质和输入保留、触摸期间的结果刷新。工具配置、英文输出目录、可选控件图与真机命令见 [0.9 悬浮 UI fixture](overlay-v09-fixture.md)。
+
+## 1.1 悬浮页状态与控件
+
+`run-overlay-v11-contract-test.ps1` 编译实际生产 Java 与原生 fixture，运行 11 组本地状态契约。`run-overlay-v11-ui-test.ps1 -DeviceSerial '手机序列号' -Screenshots` 对已安装的 1.1 APK 检查 8 个真实控件场景，包括独立音质、竖直音量与小卡片、10–30 字号、歌词模式/长句、服务折叠、0.8–3.0 倍行距及手动翻看位置。使用隔离偏好与内存样本，不请求在线音源；测试后自动移除临时测试包。
+
+两个脚本都支持本机工具目录；真机脚本可用 `-AdbPort` 指定 ADB 端口。场景、截图和覆盖边界见 [1.1 悬浮 UI fixture](overlay-v11-fixture.md)。

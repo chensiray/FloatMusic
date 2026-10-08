@@ -134,7 +134,7 @@ class CatalogFixture : public QTcpServer {
                             const auto id = qqInvalid && i == 0
                                                 ? QString("bad/id")
                                                 : "MID" + QString::number(qqDuplicate && i == 50 ? 49 : i);
-                            songs.append(QJsonObject{{"songMID", id}, {"title", "Q" + QString::number(i)}});
+                            songs.append(QJsonObject{{"songMID", id}, {"title", "Q" + QString::number(i)}, {"interval", 200 + i}});
                         }
                         if (page == 2) {
                             delay = qqSecondDelay;
@@ -601,6 +601,8 @@ class CatalogApiTests : public QObject {
         QCOMPARE(rows[49].toMap().value("songId").toString(), QString("MID49"));
         QCOMPARE(rows[50].toMap().value("songId").toString(), QString("MID50"));
         QCOMPARE(rows[99].toMap().value("songId").toString(), QString("MID99"));
+        QCOMPARE(rows[49].toMap().value("duration").toDouble(), 249.0);
+        QCOMPARE(rows[50].toMap().value("duration").toDouble(), 250.0);
         QCOMPARE(f.requests.size(), 2);
         for (int i = 0; i < 2; ++i) {
             const QUrlQuery q(QUrl(QString::fromUtf8(f.requests[i].split(' ').value(1))));

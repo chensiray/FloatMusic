@@ -9,6 +9,7 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QFontDatabase>
+#include <QFontMetricsF>
 #include <QMimeData>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -54,6 +55,14 @@ static QQuickItem *findVisualItem(QQuickItem *root, const QString &name) {
     for (auto *child : root->childItems())
         if (auto *found = findVisualItem(child, name)) return found;
     return nullptr;
+}
+static bool revealInScrollable(QQuickItem *item) {
+    QQuickItem *viewport = item->parentItem();
+    while (viewport && !viewport->property("contentY").isValid()) viewport = viewport->parentItem();
+    if (!viewport) return false;
+    const double top = viewport->property("contentY").toDouble() + item->mapToItem(viewport, QPointF()).y();
+    const double end = qMax(0.0, viewport->property("contentHeight").toDouble() - viewport->height());
+    return viewport->setProperty("contentY", qBound(0.0, top - 50.0, end));
 }
 
 class PlayerTests : public QObject {
@@ -237,12 +246,14 @@ private slots:
         }
         auto *mode = window->findChild<QQuickItem *>("lyricModeSelector");
         auto *size = window->findChild<QQuickItem *>("lyricFontSizeSlider");
+        auto *spacing = window->findChild<QQuickItem *>("lyricLineSpacingSlider");
         auto *preview = window->findChild<QQuickItem *>("lyricFontPreview");
         auto *value = window->findChild<QObject *>("lyricFontSizeValue");
         auto *view = window->findChild<QQuickItem *>("timedLyrics");
         auto *plain = window->findChild<QQuickItem *>("lyricsText");
-        QVERIFY(mode); QVERIFY(size); QVERIFY(preview); QVERIFY(value); QVERIFY(view); QVERIFY(plain);
+        QVERIFY(mode); QVERIFY(size); QVERIFY(spacing); QVERIFY(preview); QVERIFY(value); QVERIFY(view); QVERIFY(plain);
         QCOMPARE(size->property("value").toInt(), 18);
+        QCOMPARE(spacing->property("value").toDouble(), 1.0);
         QCOMPARE(mode->property("currentIndex").toInt(), 0);
         QTRY_VERIFY(findVisualItem(view, "lyricOriginal-0"));
         auto *original = findVisualItem(view, "lyricOriginal-0");
@@ -262,49 +273,87 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, 1)));
         QVERIFY(QMetaObject::invokeMethod(mode, "activated", Q_ARG(int, 2)));
         QTRY_COMPARE(mode->property("currentIndex").toInt(), 2);
-        size->setProperty("value", 26.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
-        QTRY_COMPARE(value->property("text").toString(), QString("26"));
-        QTRY_COMPARE(preview->property("font").value<QFont>().pixelSize(), 28);
+        size->setProperty("value", 30.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
+        QTRY_COMPARE(value->property("text").toString(), QString("30"));
+        QTRY_COMPARE(preview->property("font").value<QFont>().pixelSize(), 32);
+        QVERIFY(revealInScrollable(preview)); QTest::qWait(40);
         const auto previewBottom = preview->mapToScene(QPointF(preview->width(), preview->height()));
         QVERIFY(previewBottom.x() <= window->width() && previewBottom.y() <= window->height());
-        QVERIFY(capture("windows-lyric-settings-26-light"));
+        QVERIFY(capture("windows-lyric-settings-30-light"));
         window->setProperty("section", "lyrics");
         QTRY_VERIFY(translated->isVisible());
         QCOMPARE(translated->property("text").toString(), QString("Keep music close"));
-        QTRY_COMPARE(original->property("font").value<QFont>().pixelSize(), 28);
-        QTRY_COMPARE(translated->property("font").value<QFont>().pixelSize(), 28);
-        QVERIFY(capture("windows-timed-lyrics-26-light"));
+        QTRY_COMPARE(original->property("font").value<QFont>().pixelSize(), 32);
+        QTRY_COMPARE(translated->property("font").value<QFont>().pixelSize(), 32);
+        QVERIFY(capture("windows-timed-lyrics-30-light"));
         controller.setLyricOffset(5000);
         QTRY_COMPARE(controller.currentLyricIndex(), 1);
-        QTRY_COMPARE(original->property("font").value<QFont>().pixelSize(), 26);
+        QTRY_COMPARE(original->property("font").value<QFont>().pixelSize(), 30);
         QTRY_VERIFY(findVisualItem(view, "lyricOriginal-1"));
         auto *current = findVisualItem(view, "lyricOriginal-1");
-        QTRY_COMPARE(current->property("font").value<QFont>().pixelSize(), 28);
+        QTRY_COMPARE(current->property("font").value<QFont>().pixelSize(), 32);
         QCOMPARE(current->property("color").value<QColor>(), window->property("accent").value<QColor>());
         view->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Down);
         QTRY_VERIFY(view->property("manualBrowsing").toBool());
         window->setProperty("section", "more"); window->setProperty("detail", "settings");
         QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, 2)));
-        size->setProperty("value", 14.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
-        QTRY_COMPARE(preview->property("font").value<QFont>().pixelSize(), 16);
-        QVERIFY(capture("windows-lyric-settings-14-dark"));
+        size->setProperty("value", 10.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
+        QTRY_COMPARE(preview->property("font").value<QFont>().pixelSize(), 12);
+        QVERIFY(capture("windows-lyric-settings-10-dark"));
         QVERIFY(QMetaObject::invokeMethod(mode, "activated", Q_ARG(int, 1)));
         window->setProperty("section", "lyrics");
         QTRY_COMPARE(current->property("text").toString(), QString("The next line"));
-        QTRY_COMPARE(current->property("font").value<QFont>().pixelSize(), 16);
+        QTRY_COMPARE(current->property("font").value<QFont>().pixelSize(), 12);
         QVERIFY(!translated->isVisible());
+        QVERIFY(QMetaObject::invokeMethod(view, "forceLayout")); QTest::qWait(40);
+        const qreal lyricStep = current->mapToScene(QPointF(0, 0)).y() - original->mapToScene(QPointF(0, 0)).y();
+        const qreal naturalLineHeight = QFontMetricsF(original->property("font").value<QFont>()).height();
+        QVERIFY2(lyricStep <= naturalLineHeight + 2,
+            qPrintable(QString("Small lyrics have a %1 px step for a %2 px font line").arg(lyricStep).arg(naturalLineHeight)));
         QVERIFY(view->property("manualBrowsing").toBool());
+        auto changeSpacing = [&](double factor) {
+            spacing->setProperty("value", factor);
+            return QMetaObject::invokeMethod(spacing, "moved");
+        };
+        QVERIFY(changeSpacing(3.0));
+        QTRY_COMPARE(window->property("lyricLineSpacing").toDouble(), 3.0);
+        QVERIFY(QMetaObject::invokeMethod(view, "forceLayout")); QTest::qWait(40);
+        const qreal wideStep = current->mapToScene(QPointF()).y() - original->mapToScene(QPointF()).y();
+        QVERIFY2(wideStep >= lyricStep * 2.7, "Line spacing must change the distance between single-line lyric rows");
+        auto *marker = findVisualItem(view, "lyricMarker-1"); QVERIFY(marker);
+        const QFontMetricsF activeMetrics(current->property("font").value<QFont>());
+        const qreal glyphCenter = current->mapToScene(QPointF()).y() + current->property("baselineOffset").toDouble()
+            - activeMetrics.ascent() + activeMetrics.height() / 2;
+        QVERIFY2(qAbs(marker->mapToScene(QPointF(0, marker->height() / 2)).y() - glyphCenter) <= 3,
+            "The highlight marker should remain beside the lyric when its line spacing grows");
+        QVERIFY(view->property("manualBrowsing").toBool());
+        QVERIFY(capture("windows-timed-lyrics-spacing-3-dark"));
+        QVERIFY(changeSpacing(.8));
+        QTRY_COMPARE(window->property("lyricLineSpacing").toDouble(), .8);
+        QVERIFY(QMetaObject::invokeMethod(view, "forceLayout")); QTest::qWait(40);
+        const qreal tightStep = current->mapToScene(QPointF()).y() - original->mapToScene(QPointF()).y();
+        QVERIFY(tightStep > 0 && tightStep < lyricStep);
+        QVERIFY(view->property("manualBrowsing").toBool());
+        QVERIFY(capture("windows-timed-lyrics-spacing-08-dark"));
+        QVERIFY(changeSpacing(1.0));
         auto *follow = window->findChild<QQuickItem *>("returnToCurrentLyric"); QVERIFY(follow);
         QTRY_VERIFY(follow->isVisible());
         QVERIFY(QMetaObject::invokeMethod(follow, "clicked"));
         QTRY_VERIFY(!view->property("manualBrowsing").toBool());
-        QVERIFY(capture("windows-timed-lyrics-14-dark"));
+        QVERIFY(capture("windows-timed-lyrics-10-dark"));
         api.original = QStringLiteral("让音乐留在手边\n下一句");
         api.translation = "Keep music close\nThe next line";
         controller.retryLyrics(); QTRY_VERIFY(!controller.lyricsLoading());
         QTRY_VERIFY(controller.lyricLines().isEmpty()); QTRY_VERIFY(plain->isVisible());
         QTRY_COMPARE(plain->property("text").toString(), QString("Keep music close\nThe next line"));
-        QTRY_COMPARE(plain->property("font").value<QFont>().pixelSize(), 14);
+        QTRY_COMPARE(plain->property("font").value<QFont>().pixelSize(), 10);
+        const QString plainWords = plain->property("text").toString();
+        const qreal compactPlainHeight = plain->property("contentHeight").toDouble();
+        QVERIFY(changeSpacing(3.0));
+        QTRY_VERIFY(plain->property("contentHeight").toDouble() >= compactPlainHeight * 2.0);
+        QCOMPARE(plain->property("text").toString(), plainWords);
+        QVERIFY(capture("windows-plain-lyrics-spacing-3-dark"));
+        QVERIFY(changeSpacing(1.0));
         for (int choice : {0, 2}) {
             window->setProperty("section", "more"); window->setProperty("detail", "settings");
             QVERIFY(QMetaObject::invokeMethod(mode, "activated", Q_ARG(int, choice)));
@@ -312,9 +361,10 @@ private slots:
             QTRY_VERIFY(plain->property("text").toString().contains(QStringLiteral("让音乐留在手边")));
             QCOMPARE(plain->property("text").toString().contains("Keep music close"), choice == 2);
         }
-        size->setProperty("value", 26.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
-        QTRY_COMPARE(plain->property("font").value<QFont>().pixelSize(), 26);
-        QVERIFY(capture("windows-plain-lyrics-26-dark"));
+        size->setProperty("value", 30.0); QVERIFY(QMetaObject::invokeMethod(size, "moved"));
+        QTRY_COMPARE(plain->property("font").value<QFont>().pixelSize(), 30);
+        QVERIFY(capture("windows-plain-lyrics-30-dark"));
+        QVERIFY(changeSpacing(2.2));
         QPointer<QQuickWindow> closed(window); window->deleteLater(); QTRY_VERIFY(closed.isNull());
         QQmlApplicationEngine reopened; QSignalSpy reopenWarnings(&reopened, &QQmlEngine::warnings);
         reopened.rootContext()->setContextProperty("player", &controller);
@@ -322,23 +372,31 @@ private slots:
         QCOMPARE(reopened.rootObjects().size(), 1);
         auto *restored = reopened.rootObjects().first();
         QCOMPARE(restored->findChild<QObject *>("lyricModeSelector")->property("currentIndex").toInt(), 2);
-        QCOMPARE(restored->findChild<QObject *>("lyricFontSizeSlider")->property("value").toInt(), 26);
-        QCOMPARE(restored->findChild<QObject *>("lyricsText")->property("font").value<QFont>().pixelSize(), 26);
+        QCOMPARE(restored->findChild<QObject *>("lyricFontSizeSlider")->property("value").toInt(), 30);
+        QCOMPARE(restored->findChild<QObject *>("lyricLineSpacingSlider")->property("value").toDouble(), 2.2);
+        QCOMPARE(restored->findChild<QObject *>("lyricsText")->property("font").value<QFont>().pixelSize(), 30);
         QVERIFY(restored->findChild<QObject *>("lyricsText")->property("text").toString().contains("Keep music close"));
         QCOMPARE(warnings.size(), 0); QCOMPARE(reopenWarnings.size(), 0);
     }
     void desktopLyricPreferenceBounds_data() {
         QTest::addColumn<int>("storedFont"); QTest::addColumn<int>("storedMode");
         QTest::addColumn<int>("fontSize"); QTest::addColumn<int>("mode");
-        QTest::newRow("below-minimum") << -40 << -1 << 14 << 0;
-        QTest::newRow("above-maximum") << 90 << 99 << 26 << 2;
+        QTest::addColumn<QVariant>("storedSpacing"); QTest::addColumn<double>("spacing");
+        QTest::newRow("below-minimum") << -40 << -1 << 10 << 0 << QVariant(.2) << 1.0;
+        QTest::newRow("above-maximum") << 90 << 99 << 30 << 2 << QVariant(5.0) << 1.0;
+        QTest::newRow("spacing-tight") << 18 << 0 << 18 << 0 << QVariant(.8) << .8;
+        QTest::newRow("spacing-wide") << 18 << 0 << 18 << 0 << QVariant(3.0) << 3.0;
+        QTest::newRow("spacing-nonnumeric") << 18 << 0 << 18 << 0 << QVariant("invalid") << 1.0;
+        QTest::newRow("spacing-nan") << 18 << 0 << 18 << 0 << QVariant(qQNaN()) << 1.0;
     }
     void desktopLyricPreferenceBounds() {
         QFETCH(int, storedFont); QFETCH(int, storedMode); QFETCH(int, fontSize); QFETCH(int, mode);
+        QFETCH(QVariant, storedSpacing); QFETCH(double, spacing);
         const auto previousName = QCoreApplication::applicationName();
         const auto restoreName = qScopeGuard([previousName] { QCoreApplication::setApplicationName(previousName); });
         QCoreApplication::setApplicationName("ui-lyrics-bounds-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
-        QSettings settings; settings.setValue("lyrics/fontSize", storedFont); settings.setValue("lyrics/displayMode", storedMode); settings.sync();
+        QSettings settings; settings.setValue("lyrics/fontSize", storedFont); settings.setValue("lyrics/displayMode", storedMode);
+        settings.setValue("lyrics/lineSpacing", storedSpacing); settings.sync();
         PlayerController controller; QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
         engine.rootContext()->setContextProperty("player", &controller);
         engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
@@ -349,6 +407,8 @@ private slots:
         auto *preview = window->findChild<QObject *>("lyricFontPreview");
         auto *text = window->findChild<QObject *>("lyricsText");
         QVERIFY(size); QVERIFY(language); QVERIFY(preview); QVERIFY(text);
+        auto *lineSpacing = window->findChild<QObject *>("lyricLineSpacingSlider"); QVERIFY(lineSpacing);
+        QCOMPARE(lineSpacing->property("value").toDouble(), spacing);
         QCOMPARE(size->property("value").toInt(), fontSize);
         QCOMPARE(language->property("currentIndex").toInt(), mode);
         QCOMPARE(preview->property("font").value<QFont>().pixelSize(), fontSize + 2);
@@ -359,6 +419,7 @@ private slots:
         QSettings persisted;
         QCOMPARE(persisted.value("lyrics/fontSize").toInt(), fontSize);
         QCOMPARE(persisted.value("lyrics/displayMode").toInt(), mode);
+        QCOMPARE(persisted.value("lyrics/lineSpacing").toDouble(), spacing);
         QQmlApplicationEngine reopened;
         reopened.rootContext()->setContextProperty("player", &controller);
         reopened.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
@@ -366,6 +427,7 @@ private slots:
         auto *restored = reopened.rootObjects().first();
         QCOMPARE(restored->findChild<QObject *>("lyricFontSizeSlider")->property("value").toInt(), fontSize);
         QCOMPARE(restored->findChild<QObject *>("lyricModeSelector")->property("currentIndex").toInt(), mode);
+        QCOMPARE(restored->findChild<QObject *>("lyricLineSpacingSlider")->property("value").toDouble(), spacing);
         QCOMPARE(warnings.size(), 0);
     }
     void desktopAppearanceReset() {
@@ -584,8 +646,8 @@ private slots:
                                     {"artist", QStringLiteral("测试歌手")}};
             QSettings().setValue("playback/session", QJsonDocument(QJsonObject::fromVariantMap(
                 {{"track", track}, {"position", 3250}, {"duration", 8000}})).toJson());
-            // Rebind the same controls so the model changes from five qualities to one
-            // and back. Restored sessions defer all audio and lyric network requests.
+            // All three preferences stay editable independently of the restored song.
+            // Restored sessions defer all audio and lyric network requests.
             auto *restored = new PlayerController(endpoints, &controllers);
             engine.rootContext()->setContextProperty("player", restored);
             QTRY_COMPARE(restored->currentTrack(), track.value("id").toString());
@@ -596,26 +658,21 @@ private slots:
             QTRY_VERIFY(source->isVisible());
             QTRY_COMPARE(source->property("text").toString(), platform.second);
             QVERIFY(revealQuality());
-            if (platform.first == "netease") {
-                QTRY_VERIFY(quality->isEnabled());
-                QTRY_COMPARE(quality->property("count").toInt(), 5);
-                QTRY_COMPARE(quality->property("currentIndex").toInt(), 3);
-                QTRY_COMPARE(quality->property("displayText").toString(), QStringLiteral("无损 FLAC"));
-            } else {
-                QTRY_VERIFY(!quality->isEnabled());
-                QTRY_COMPARE(quality->property("count").toInt(), 1);
-                QTRY_COMPARE(quality->property("currentIndex").toInt(), 0);
-                QTRY_COMPARE(quality->property("displayText").toString(), QStringLiteral("普通音质"));
-                QVERIFY(restored->qualityInfo().contains(QStringLiteral("普通音质")));
-                auto *popup = quality->property("popup").value<QObject *>();
-                QVERIFY(popup);
-                QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
-                    quality->mapToScene(QPointF(quality->width() / 2, quality->height() / 2)).toPoint());
-                QVERIFY(!popup->property("visible").toBool());
-                QCOMPARE(restored->quality(), QString("lossless"));
-            }
+            QTRY_VERIFY(quality->isEnabled());
+            QTRY_COMPARE(quality->property("count").toInt(), 5);
+            QTRY_COMPARE(quality->property("currentIndex").toInt(), 3);
+            QTRY_COMPARE(quality->property("displayText").toString(), QStringLiteral("无损 FLAC"));
+            auto *qqQuality = window->findChild<QObject *>("qqQualitySelector");
+            auto *kuwoQuality = window->findChild<QObject *>("kuwoQualitySelector");
+            QVERIFY(qqQuality); QVERIFY(kuwoQuality);
+            QCOMPARE(qqQuality->property("count").toInt(), 4);
+            QCOMPARE(kuwoQuality->property("count").toInt(), 3);
+            QVERIFY(QMetaObject::invokeMethod(qqQuality, "activated", Q_ARG(int, 2)));
+            QCOMPARE(restored->sourceQualities().value("tencent").toString(), QString("lossless"));
+            QCOMPARE(restored->quality(), QString("lossless"));
+            QVERIFY(!restored->busy());
             QTest::qWait(50); // Also check the queued model-selection synchronization.
-            QCOMPARE(quality->property("currentIndex").toInt(), platform.first == "netease" ? 3 : 0);
+            QCOMPARE(quality->property("currentIndex").toInt(), 3);
             const auto bottom = quality->mapToScene(QPointF(quality->width(), quality->height()));
             QVERIFY(bottom.x() <= window->width());
             QVERIFY(bottom.y() > 0 && bottom.y() <= window->height());
@@ -733,6 +790,7 @@ private slots:
                 window->setProperty("section", "more"); window->setProperty("detail", "settings"); QTest::qWait(50);
                 QVERIFY(window->grabWindow().save(artifacts + (mode == 1 ? "/settings-light.png" : "/settings-dark.png")));
                 auto *themeItem = qobject_cast<QQuickItem *>(theme); QVERIFY(themeItem);
+                QVERIFY(revealInScrollable(themeItem)); QTest::qWait(40);
                 QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, themeItem->mapToScene(QPointF(themeItem->width()/2, themeItem->height()/2)).toPoint());
                 QTest::qWait(150);
                 QVERIFY(window->grabWindow().save(artifacts + (mode == 1 ? "/dropdown-light.png" : "/dropdown-dark.png")));
@@ -754,8 +812,31 @@ private slots:
         QCOMPARE(progressImage.pixelColor(playedPixel), window->property("accent").value<QColor>());
         QCOMPARE(progressImage.pixelColor(unplayedPixel), window->property("line").value<QColor>());
         auto *volume = window->findChild<QQuickItem *>("volumeSlider"); QVERIFY(volume);
+        auto *volumeButton = window->findChild<QQuickItem *>("volumeButton"); QVERIFY(volumeButton);
+        auto *volumePopup = window->findChild<QObject *>("volumePopup"); QVERIFY(volumePopup);
+        QVERIFY(!volumePopup->property("visible").toBool());
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+            volumeButton->mapToScene(QPointF(volumeButton->width()/2, volumeButton->height()/2)).toPoint());
+        QTRY_VERIFY(volumePopup->property("opened").toBool());
+        QCOMPARE(volume->property("orientation").toInt(), int(Qt::Vertical));
+        QVERIFY(volumePopup->property("y").toDouble() + volumePopup->property("height").toDouble()
+            * window->property("contentScale").toDouble() <= volumeButton->mapToScene(QPointF()).y() + 1);
+        auto *volumeHandle = qobject_cast<QQuickItem *>(volume->property("handle").value<QObject *>());
+        QVERIFY(volumeHandle);
+        for (const int level : {0, 80, 100}) {
+            controller.setVolume(level);
+            QTRY_COMPARE(volume->property("value").toInt(), level);
+            QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                volumeHandle->mapToScene(QPointF(volumeHandle->width()/2, volumeHandle->height()/2)).toPoint());
+            QVERIFY(qAbs(controller.volume() - level) <= 1);
+        }
         QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, volume->mapToScene(QPointF(volume->width()/2,volume->height()/2)).toPoint());
         QVERIFY(qAbs(controller.volume() - 50) < 3);
+        const auto volumeArtifacts = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        if (!volumeArtifacts.isEmpty()) QVERIFY(window->grabWindow().save(volumeArtifacts + "/v11-volume-popup.png"));
+        QTest::keyClick(window, Qt::Key_Escape);
+        QTRY_VERIFY(!volumePopup->property("visible").toBool());
+        QVERIFY(window->isVisible());
         window->setProperty("section", "more"); window->setProperty("detail", "settings");
         QTest::qWait(100);
         QVERIFY(window->findChild<QQuickItem *>("outputSelector")->isVisible());

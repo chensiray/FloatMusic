@@ -50,6 +50,7 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool qualitySelectable READ qualitySelectable NOTIFY changed)
     Q_PROPERTY(QString apiBase READ apiBase NOTIFY searchChanged)
     Q_PROPERTY(QString quality READ quality NOTIFY changed)
+    Q_PROPERTY(QVariantMap sourceQualities READ sourceQualities NOTIFY sourceQualitiesChanged)
     Q_PROPERTY(QString qualityInfo READ qualityInfo NOTIFY changed)
     Q_PROPERTY(QString lyrics READ lyrics NOTIFY lyricsChanged)
     Q_PROPERTY(QString translation READ translation NOTIFY lyricsChanged)
@@ -107,9 +108,10 @@ public:
     int searchResultLimit() const { return m_searchResultLimit; }
     void setSearchResultLimit(int limit);
     QString currentSourceName() const;
-    bool qualitySelectable() const { return !m_online || m_loadedTrack.value("source").toString() == "netease"; }
+    bool qualitySelectable() const;
     QString apiBase() const { return m_api.baseUrl(); }
     QString quality() const { return m_quality; }
+    QVariantMap sourceQualities() const;
     QString qualityInfo() const;
     QString lyrics() const { return m_lyrics; }
     QString translation() const { return m_translation; }
@@ -132,7 +134,9 @@ public:
     Q_INVOKABLE void addFavorite(const QString &id);
     Q_INVOKABLE void removeFavorite(const QString &id);
     Q_INVOKABLE QRect desktopWorkArea(int x, int y) const;
+    Q_INVOKABLE void applyLyricLineSpacing(QObject *textDocument, qreal factor);
     Q_INVOKABLE void setQuality(const QString &quality);
+    Q_INVOKABLE void setSourceQuality(const QString &source, const QString &quality);
     Q_INVOKABLE void playSearchResult(int index);
     Q_INVOKABLE void retryPlayback();
     Q_INVOKABLE void retryLyrics();
@@ -172,6 +176,7 @@ signals:
     void searchChanged();
     void searchSourcesChanged();
     void searchSettingsChanged();
+    void sourceQualitiesChanged();
     void lyricsChanged();
     void lyricLinesChanged();
     void favoritesChanged();
@@ -181,6 +186,7 @@ signals:
 private:
     void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false, qint64 resumePosition = -1, bool continueSources = false);
     bool tryNextAudioSource();
+    bool rejectUnexpectedDuration();
     void rebuildLyrics();
     void updateCurrentLyric();
     void saveSession();
@@ -226,6 +232,11 @@ private:
     int m_loadGeneration = 0;
     int m_lyricsGeneration = 0;
     QString m_quality = "standard", m_loadedQuality;
+    QVariantMap m_sourceQualities;
+    QString qualityForSource(const QString &source) const;
+    QString m_requestedQuality, m_loadedFormat, m_qualityNotice;
+    int m_loadedSampleRate = 0, m_loadedBitsPerSample = 0;
+    qint64 m_expectedAudioDuration = 0;
     QString m_loadedSourceId, m_loadedSourceName;
     int m_loadedBitrate = 0;
     QStringList m_attemptedSources;

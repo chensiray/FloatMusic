@@ -12,8 +12,10 @@
 #include <QDateTime>
 #include <QNetworkProxyFactory>
 #include <QNetworkProxyQuery>
+#include <QtEndian>
 #include <memory>
 #include <algorithm>
+#include <cmath>
 
 namespace {
 constexpr qsizetype playlistTrackLimit = 2000;
@@ -93,11 +95,261 @@ QUrl withQuery(QUrl url, const QList<QPair<QString, QString>> &query) {
     // Form-style servers treat a literal '+' as a space; preserve song titles containing '+'.
     url.setQuery(params.query(QUrl::FullyEncoded).replace("+", "%2B")); return url;
 }
-bool audioHeader(const QByteArray &b) {
-    return b.startsWith("fLaC") || b.startsWith("ID3") || b.startsWith("OggS")
-        || ((b.startsWith("RIFF") || b.startsWith("RF64")) && b.mid(8, 4) == "WAVE")
-        || (b.size() >= 8 && b.mid(4, 4) == "ftyp")
-        || (b.size() >= 2 && quint8(b[0]) == 0xff && (quint8(b[1]) & 0xe0) == 0xe0);
+constexpr qsizetype audioProbeLimit = 16 * 1024;
+struct AudioInfo {
+    QString format;
+    int bitrate = 0, sampleRate = 0, bitsPerSample = 0;
+    double duration = 0;
+    bool valid = false, lossless = false;
+};
+quint32 be32(const QByteArray &bytes, qsizetype offset) {
+    return qFromBigEndian<quint32>(bytes.constData() + offset);
+}
+AudioInfo flacInfo(const QByteArray &bytes) {
+    AudioInfo info;
+    if (bytes.size() < 42 || !bytes.startsWith("fLaC") || (quint8(bytes[4]) & 0x7f) != 0
+        || bytes.mid(5, 3) != QByteArray::fromHex("000022")) return info;
+    const auto minBlock = qFromBigEndian<quint16>(bytes.constData() + 8);
+    const auto maxBlock = qFromBigEndian<quint16>(bytes.constData() + 10);
+    const quint64 packed = qFromBigEndian<quint64>(bytes.constData() + 18);
+    info.sampleRate = int(packed >> 44);
+    info.bitsPerSample = int((packed >> 36) & 31) + 1;
+    const quint64 samples = packed & ((quint64(1) << 36) - 1);
+    if (minBlock < 16 || maxBlock < minBlock || !info.sampleRate || info.sampleRate > 655350
+        || info.bitsPerSample < 4 || info.bitsPerSample > 32) return {};
+    info.format = "FLAC"; info.valid = info.lossless = true;
+    if (samples) info.duration = double(samples) / info.sampleRate;
+    return info;
+}
+struct MpegFrame {
+    int bitrate = 0, sampleRate = 0, size = 0, samples = 0, version = 0, layer = 0;
+    bool mono = false, crc = false;
+};
+MpegFrame mpegFrame(const QByteArray &bytes, qsizetype offset) {
+    MpegFrame frame;
+    if (offset < 0 || offset + 4 > bytes.size()) return frame;
+    const quint8 a = quint8(bytes[offset]), b = quint8(bytes[offset + 1]), c = quint8(bytes[offset + 2]);
+    frame.version = (b >> 3) & 3; frame.layer = (b >> 1) & 3;
+    const int bitrateIndex = c >> 4, rateIndex = (c >> 2) & 3;
+    if (a != 0xff || (b & 0xe0) != 0xe0 || frame.version == 1 || !frame.layer
+        || !bitrateIndex || bitrateIndex == 15 || rateIndex == 3) return {};
+    static constexpr int rates[]{44100, 48000, 32000};
+    static constexpr int mpeg1[3][14]{
+        {32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448},
+        {32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384},
+        {32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}};
+    static constexpr int mpeg2Layer1[]{32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256};
+    static constexpr int mpeg2[]{8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160};
+    frame.sampleRate = rates[rateIndex] / (frame.version == 3 ? 1 : frame.version == 2 ? 2 : 4);
+    frame.bitrate = frame.version == 3 ? mpeg1[3 - frame.layer][bitrateIndex - 1]
+        : frame.layer == 3 ? mpeg2Layer1[bitrateIndex - 1] : mpeg2[bitrateIndex - 1];
+    const int padding = (c >> 1) & 1;
+    frame.samples = frame.layer == 3 ? 384 : frame.layer == 1 && frame.version != 3 ? 576 : 1152;
+    frame.size = frame.layer == 3 ? (12 * frame.bitrate * 1000 / frame.sampleRate + padding) * 4
+        : (frame.layer == 1 && frame.version != 3 ? 72 : 144) * frame.bitrate * 1000 / frame.sampleRate + padding;
+    frame.mono = (quint8(bytes[offset + 3]) >> 6) == 3; frame.crc = !(b & 1);
+    return frame;
+}
+AudioInfo mpegInfo(const QByteArray &bytes) {
+    qsizetype start = 0;
+    if (bytes.startsWith("ID3")) {
+        if (bytes.size() < 10) return {};
+        quint32 tagSize = 0;
+        for (int i = 6; i < 10; ++i) {
+            if (quint8(bytes[i]) & 0x80) return {};
+            tagSize = (tagSize << 7) | quint8(bytes[i]);
+        }
+        start = 10 + tagSize + ((quint8(bytes[5]) & 0x10) ? 10 : 0);
+    }
+    for (qsizetype offset = start; offset + 4 <= bytes.size(); ++offset) {
+        const auto frame = mpegFrame(bytes, offset);
+        if (!frame.size || offset + frame.size > bytes.size()) continue;
+        if (offset + frame.size + 4 <= bytes.size()) {
+            const auto next = mpegFrame(bytes, offset + frame.size);
+            if (!next.size || next.version != frame.version || next.layer != frame.layer || next.sampleRate != frame.sampleRate) continue;
+        }
+        AudioInfo info; info.valid = true; info.format = frame.layer == 1 ? "MP3" : frame.layer == 2 ? "MP2" : "MP1";
+        info.sampleRate = frame.sampleRate; info.bitrate = frame.bitrate;
+        // A Xing/Info header gives the whole stream's duration and average bitrate for VBR files.
+        const qsizetype xing = offset + 4 + (frame.crc ? 2 : 0)
+            + (frame.version == 3 ? (frame.mono ? 17 : 32) : (frame.mono ? 9 : 17));
+        if (frame.layer == 1 && xing + 12 <= offset + frame.size
+            && (bytes.mid(xing, 4) == "Xing" || bytes.mid(xing, 4) == "Info")) {
+            const quint32 flags = be32(bytes, xing + 4);
+            qsizetype field = xing + 8;
+            if (flags & 1) {
+                info.duration = double(be32(bytes, field)) * frame.samples / frame.sampleRate; field += 4;
+            }
+            if ((flags & 2) && field + 4 <= offset + frame.size && info.duration > 0)
+                info.bitrate = qRound(double(be32(bytes, field)) * 8 / info.duration / 1000);
+        }
+        return info;
+    }
+    return {};
+}
+AudioInfo oggInfo(const QByteArray &bytes) {
+    if (bytes.size() < 28 || !bytes.startsWith("OggS") || bytes[4] != 0) return {};
+    const int segments = quint8(bytes[26]);
+    if (!segments || 27 + segments > bytes.size()) return {};
+    qsizetype length = 0; bool complete = false;
+    for (int i = 0; i < segments; ++i) {
+        const int size = quint8(bytes[27 + i]); length += size;
+        if (size < 255) { complete = true; break; }
+    }
+    const qsizetype offset = 27 + segments;
+    if (!complete || offset + length > bytes.size()) return {};
+    const auto packet = bytes.mid(offset, length);
+    if (packet.startsWith(QByteArray::fromHex("7f464c4143")) && packet.size() >= 9) return flacInfo(packet.mid(9));
+    if (packet.size() < 30 || !packet.startsWith(QByteArray::fromHex("01766f72626973"))
+        || qFromLittleEndian<quint32>(packet.constData() + 7) != 0 || !quint8(packet[11]) || !(packet[29] & 1)) return {};
+    AudioInfo info; info.sampleRate = int(qFromLittleEndian<quint32>(packet.constData() + 12));
+    const auto nominal = qFromLittleEndian<qint32>(packet.constData() + 20);
+    if (info.sampleRate <= 0 || info.sampleRate > 768000) return {};
+    info.valid = true; info.format = "Vorbis";
+    if (nominal > 0) info.bitrate = qRound(double(nominal) / 1000);
+    return info;
+}
+AudioInfo wavInfo(const QByteArray &bytes) {
+    if (bytes.size() < 12 || !(bytes.startsWith("RIFF") || bytes.startsWith("RF64")) || bytes.mid(8, 4) != "WAVE") return {};
+    AudioInfo info; info.format = "WAV"; info.valid = true;
+    for (qsizetype offset = 12; offset + 8 <= bytes.size();) {
+        const quint32 length = qFromLittleEndian<quint32>(bytes.constData() + offset + 4);
+        if (length > quint64(bytes.size() - offset - 8)) break;
+        if (bytes.mid(offset, 4) == "fmt " && length >= 16) {
+            const char *data = bytes.constData() + offset + 8;
+            const quint16 codec = qFromLittleEndian<quint16>(data);
+            const quint32 rate = qFromLittleEndian<quint32>(data + 4), byteRate = qFromLittleEndian<quint32>(data + 8);
+            const quint16 bits = qFromLittleEndian<quint16>(data + 14);
+            if ((codec == 1 || codec == 3) && rate > 0 && rate <= 768000 && bits > 0 && bits <= 64) {
+                info.sampleRate = int(rate); info.bitsPerSample = bits; info.lossless = true;
+                info.bitrate = qRound(double(byteRate) * 8 / 1000);
+            }
+            break;
+        }
+        offset += 8 + length + (length & 1);
+    }
+    return info;
+}
+AudioInfo aacInfo(const QByteArray &bytes) {
+    AudioInfo info;
+    if (bytes.size() >= 7 && quint8(bytes[0]) == 0xff && (quint8(bytes[1]) & 0xf6) == 0xf0) {
+        static constexpr int rates[]{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350};
+        const int index = (quint8(bytes[2]) >> 2) & 15;
+        const int size = ((quint8(bytes[3]) & 3) << 11) | (quint8(bytes[4]) << 3) | (quint8(bytes[5]) >> 5);
+        if (index >= 13 || size < 7 || size > bytes.size()) return {};
+        info.sampleRate = rates[index]; info.format = "AAC"; info.valid = true;
+        info.bitrate = qRound(double(size) * 8 * info.sampleRate / (1024 * ((quint8(bytes[6]) & 3) + 1)) / 1000);
+        return info;
+    }
+    if (bytes.size() < 8 || bytes.mid(4, 4) != "ftyp") return {};
+    for (qsizetype type = bytes.indexOf("mp4a"); type >= 4; type = bytes.indexOf("mp4a", type + 4)) {
+        const qsizetype start = type - 4;
+        const quint32 size = be32(bytes, start);
+        if (size < 36 || start + 36 > bytes.size()) continue;
+        const qsizetype end = qMin<qsizetype>(bytes.size(), start + size);
+        const int rate = int(be32(bytes, start + 32) >> 16);
+        if (rate <= 0) continue;
+        const qsizetype esds = bytes.indexOf("esds", start + 36);
+        if (esds < 0 || esds + 4 >= end) continue;
+        for (qsizetype descriptor = esds + 8; descriptor + 2 < end; ++descriptor) {
+            if (quint8(bytes[descriptor]) != 4) continue;
+            qsizetype payload = descriptor + 1; quint32 length = 0; bool complete = false;
+            for (int i = 0; i < 4 && payload < end; ++i) {
+                const quint8 byte = quint8(bytes[payload++]); length = (length << 7) | (byte & 0x7f);
+                if (!(byte & 0x80)) { complete = true; break; }
+            }
+            if (!complete || length < 13 || length > quint64(end - payload)) continue;
+            const quint8 objectType = quint8(bytes[payload]);
+            if (!(objectType == 0x40 || (objectType >= 0x66 && objectType <= 0x68))
+                || (quint8(bytes[payload + 1]) >> 2) != 5) continue;
+            info.valid = true; info.format = "AAC"; info.sampleRate = rate;
+            info.bitrate = qRound(double(be32(bytes, payload + 9)) / 1000); return info;
+        }
+    }
+    return {};
+}
+AudioInfo inspectAudio(const QByteArray &bytes, qint64 totalBytes = 0) {
+    AudioInfo info;
+    if (bytes.startsWith("fLaC")) info = flacInfo(bytes);
+    else if (bytes.startsWith("OggS")) info = oggInfo(bytes);
+    else if (bytes.startsWith("RIFF") || bytes.startsWith("RF64")) info = wavInfo(bytes);
+    else {
+        info = aacInfo(bytes);
+        if (!info.valid) info = mpegInfo(bytes);
+    }
+    if (info.valid && info.lossless && info.duration > 0 && totalBytes > bytes.size())
+        info.bitrate = qRound(double(totalBytes) * 8 / info.duration / 1000);
+    return info;
+}
+bool unprobedContainer(const QByteArray &bytes, qint64 totalBytes) {
+    if (bytes.size() >= 10 && bytes.startsWith("ID3")) {
+        const int version = quint8(bytes[3]);
+        if (version < 2 || version > 4 || quint8(bytes[4]) == 0xff) return false;
+        const int allowedFlags = version == 2 ? 0xc0 : version == 3 ? 0xe0 : 0xf0;
+        if (quint8(bytes[5]) & ~allowedFlags) return false;
+        quint32 size = 0;
+        for (int i = 6; i < 10; ++i) {
+            if (quint8(bytes[i]) & 0x80) return false;
+            size = (size << 7) | quint8(bytes[i]);
+        }
+        const qint64 tagEnd = 10 + qint64(size) + ((version == 4 && (quint8(bytes[5]) & 0x10)) ? 10 : 0);
+        // Valid metadata can fill the bounded sample. The decoder confirms the actual stream;
+        // an ID3 tag alone does not establish MP3, bitrate, or the requested higher quality.
+        return totalBytes > 0 ? totalBytes > tagEnd : bytes.size() == audioProbeLimit && tagEnd >= bytes.size();
+    }
+    if (bytes.size() < 16 || bytes.mid(4, 4) != "ftyp") return false;
+    quint64 size = be32(bytes, 0); qsizetype header = 8;
+    if (size == 1) { size = qFromBigEndian<quint64>(bytes.constData() + 8); header = 16; }
+    if (size < quint64(header + 8) || size > quint64(bytes.size()) || ((size - header) & 3)) return false;
+    for (qsizetype i = header; i < header + 4; ++i)
+        if (quint8(bytes[i]) < 0x20 || quint8(bytes[i]) > 0x7e) return false;
+    // ftyp only identifies the container. It may contain video; Qt's final media validation
+    // remains responsible for confirming audio before playback.
+    return totalBytes > 0 ? quint64(totalBytes) > size : quint64(bytes.size()) > size;
+}
+bool serviceFailure(const QString &error) {
+    const int status = error.startsWith("HTTP ") ? error.mid(5).toInt() : 0;
+    return status == 429 || (status >= 500 && status <= 599)
+        || error.contains(QStringLiteral("连接")) || error.contains(QStringLiteral("超时"));
+}
+bool durationMatches(double actual, double expected) {
+    return std::abs(actual - expected) <= qMax(3.0, expected * 0.05);
+}
+double songDurationSeconds(const QJsonValue &value) {
+    const double seconds = value.isString() ? value.toString().toDouble() : value.toDouble();
+    return std::isfinite(seconds) && seconds > 0 && seconds <= 86400 ? seconds : 0;
+}
+int qualityRank(const QString &quality) {
+    if (quality == "master") return 5;
+    if (quality == "hires") return 4;
+    if (quality == "lossless") return 3;
+    if (quality == "exhigh") return 2;
+    if (quality == "higher") return 1;
+    return 0;
+}
+QString qualityName(const QString &quality) {
+    if (quality == "master") return QStringLiteral("实验高规格");
+    if (quality == "hires") return "Hi-Res";
+    if (quality == "lossless") return QStringLiteral("无损");
+    if (quality == "exhigh") return QStringLiteral("高码率");
+    if (quality == "higher") return QStringLiteral("较高音质");
+    return QStringLiteral("普通音质");
+}
+QString actualQuality(const AudioInfo &info, const QString &platform, const QString &routeQuality) {
+    if (info.lossless) {
+        if (platform == "tencent" && routeQuality == "master" && info.bitsPerSample >= 24 && info.sampleRate >= 96000) return "master";
+        if (platform == "netease" && (info.bitsPerSample > 16 || info.sampleRate > 48000)) return "hires";
+        return "lossless";
+    }
+    if (info.bitrate >= 256) return "exhigh";
+    if (platform == "netease" && info.bitrate >= 160) return "higher";
+    return "standard";
+}
+QUrl secureCdnUrl(QUrl url) {
+    if (url.scheme() == "http" && url.userInfo().isEmpty()
+        && QStringList{"aqqmusic.tc.qq.com", "ws.stream.qqmusic.qq.com", "isure.stream.qqmusic.qq.com",
+                       "kw-er.kuwo.cn", "other-er.kuwo.cn"}.contains(url.host())) url.setScheme("https");
+    return url;
 }
 class PlatformProxy : public QNetworkProxyFactory {
 public:
@@ -134,6 +386,7 @@ MusicApi::Endpoints MusicApi::builtinEndpoints() {
     endpoints.injahow = "https://api.injahow.cn/meting/";
     endpoints.vkeys = "https://api.vkeys.cn";
     endpoints.ourcraft = "https://music.yuncan.xyz/api";
+    endpoints.kuwoMobi = "https://mobi.kuwo.cn/mobi.s";
     return endpoints;
 }
 MusicApi::MusicApi(QObject *parent) : MusicApi(builtinEndpoints(), parent) {}
@@ -164,7 +417,12 @@ bool MusicApi::setBaseUrl(const QString &value) {
     return true;
 }
 bool MusicApi::validQuality(const QString &quality) {
-    return QStringList{"standard", "higher", "exhigh", "lossless", "hires"}.contains(quality);
+    return validQuality("netease", quality);
+}
+bool MusicApi::validQuality(const QString &source, const QString &quality) {
+    if (source == "netease") return QStringList{"standard", "higher", "exhigh", "lossless", "hires"}.contains(quality);
+    if (source == "tencent") return QStringList{"standard", "exhigh", "lossless", "master"}.contains(quality);
+    return source == "kuwo" && QStringList{"standard", "exhigh", "lossless"}.contains(quality);
 }
 QUrl MusicApi::endpoint(const QString &path, const QList<QPair<QString, QString>> &query) const {
     return withQuery(QUrl((m_base.isEmpty() ? m_endpoints.metadata : m_base) + path), query);
@@ -304,6 +562,8 @@ void MusicApi::search(const QString &keywords, const QStringList &sources, int l
                     if (!validPlatformId(source, id) || name.isEmpty()) continue;
                     track = {{"id", source + ':' + id}, {"source", source}, {"songId", id}, {"name", name},
                         {"artist", singerNames(song.value("singer"))}, {"sourceName", platformName(source)}};
+                    const double duration = songDurationSeconds(song.value(source == "tencent" ? "interval" : "duration"));
+                    if (duration > 0) track["duration"] = duration;
                 }
                 const QString id = track.value("id").toString();
                 if (id.isEmpty() || seen.contains(id)) continue;
@@ -339,9 +599,12 @@ void MusicApi::fetchTencentSongSearchPage(const std::shared_ptr<TencentSongSearc
             const QString name = song.value("title").toString().trimmed().left(1000);
             if (!validPlatformId("tencent", id) || name.isEmpty() || state->seen.contains(id)) continue;
             state->seen.insert(id);
-            state->tracks.append(QVariantMap{{"id", "tencent:" + id}, {"source", "tencent"},
+            QVariantMap track{{"id", "tencent:" + id}, {"source", "tencent"},
                 {"songId", id}, {"name", name}, {"artist", singerNames(song.value("singer"))},
-                {"sourceName", platformName("tencent")}});
+                {"sourceName", platformName("tencent")}};
+            const double duration = songDurationSeconds(song.value("interval"));
+            if (duration > 0) track["duration"] = duration;
+            state->tracks.append(track);
             if (state->tracks.size() >= 100) break;
         }
         // Raw page fullness controls continuation; filtered tracks must not shift the page boundary.
@@ -556,10 +819,12 @@ void MusicApi::resolve(const QString &songId, const QString &quality, std::funct
     });
 }
 struct MusicApi::AudioFetch {
-    struct Source { QString id, name, format; QUrl request; };
+    struct Source { QString id, name, format; QUrl request; QString quality; };
     QList<Source> sources;
     int index = 0, generation = 0;
     bool qualitySelectable = true;
+    QString platform, songId, requestedQuality;
+    double expectedDuration = 0;
     QElapsedTimer elapsed;
     QStringList errors;
     std::function<void(Audio, QString)> done;
@@ -568,41 +833,54 @@ struct MusicApi::AudioFetch {
 bool MusicApi::hasAudioBackups(const QString &source) const {
     if (source == "netease") return hasAudioBackups();
     if (source == "tencent") return !m_endpoints.vkeys.isEmpty() || !m_endpoints.injahow.isEmpty();
-    if (source == "kuwo") return !m_endpoints.ourcraft.isEmpty();
+    if (source == "kuwo") return !m_endpoints.kuwoMobi.isEmpty() || !m_endpoints.ourcraft.isEmpty();
     return false;
 }
 
-void MusicApi::audioRequest(const QUrl &url, bool sample, int timeoutMs, std::function<void(QByteArray, QUrl, QString)> done) {
+void MusicApi::audioRequest(const QUrl &url, bool sample, int timeoutMs,
+                            std::function<void(QByteArray, QUrl, QString, qint64)> done) {
     QNetworkRequest request(url);
     request.setTransferTimeout(timeoutMs);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
     request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
-    request.setRawHeader("User-Agent", "FloatMusic/0.9");
-    if (sample) request.setRawHeader("Range", "bytes=0-63");
+    request.setRawHeader("User-Agent", "FloatMusic/1.1");
+    if (sample) request.setRawHeader("Range", "bytes=0-16383");
     auto *reply = m_network.get(request); m_audioReply = reply;
     reply->setReadBufferSize(16 * 1024);
-    struct Response { QByteArray bytes; bool sampled = false, oversized = false, timedOut = false; };
+    struct Response { QByteArray bytes; QElapsedTimer elapsed; bool sampled = false, oversized = false, timedOut = false; };
     auto data = std::make_shared<Response>();
+    data->elapsed.start();
     auto *timer = new QTimer(reply); timer->setSingleShot(true);
     connect(timer, &QTimer::timeout, reply, [reply, data] { data->timedOut = true; reply->abort(); });
     timer->start(timeoutMs);
     connect(reply, &QIODevice::readyRead, reply, [reply, data, sample] {
-        const qsizetype limit = sample ? 64 : 64 * 1024;
-        data->bytes += reply->read(limit + 1 - data->bytes.size());
-        if (sample && data->bytes.size() >= 16) { data->sampled = true; data->bytes.truncate(64); reply->abort(); }
+        const qsizetype limit = sample ? audioProbeLimit : 64 * 1024;
+        data->bytes += reply->read(limit + (sample ? 0 : 1) - data->bytes.size());
+        if (sample && data->bytes.size() >= limit) { data->sampled = true; reply->abort(); }
         else if (data->bytes.size() > limit) { data->oversized = true; reply->abort(); }
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, timer, data, sample, done, timeoutMs, url] {
         timer->stop();
-        if (reply->isOpen() && !data->sampled && !data->oversized) data->bytes += reply->readAll();
+        if (reply->isOpen() && !data->sampled && !data->oversized) {
+            const qsizetype limit = sample ? audioProbeLimit : 64 * 1024;
+            data->bytes += reply->read(limit + (sample ? 0 : 1) - data->bytes.size());
+        }
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        qint64 totalBytes = 0;
+        if (sample) {
+            static const QRegularExpression range(QStringLiteral("^bytes\\s+[0-9]+-[0-9]+/([0-9]+)$"));
+            const auto match = range.match(QString::fromLatin1(reply->rawHeader("Content-Range")).trimmed());
+            if (match.hasMatch()) totalBytes = match.captured(1).toLongLong();
+            else if (status == 200) totalBytes = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+        }
         QString error;
         if (data->timedOut || reply->error() == QNetworkReply::TimeoutError) error = QStringLiteral("连接超时");
         else if (status < 200 || status >= 300) error = status ? QStringLiteral("HTTP %1").arg(status) : QStringLiteral("连接失败，请检查网络或系统代理");
-        else if (data->oversized || data->bytes.size() > (sample ? 64 : 64 * 1024)) error = QStringLiteral("响应过大");
+        else if (data->oversized || data->bytes.size() > (sample ? audioProbeLimit : 64 * 1024)) error = QStringLiteral("响应过大");
         else if (reply->error() != QNetworkReply::NoError && !(sample && data->sampled)) error = QStringLiteral("连接失败，请检查网络或系统代理");
-        else if (sample && !audioHeader(data->bytes)) error = QStringLiteral("地址已失效或返回的不是音频");
+        else if (sample && !inspectAudio(data->bytes).valid && !unprobedContainer(data->bytes, totalBytes))
+            error = QStringLiteral("地址已失效或音频头未能确认编码格式");
         const QUrl finalUrl = reply->url();
         const QUrl redirect = finalUrl.resolved(reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl());
         const bool blockedQqDowngrade = sample && reply->error() == QNetworkReply::InsecureRedirectError
@@ -614,9 +892,10 @@ void MusicApi::audioRequest(const QUrl &url, bool sample, int timeoutMs, std::fu
         // do not relax the global redirect policy or discard signed query parameters.
         if (blockedQqDowngrade) {
             QUrl secure = redirect; secure.setScheme("https");
-            if (secure != url) { audioRequest(secure, true, timeoutMs, done); return; }
+            const int remaining = timeoutMs - int(data->elapsed.elapsed());
+            if (secure != url && remaining > 0) { audioRequest(secure, true, remaining, done); return; }
         }
-        done(data->bytes, finalUrl, error);
+        done(data->bytes, finalUrl, error, totalBytes);
     });
 }
 
@@ -624,34 +903,51 @@ void MusicApi::resolveAudio(const QString &songId, const QString &quality, std::
     resolveAudio("netease", songId, quality, std::move(done), excluded);
 }
 void MusicApi::resolveAudio(const QString &platform, const QString &songId, const QString &quality,
-                            std::function<void(Audio, QString)> done, const QStringList &excluded) {
-    if (!validPlatformId(platform, songId) || !validQuality(quality)) { done({}, QStringLiteral("歌曲来源、ID 或音质参数无效。")); return; }
+                            std::function<void(Audio, QString)> done, const QStringList &excluded,
+                            double expectedDurationSeconds) {
+    if (!validPlatformId(platform, songId) || !validQuality(platform, quality)) { done({}, QStringLiteral("歌曲来源、ID 或音质参数无效。")); return; }
     const auto state = std::make_shared<AudioFetch>();
     state->generation = ++m_audioGeneration;
-    state->qualitySelectable = platform == "netease";
+    state->platform = platform; state->songId = songId; state->requestedQuality = quality;
+    if (std::isfinite(expectedDurationSeconds) && expectedDurationSeconds > 0 && expectedDurationSeconds <= 86400)
+        state->expectedDuration = expectedDurationSeconds;
     if (m_audioReply) m_audioReply->abort();
     state->done = std::move(done); state->elapsed.start();
-    const auto add = [&](QString id, QString name, QString format, QUrl request) {
-        if (!excluded.contains(id)) state->sources.append({id, name, format, request});
+    const auto add = [&](QString id, QString name, QString format, QUrl request, QString routeQuality = "standard") {
+        if (!excluded.contains(id)) state->sources.append({id, name, format, request, routeQuality});
     };
     const QList<QPair<QString, QString>> query{{"id", songId}, {"level", quality}};
     if (platform == "tencent") {
-        if (!m_endpoints.vkeys.isEmpty()) add("qq-vkeys", QStringLiteral("QQ 音乐 · 落月普通音质"), "vkeys",
-            withQuery(QUrl(m_endpoints.vkeys + "/music/tencent/song/link"), {{"mid", songId}, {"quality", "4"}, {"type", "0"}}));
+        const QStringList levels{"master", "lossless", "exhigh", "standard"};
+        const QHash<QString, QString> codes{{"master", "14"}, {"lossless", "10"}, {"exhigh", "8"}, {"standard", "4"}};
+        if (!m_endpoints.vkeys.isEmpty()) for (qsizetype i = levels.indexOf(quality); i < levels.size(); ++i) {
+            const auto level = levels[i];
+            add(level == "standard" ? QString("qq-vkeys") : "qq-vkeys-" + level,
+                QStringLiteral("QQ 音乐 · 落月"), "vkeys",
+                withQuery(QUrl(m_endpoints.vkeys + "/music/tencent/song/link"), {{"mid", songId}, {"quality", codes.value(level)}, {"type", "0"}}), level);
+        }
         if (!m_endpoints.injahow.isEmpty()) add("qq-injahow", QStringLiteral("QQ 音乐 · INJAHOW 普通音质"), "meting",
             withQuery(QUrl(m_endpoints.injahow), {{"server", "tencent"}, {"type", "song"}, {"id", songId}}));
     } else if (platform == "kuwo") {
+        const QStringList levels{"lossless", "exhigh", "standard"};
+        const QHash<QString, QString> codes{{"lossless", "2000kflac"}, {"exhigh", "320kmp3"}, {"standard", "128kmp3"}};
+        if (!m_endpoints.kuwoMobi.isEmpty()) for (qsizetype i = levels.indexOf(quality); i < levels.size(); ++i) {
+            const auto level = levels[i];
+            add(level == "standard" ? QString("kuwo-mobi") : "kuwo-mobi-" + level,
+                QStringLiteral("酷我音乐 · mobi（实验）"), "kuwo-mobi", withQuery(QUrl(m_endpoints.kuwoMobi),
+                    {{"f", "web"}, {"source", "jiakong"}, {"type", "convert_url_with_sign"}, {"rid", songId}, {"br", codes.value(level)}}), level);
+        }
         if (!m_endpoints.ourcraft.isEmpty()) {
             const auto request = withQuery(QUrl(m_endpoints.ourcraft), {{"server", "kuwo"}, {"type", "url"}, {"id", songId}, {"json", "1"}});
             add("kuwo-origin", QStringLiteral("酷我音乐 · 原始音频"), "kuwo-origin", request);
             add("kuwo-proxy", QStringLiteral("酷我音乐 · 中转备用"), "kuwo-proxy", request);
         }
-    } else if (!m_base.isEmpty()) add("custom", QStringLiteral("自定义服务"), "custom", endpoint("/song/url/v1", query));
+    } else if (!m_base.isEmpty()) add("custom", QStringLiteral("自定义服务"), "custom", endpoint("/song/url/v1", query), quality);
     else {
         const QHash<QString, QString> bitrates{{"standard", "128"}, {"higher", "192"}, {"exhigh", "320"}, {"lossless", "740"}, {"hires", "999"}};
         if (!m_endpoints.gdStudio.isEmpty()) add("gd", QStringLiteral("GD 音乐台"), "gd", withQuery(QUrl(m_endpoints.gdStudio),
-            {{"types", "url"}, {"source", "netease"}, {"id", songId}, {"br", bitrates.value(quality)}}));
-        add("byfuns", QStringLiteral("原接口"), "plain", withQuery(QUrl(m_endpoints.playback), query));
+            {{"types", "url"}, {"source", "netease"}, {"id", songId}, {"br", bitrates.value(quality)}}), quality);
+        add("byfuns", QStringLiteral("原接口"), "plain", withQuery(QUrl(m_endpoints.playback), query), quality);
         if (!m_endpoints.injahow.isEmpty()) add("injahow", "INJAHOW", "meting", withQuery(QUrl(m_endpoints.injahow),
             {{"server", "netease"}, {"type", "song"}, {"id", songId}}));
     }
@@ -678,23 +974,44 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
         m_gdRequests.append(now);
     }
     const int timeout = qMax(1, std::min({m_endpoints.timeoutMs, 6000, int(24000 - state->elapsed.elapsed())}));
-    audioRequest(source.request, false, timeout, [this, state, source](QByteArray bytes, QUrl, QString error) {
+    audioRequest(source.request, false, timeout, [this, state, source](QByteArray bytes, QUrl, QString error, qint64) {
         if (state->generation != m_audioGeneration) { state->done({}, QStringLiteral("音源请求已取消。")); return; }
         if (!error.isEmpty()) {
-            m_audioCooldown[source.id] = QDateTime::currentMSecsSinceEpoch() + 30000;
+            // Missing song/quality responses are local to this request, not service outages.
+            if (serviceFailure(error))
+                m_audioCooldown[source.id] = QDateTime::currentMSecsSinceEpoch() + 30000;
             state->errors.append(source.name + "：" + error); tryAudioSource(state); return;
         }
-        QString address; int bitrate = 0;
+        QString address; double providerDuration = 0;
         if (source.format == "plain") { if (bytes.size() <= 8192) address = QString::fromUtf8(bytes).trimmed(); }
         else {
             QJsonParseError parse; const auto doc = QJsonDocument::fromJson(bytes, &parse);
             if (parse.error == QJsonParseError::NoError) {
-                if (source.format == "gd" && doc.isObject()) { address = doc.object().value("url").toString(); bitrate = doc.object().value("br").toInt(); }
+                if (source.format == "gd" && doc.isObject()) address = doc.object().value("url").toString();
                 else if (source.format == "meting" && doc.isArray() && !doc.array().isEmpty()) address = doc.array().first().toObject().value("url").toString();
                 else if (source.format == "vkeys" && doc.isObject() && doc.object().value("code").toInt(-1) == 0) {
-                    const auto data = doc.object().value("data").toObject(); address = data.value("url").toString();
-                    static const QRegularExpression digits("[0-9]+");
-                    bitrate = digits.match(data.value("kbps").toString()).captured().toInt();
+                    const auto data = doc.object().value("data").toObject();
+                    if (data.value("songMID").toString() == state->songId) {
+                        address = data.value("url").toString();
+                        if (address.isEmpty()) address = data.value("link").toString();
+                    } else state->errors.append(source.name + QStringLiteral("：返回的歌曲 MID 不匹配，已拒绝"));
+                } else if (source.format == "kuwo-mobi" && doc.isObject() && doc.object().value("code").toInt(-1) == 200) {
+                    const auto data = doc.object().value("data").toObject();
+                    if (jsonId(data.value("rid")) != state->songId || data.value("type").toInt(-1) != 0) {
+                        state->done({}, QStringLiteral("酷我返回的歌曲身份或类型不符，已拒绝该音频；请重试或尝试其他歌曲。")); return;
+                    }
+                    providerDuration = data.value("duration").isString() ? data.value("duration").toString().toDouble()
+                        : data.value("duration").toDouble(-1);
+                    if (!std::isfinite(providerDuration) || providerDuration <= 0 || providerDuration > 86400) {
+                        state->done({}, QStringLiteral("酷我返回无有效时长，无法确认目标歌曲，已拒绝该音频。")); return;
+                    }
+                    if (state->expectedDuration > 0 && !durationMatches(providerDuration, state->expectedDuration)) {
+                        state->done({}, QStringLiteral("酷我返回时长与目标歌曲不符，已拒绝该音频；请重试或尝试其他歌曲。")); return;
+                    }
+                    if (state->expectedDuration <= 0 && providerDuration < 20) {
+                        state->done({}, QStringLiteral("酷我返回短音频但缺少目标时长，无法确认是否为完整歌曲，已拒绝该音频。")); return;
+                    }
+                    address = data.value("url").toString();
                 } else if (source.format.startsWith("kuwo-") && doc.isObject() && doc.object().value("ok").toBool()) {
                     const QUrl supplied(doc.object().value("url").toString(), QUrl::StrictMode);
                     const QUrl provider(m_endpoints.ourcraft);
@@ -713,17 +1030,43 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
                 }
             }
         }
-        const QUrl media(address, QUrl::StrictMode);
+        const QUrl media = secureCdnUrl(QUrl(address, QUrl::StrictMode));
         if (address.size() > 8192 || !validHttpUrl(media)) {
             state->errors.append(source.name + QStringLiteral("：该歌曲或音质未返回有效地址")); tryAudioSource(state); return;
         }
         const int remaining = int(24000 - state->elapsed.elapsed());
         if (remaining <= 0) { tryAudioSource(state); return; }
         audioRequest(media, true, qMax(1, std::min({m_endpoints.timeoutMs, 6000, remaining})),
-            [this, state, source, bitrate](QByteArray, QUrl finalUrl, QString failure) {
+            [this, state, source, providerDuration](QByteArray sample, QUrl finalUrl, QString failure, qint64 totalBytes) {
             if (state->generation != m_audioGeneration) { state->done({}, QStringLiteral("音源请求已取消。")); return; }
-            if (failure.isEmpty() && validHttpUrl(finalUrl)) state->done({finalUrl, source.id, source.name, bitrate}, {});
-            else { state->errors.append(source.name + "：" + failure); tryAudioSource(state); }
+            if (!failure.isEmpty() || !validHttpUrl(finalUrl)) {
+                if (serviceFailure(failure)) m_audioCooldown[source.id] = QDateTime::currentMSecsSinceEpoch() + 30000;
+                state->errors.append(source.name + "：" + (failure.isEmpty() ? QStringLiteral("返回的地址无效") : failure));
+                tryAudioSource(state); return;
+            }
+            const auto info = inspectAudio(sample, totalBytes);
+            if (state->platform == "kuwo" && info.duration > 0) {
+                const double target = state->expectedDuration > 0 ? state->expectedDuration : providerDuration;
+                if ((target > 0 && !durationMatches(info.duration, target))
+                    || (state->expectedDuration <= 0 && info.duration < 20)) {
+                    state->done({}, QStringLiteral("酷我音频头的时长与目标歌曲不符或缺少目标时长，已拒绝该音频；请重试或尝试其他歌曲。")); return;
+                }
+            }
+            const auto obtainedQuality = actualQuality(info, state->platform, source.quality);
+            if ((source.format == "vkeys" || source.format == "kuwo-mobi")
+                && qualityRank(obtainedQuality) < qualityRank(source.quality)) {
+                state->errors.append(source.name + QStringLiteral("：请求%1，实际为%2，继续尝试较低档位")
+                    .arg(qualityName(source.quality), qualityName(obtainedQuality)));
+                tryAudioSource(state); return;
+            }
+            QString notice;
+            if (qualityRank(obtainedQuality) < qualityRank(state->requestedQuality))
+                notice = QStringLiteral("所选%1暂未取得，已回退到%2。")
+                    .arg(qualityName(state->requestedQuality), qualityName(obtainedQuality));
+            if (obtainedQuality == "master") notice += QStringLiteral("实验高规格 FLAC；采样规格不能证明原始母带来源。");
+            state->done({finalUrl, source.id, source.name, info.bitrate, obtainedQuality, info.format,
+                         info.sampleRate, info.bitsPerSample, notice,
+                         state->platform == "kuwo" ? (state->expectedDuration > 0 ? state->expectedDuration : providerDuration) : 0}, {});
         });
     });
 }

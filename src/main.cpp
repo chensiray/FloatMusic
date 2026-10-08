@@ -9,10 +9,10 @@ int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
     app.setOrganizationName("FloatMusic"); app.setApplicationName("FloatMusic");
 #ifdef Q_OS_ANDROID
-    app.setApplicationVersion("1.0.0-preview");
+    app.setApplicationVersion("1.1.0-preview.1");
     app.setQuitOnLastWindowClosed(false);
 #else
-    app.setApplicationVersion("1.0.0-preview");
+    app.setApplicationVersion("1.1.0-preview.2");
 #endif
 #ifndef Q_OS_ANDROID
     SingleInstance instance(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));

@@ -28,17 +28,14 @@ public final class OverlayV09ContractTest {
                 .put("artist", "Local artist")), "mixed playlists identify local tracks");
         System.out.println("PASS compact row source labels and missing artist fallback");
 
-        JSONObject net = new JSONObject().put("loadedTrack", new JSONObject().put("source", "netease"));
-        JSONObject qq = new JSONObject().put("loadedTrack", new JSONObject().put("source", "tencent"));
-        JSONObject kw = new JSONObject().put("loadedTrack", new JSONObject().put("source", "kuwo"));
-        require(selectable(net, new JSONObject()), "Net keeps its saved quality choice");
-        require(!selectable(qq, new JSONObject()), "QQ must not expose ineffective quality choices");
-        require(!selectable(kw, new JSONObject()), "Kuwo must not expose ineffective quality choices");
-        require(!selectable(net.put("qualitySelectable", false), new JSONObject().put("qualitySelectable", true)),
-                "the service's pending-track quality capability takes precedence over an older UI snapshot");
-        require(!selectable(new JSONObject(), new JSONObject().put("qualitySelectable", false)),
-                "the C++ capability also applies before a service capability is published");
-        System.out.println("PASS platform quality capability and pending-track snapshot precedence");
+        JSONObject busy = new JSONObject().put("busy",true).put("qualitySelectable",false)
+                .put("sourceQualities",new JSONObject().put("netease","lossless").put("tencent","master").put("kuwo","exhigh"));
+        expect("master", quality(busy,new JSONObject().put("quality","hires"),"tencent"),
+                "busy playback keeps QQ's independent requested tier visible");
+        expect("exhigh", quality(busy,new JSONObject(),"kuwo"), "Kuwo's request is independent of the loaded song");
+        expect("hires", quality(new JSONObject(),new JSONObject().put("quality","hires"),"netease"),
+                "an old shared choice migrates only to Net");
+        System.out.println("PASS independent requested tiers during loading and legacy Net migration");
 
         JSONObject loading = new JSONObject().put("busy", true).put("currentSourceName", "酷我音乐")
                 .put("loadedTrack", new JSONObject().put("source", "tencent"));
@@ -55,8 +52,8 @@ public final class OverlayV09ContractTest {
     private static String subtitle(JSONObject track) throws Exception {
         return (String)call("trackSubtitle", new Class<?>[]{JSONObject.class}, track);
     }
-    private static boolean selectable(JSONObject playback, JSONObject ui) throws Exception {
-        return (Boolean)call("qualitySelectable", new Class<?>[]{JSONObject.class, JSONObject.class}, playback, ui);
+    private static String quality(JSONObject playback, JSONObject ui,String source) throws Exception {
+        return (String)call("sourceQuality", new Class<?>[]{JSONObject.class, JSONObject.class,String.class}, playback, ui,source);
     }
     private static String currentSource(JSONObject playback, JSONObject ui) throws Exception {
         return (String)call("currentSourceName", new Class<?>[]{JSONObject.class, JSONObject.class}, playback, ui);

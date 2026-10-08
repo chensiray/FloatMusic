@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($DeviceSerial)) { throw 'Provide an explicit -DeviceSerial.' }
 $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $artifactsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts')).TrimEnd([char[]]'\/')
-if (-not $OutputDir) { $OutputDir = Join-Path $artifactsRoot 'v1-implementation/android-ui' }
+if (-not $OutputDir) { $OutputDir = Join-Path $artifactsRoot 'v11-implementation/android-ui' }
 $OutputDir = [IO.Path]::GetFullPath($OutputDir).TrimEnd([char[]]'\/')
 $SdkRoot = [IO.Path]::GetFullPath($SdkRoot).TrimEnd([char[]]'\/')
 $JdkRoot = [IO.Path]::GetFullPath($JdkRoot).TrimEnd([char[]]'\/')
@@ -57,18 +57,18 @@ $java = Join-Path $JdkRoot 'bin/java.exe'
 $d8 = Join-Path $tools 'lib/d8.jar'
 $aapt = Join-Path $tools 'aapt.exe'
 $apksigner = Join-Path $tools 'apksigner.bat'
-$manifestFile = Join-Path $PSScriptRoot 'overlay-v1-manifest.xml'
-$fixtureFile = Join-Path $PSScriptRoot 'OverlayV1UiTest.java'
+$manifestFile = Join-Path $PSScriptRoot 'overlay-v11-manifest.xml'
+$fixtureFile = Join-Path $PSScriptRoot 'OverlayV11UiTest.java'
 foreach ($requiredFile in @($sdkJar, $adb, $javac, $java, $d8, $aapt, $apksigner, $KeyStore, $manifestFile, $fixtureFile)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) { throw "Required file is missing: $requiredFile" }
 }
-$testPackage = 'org.floatmusic.v1uitest'
-$instrumentClass = 'org.floatmusic.v1uitest.OverlayV1UiTest'
+$testPackage = 'org.floatmusic.v11uitest'
+$instrumentClass = 'org.floatmusic.v11uitest.OverlayV11UiTest'
 $fixtureManifest = [xml](Get-Content -LiteralPath $manifestFile -Raw)
 if ($fixtureManifest.manifest.package -ne $testPackage -or
     $fixtureManifest.manifest.instrumentation.GetAttribute('name','http://schemas.android.com/apk/res/android') -ne $instrumentClass -or
     $fixtureManifest.manifest.instrumentation.GetAttribute('targetPackage','http://schemas.android.com/apk/res/android') -ne 'org.floatmusic.player') {
-    throw 'The fixture manifest must identify only the 1.0 UI test package and the FloatMusic target.'
+    throw 'The fixture manifest must identify only the 1.1 UI test package and the FloatMusic target.'
 }
 function Invoke-Checked([string]$Executable, [string[]]$CommandArgs) {
     if ($Executable -eq $adb) { $CommandArgs = @('-P', [string]$AdbPort) + $CommandArgs }
@@ -108,7 +108,7 @@ try {
     $text = $result -join "`n"
     # Android prefixes the first stream line with INSTRUMENTATION_RESULT: stream=.
     $streamText = [regex]::Replace($text, '(?m)^INSTRUMENTATION_RESULT:\s*stream=', '')
-    $cases = @('sources', 'empty-and-playlist-search', 'mixed-identities', 'quality-editing', 'gesture-refresh', 'result-count', 'ranking-platforms', 'online-metadata')
+    $cases = @('quality-editing', 'volume-popup', 'volume-short', 'lyrics-small', 'lyrics-plain', 'font-range', 'service-fold', 'line-spacing')
     $allCasesPassed = $true
     foreach ($scene in $cases) {
         if ([regex]::Matches($streamText, "(?m)^PASS $([regex]::Escape($scene))\s*$").Count -ne 1) { $allCasesPassed = $false }
@@ -119,9 +119,9 @@ try {
         $text -notmatch '(?m)^INSTRUMENTATION_RESULT:\s*uiPassed=true\s*$' -or
         $text -notmatch '(?m)^INSTRUMENTATION_RESULT:\s*passed=8\s*$' -or
         $text -notmatch '(?m)^INSTRUMENTATION_CODE:\s*-1\s*$') {
-        throw "Overlay 1.0 UI regression failed. See $resultsFile"
+        throw "Overlay 1.1 UI regression failed. See $resultsFile"
     }
-    Write-Output "Overlay 1.0 UI regression passed. Results: $resultsFile"
+    Write-Output "Overlay 1.1 UI regression passed. Results: $resultsFile"
 } finally {
-    if ($installed) { Invoke-Checked $adb @('-s', $DeviceSerial, 'uninstall', 'org.floatmusic.v1uitest') }
+    if ($installed) { Invoke-Checked $adb @('-s', $DeviceSerial, 'uninstall', 'org.floatmusic.v11uitest') }
 }

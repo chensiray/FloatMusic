@@ -5,6 +5,7 @@
 #include <QStandardPaths>
 #include <QUuid>
 #include <QUrlQuery>
+#include <QDataStream>
 #include "playlistapi_fixture.h"
 #include "playercontroller.h"
 
@@ -37,6 +38,42 @@ public:
     }
     QString base() const { return "http://127.0.0.1:" + QString::number(serverPort()); }
 };
+class KuwoDurationFixture : public QTcpServer {
+public:
+    KuwoDurationFixture(int audioSeconds = 12, int targetSeconds = 226) : targetDuration(targetSeconds) {
+        QDataStream stream(&wave, QIODevice::WriteOnly); stream.setByteOrder(QDataStream::LittleEndian);
+        const quint32 bytes = 16000 * 2 * audioSeconds;
+        stream.writeRawData("RIFF", 4); stream << quint32(36 + bytes); stream.writeRawData("WAVEfmt ", 8);
+        stream << quint32(16) << quint16(1) << quint16(1) << quint32(16000) << quint32(32000) << quint16(2) << quint16(16);
+        stream.writeRawData("data", 4); stream << bytes; stream.writeRawData(QByteArray(bytes, '\0').constData(), bytes);
+        connect(this, &QTcpServer::newConnection, this, [this] {
+            while (auto *socket = nextPendingConnection()) {
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, socket, [this, socket] {
+                    const auto request = socket->property("request").toByteArray() + socket->readAll();
+                    socket->setProperty("request", request);
+                    if (!request.contains("\r\n\r\n") || socket->property("sent").toBool()) return;
+                    socket->setProperty("sent", true);
+                    const QUrl url(QString::fromUtf8(request.split(' ').value(1)));
+                    QByteArray body;
+                    if (url.path() == "/audio.wav") body = wave;
+                    else if (url.path() == "/ourcraft" && QUrlQuery(url).queryItemValue("type") == "search")
+                        body = QJsonDocument(QJsonObject{{"ok", true}, {"songs", QJsonArray{
+                            QJsonObject{{"id", "42"}, {"name", "Short song"}, {"duration", targetDuration}}}}}).toJson();
+                    else body = QJsonDocument(QJsonObject{{"code", 200},
+                        {"data", QJsonObject{{"rid", "42"}, {"type", 0}, {"duration", targetDuration}, {"url", base() + "/audio.wav"}}}}).toJson();
+                    socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size())
+                        + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
+    }
+    QString base() const { return "http://127.0.0.1:" + QString::number(serverPort()); }
+private:
+    QByteArray wave;
+    int targetDuration;
+};
 
 class MultisourceControllerTests : public QObject {
     Q_OBJECT
@@ -67,6 +104,118 @@ private slots:
         QVERIFY(!controller.searching());
         QVERIFY(controller.searchResults().isEmpty());
         QVERIFY(controller.searchMessage().contains(QStringLiteral("选择")));
+    }
+    void qualityPreferencesAreIndependentAndPersistWithoutPlayback() {
+        QSettings().setValue("netease/quality", "hires");
+        PlayerController controller(isolatedEndpoints());
+        QVERIFY(controller.metaObject()->indexOfProperty("sourceQualities") >= 0);
+        auto qualities = controller.property("sourceQualities").toMap();
+        QCOMPARE(qualities.value("netease").toString(), QString("hires"));
+        QCOMPARE(qualities.value("tencent").toString(), QString("standard"));
+        QCOMPARE(qualities.value("kuwo").toString(), QString("standard"));
+        QVERIFY(QMetaObject::invokeMethod(&controller, "setSourceQuality", Qt::DirectConnection,
+            Q_ARG(QString, QString("tencent")), Q_ARG(QString, QString("master"))));
+        QVERIFY(QMetaObject::invokeMethod(&controller, "setSourceQuality", Qt::DirectConnection,
+            Q_ARG(QString, QString("kuwo")), Q_ARG(QString, QString("lossless"))));
+        QCOMPARE(controller.quality(), QString("hires"));
+        QVERIFY(!controller.busy());
+        QVERIFY(controller.currentTrack().isEmpty());
+        PlayerController restored(isolatedEndpoints());
+        qualities = restored.property("sourceQualities").toMap();
+        QCOMPARE(qualities.value("netease").toString(), QString("hires"));
+        QCOMPARE(qualities.value("tencent").toString(), QString("master"));
+        QCOMPARE(qualities.value("kuwo").toString(), QString("lossless"));
+        controller.setQuality("exhigh");
+        qualities = controller.property("sourceQualities").toMap();
+        QCOMPARE(qualities.value("netease").toString(), QString("exhigh"));
+        QCOMPARE(qualities.value("tencent").toString(), QString("master"));
+        QCOMPARE(qualities.value("kuwo").toString(), QString("lossless"));
+    }
+    void qualityPreferencesRejectCrossPlatformAndCorruptValues() {
+        QSettings().setValue("netease/quality", "master");
+        QSettings().setValue("audio/quality/tencent", "hires");
+        QSettings().setValue("audio/quality/kuwo", "master");
+        PlayerController controller(isolatedEndpoints());
+        QVERIFY(controller.metaObject()->indexOfProperty("sourceQualities") >= 0);
+        const QVariantMap standard{{"netease", "standard"}, {"tencent", "standard"}, {"kuwo", "standard"}};
+        QCOMPARE(controller.property("sourceQualities").toMap(), standard);
+        for (const auto &pair : QList<QPair<QString, QString>>{{"netease", "master"},
+             {"tencent", "hires"}, {"kuwo", "higher"}, {"local", "lossless"}, {"unknown", "standard"}}) {
+            QVERIFY(QMetaObject::invokeMethod(&controller, "setSourceQuality", Qt::DirectConnection,
+                Q_ARG(QString, pair.first), Q_ARG(QString, pair.second)));
+        }
+        QCOMPARE(controller.property("sourceQualities").toMap(), standard);
+    }
+    void restoredQqSongUsesItsOwnQualityRatherThanNeteasePreference() {
+        SearchLimitFixture service; QVERIFY(service.listen(QHostAddress::LocalHost));
+        MusicApi::Endpoints endpoints{service.base(), service.base(), 1000};
+        endpoints.vkeys = service.base();
+        const QVariantMap track{{"id", "tencent:001RGrEX3ija5X"}, {"source", "tencent"},
+            {"songId", "001RGrEX3ija5X"}, {"name", "Restored QQ song"}};
+        QSettings().setValue("netease/quality", "hires");
+        QSettings().setValue("audio/quality/tencent", "lossless");
+        QSettings().setValue("playback/session", QJsonDocument(QJsonObject::fromVariantMap(
+            {{"track", track}, {"position", 3250}, {"duration", 8000}})).toJson());
+        PlayerController controller(endpoints);
+        QTRY_COMPARE(controller.currentTrack(), track.value("id").toString());
+        controller.setSourceQuality("netease", "exhigh");
+        QTest::qWait(30);
+        QVERIFY(service.requests.isEmpty());
+        controller.retryPlayback();
+        QTRY_VERIFY(!service.requests.isEmpty());
+        QCOMPARE(QUrlQuery(service.requests.first()).queryItemValue("quality"), QString("10"));
+        QTRY_VERIFY(!controller.busy());
+        // This fixture returns no audio URL; it verifies the request, not playback.
+        QVERIFY(!controller.error().isEmpty());
+        QCOMPARE(controller.quality(), QString("exhigh"));
+        QCOMPARE(controller.sourceQualities().value("tencent").toString(), QString("lossless"));
+    }
+    void decodedKuwoDurationRejectsPromptBeforeAutoplay_data() {
+        QTest::addColumn<int>("actualSeconds"); QTest::addColumn<bool>("knownTarget");
+        QTest::newRow("known-target-short-prompt") << 12 << true;
+        QTest::newRow("unknown-target-provider-duration") << 30 << false;
+    }
+    void decodedKuwoDurationRejectsPromptBeforeAutoplay() {
+        QFETCH(int, actualSeconds); QFETCH(bool, knownTarget);
+        KuwoDurationFixture service(actualSeconds); QVERIFY(service.listen(QHostAddress::LocalHost));
+        auto endpoints = isolatedEndpoints(); endpoints.kuwoMobi = service.base() + "/mobi.s"; endpoints.timeoutMs = 1000;
+        QVariantMap track{{"id", "kuwo:42"}, {"source", "kuwo"}, {"songId", "42"}, {"name", "Full song"}};
+        if (knownTarget) track["duration"] = 226;
+        QSettings().setValue("playback/session", QJsonDocument(QJsonObject::fromVariantMap(
+            {{"track", track}, {"position", 0}, {"duration", 226000}})).toJson());
+        PlayerController controller(endpoints); controller.setVolume(0);
+        QTRY_COMPARE(controller.currentTrack(), QString("kuwo:42"));
+        QSignalSpy changes(&controller, &PlayerController::changed);
+        bool everPlayed = false;
+        connect(&controller, &PlayerController::changed, this, [&] { everPlayed |= controller.playing(); });
+        controller.retryPlayback();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 5000);
+        QVERIFY2(!controller.ready(), qPrintable(controller.error() + " | " + controller.status()));
+        QVERIFY(!controller.playing()); QVERIFY(!everPlayed);
+        QVERIFY(controller.error().contains(QStringLiteral("时长")));
+        QVERIFY(changes.size() > 0);
+    }
+    void genuineShortKuwoSearchSongSurvivesSessionRestore() {
+        KuwoDurationFixture service(11, 11); QVERIFY(service.listen(QHostAddress::LocalHost));
+        auto endpoints = isolatedEndpoints(); endpoints.kuwoMobi = service.base() + "/mobi.s";
+        endpoints.ourcraft = service.base() + "/ourcraft"; endpoints.timeoutMs = 1000;
+        {
+            PlayerController controller(endpoints); controller.setVolume(0);
+            controller.setSearchSources({"kuwo"}); controller.search("Short song");
+            QTRY_VERIFY(!controller.searching()); QCOMPARE(controller.searchResults().size(), 1);
+            controller.playSearchResult(0);
+            QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 5000);
+            QVERIFY2(controller.error().isEmpty(), qPrintable(controller.error()));
+            QVERIFY(controller.ready()); QCOMPARE(controller.duration(), qint64(11000));
+            controller.toggle(); QVERIFY(!controller.playing());
+        }
+        const auto saved = QJsonDocument::fromJson(QSettings().value("playback/session").toByteArray()).object();
+        QCOMPARE(saved.value("track").toObject().value("duration").toDouble(), 11.0);
+        PlayerController restored(endpoints); restored.setVolume(0);
+        QTRY_COMPARE(restored.currentTrack(), QString("kuwo:42"));
+        restored.retryPlayback(); QTRY_VERIFY_WITH_TIMEOUT(!restored.busy(), 5000);
+        QVERIFY2(restored.error().isEmpty(), qPrintable(restored.error()));
+        QVERIFY(restored.ready()); QVERIFY(restored.playing()); QCOMPARE(restored.duration(), qint64(11000));
     }
     void resultLimitPersistsAndRejectsUnsupportedValues() {
         PlayerController controller(isolatedEndpoints());
@@ -172,8 +321,8 @@ private slots:
         QVERIFY(!controller.playing());
         QCOMPARE(controller.position(), qint64(3250));
         QCOMPARE(controller.property("currentSourceName").toString(), label);
-        QCOMPARE(controller.property("qualitySelectable").toBool(), source == "netease");
-        if (source != "netease") QVERIFY(controller.qualityInfo().contains(QStringLiteral("普通")));
+        QVERIFY(controller.property("qualitySelectable").toBool());
+        QVERIFY(controller.qualityInfo().contains(QStringLiteral("标准")));
     }
     void rejectsAMismatchedPlatformIdentityInSession() {
         const QVariantMap track{{"id", "netease:42"}, {"source", "kuwo"}, {"songId", "42"}, {"name", "Forged"}};
@@ -205,8 +354,8 @@ private slots:
                 QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 30000);
                 QVERIFY2(controller.ready(), qPrintable(controller.error()));
                 QCOMPARE(controller.currentTrack(), ids.last());
-                QVERIFY(!controller.qualitySelectable());
-                QVERIFY(controller.qualityInfo().contains(QStringLiteral("普通")));
+                QVERIFY(controller.qualitySelectable());
+                QVERIFY(controller.qualityInfo().contains(QStringLiteral("实际")));
                 QTRY_VERIFY_WITH_TIMEOUT(controller.playing(), 5000);
                 QTRY_VERIFY_WITH_TIMEOUT(controller.position() > 200, 5000);
                 QTRY_VERIFY_WITH_TIMEOUT(!controller.lyricsLoading(), 15000);

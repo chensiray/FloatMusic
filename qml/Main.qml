@@ -43,7 +43,11 @@ ApplicationWindow {
     readonly property color fieldBorder: darkMode ? "#687C97" : "#8190A5"
     readonly property color danger: darkMode ? "#FF9B93" : "#B42318"
     readonly property int lyricDisplayMode: Math.max(0, Math.min(2, lyricPreferences.displayMode))
-    readonly property int lyricFontSize: Math.max(14, Math.min(26, lyricPreferences.fontSize))
+    readonly property int lyricFontSize: Math.max(10, Math.min(30, lyricPreferences.fontSize))
+    readonly property real lyricLineSpacing: normalizedLineSpacing(lyricPreferences.lineSpacing)
+    function normalizedLineSpacing(value) {
+        return isFinite(value) && value >= 0.8 && value <= 3.0 ? Math.round(value * 10) / 10 : 1.0
+    }
     Settings {
         id: appearance; category: "appearance"
         property int mode: 0
@@ -57,16 +61,20 @@ ApplicationWindow {
         id: lyricPreferences; category: "lyrics"
         property int displayMode: 0
         property int fontSize: 18
+        property real lineSpacing: 1.0
         Component.onCompleted: {
             displayMode = root.lyricDisplayMode
             fontSize = root.lyricFontSize
+            lineSpacing = root.lyricLineSpacing
+            // An invalid stored type can leave the default property unchanged.
+            setValue("lineSpacing", lineSpacing)
             sync()
         }
     }
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: "浮音 1.0.0-preview · 桌面预览"
+    title: "浮音 1.1.0-preview.2 · 桌面预览"
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -91,7 +99,7 @@ ApplicationWindow {
         fitWindow(root); root.showNormal(); root.raise(); root.requestActivate()
     }
     function collapse() {
-        playbackMenu.close(); lyricTiming.close()
+        playbackMenu.close(); volumeMenu.close(); lyricTiming.close()
         libraryMenu.close(); selectionMenu.close(); targetSheet.close(); importSheet.close(); exportSheet.close(); descriptionSheet.close(); playlistDialog.close(); deleteDialog.close(); removeDialog.close(); trackMenu.close()
         floating.x = root.x; floating.y = root.y
         section = ""; detail = ""; showingOnlinePlaylist = false; root.hide(); fitWindow(floating); saveIconPosition()
@@ -313,6 +321,7 @@ ApplicationWindow {
             else if (kind === "heart") { c.beginPath();c.moveTo(12,20);c.bezierCurveTo(-4,10,5,-1,12,7);c.bezierCurveTo(19,-1,28,10,12,20);c.stroke() }
             else if (kind === "settings") { for(var j=0;j<3;j++){var yy=6+j*6;path([[3,yy],[21,yy]]);c.clearRect(7+j*3,yy-2,4,4);c.strokeRect(7+j*3,yy-2,4,4)} }
             else if (kind === "volume") { path([[3,9],[7,9],[12,5],[12,19],[7,15],[3,15]],true);c.beginPath();c.arc(12,12,6,-0.8,0.8);c.stroke();c.beginPath();c.arc(12,12,10,-0.8,0.8);c.stroke() }
+            else if (kind === "info") { c.beginPath();c.arc(12,12,9,0,Math.PI*2);c.stroke();path([[12,11],[12,17]]);c.beginPath();c.arc(12,7,0.8,0,Math.PI*2);c.fill() }
             else { path([[9,17],[9,5],[19,3],[19,15]]);c.beginPath();c.ellipse(3,16,6,4);c.fill();c.beginPath();c.ellipse(13,14,6,4);c.fill() }
         }
     }
@@ -466,17 +475,49 @@ ApplicationWindow {
     }
     component TrackSlider: Slider {
         id: slider
-        implicitHeight: 32; leftPadding: 8; rightPadding: 8
+        implicitWidth: vertical ? 32 : 200
+        implicitHeight: vertical ? 110 : 32
+        leftPadding: 8; rightPadding: 8; topPadding: vertical ? 8 : 0; bottomPadding: vertical ? 8 : 0
         background: Rectangle {
-            objectName: "sliderTrack"; x: slider.leftPadding; y: (slider.height-height)/2
-            width: slider.availableWidth; height: 4; radius: 2; color: root.line
-            Rectangle { objectName: "playedFill"; width: slider.position * parent.width; height: parent.height; radius: 2; color: slider.enabled ? root.accent : root.muted }
+            objectName: "sliderTrack"
+            x: slider.vertical ? (slider.width - width) / 2 : slider.leftPadding
+            y: slider.vertical ? slider.topPadding + slider.handle.height / 2 : (slider.height - height) / 2
+            width: slider.vertical ? 4 : slider.availableWidth
+            height: slider.vertical ? slider.availableHeight - slider.handle.height : 4
+            radius: 2; color: root.line
+            Rectangle {
+                objectName: "playedFill"
+                width: slider.vertical ? parent.width : slider.position * parent.width
+                height: slider.vertical ? slider.position * parent.height : parent.height
+                y: slider.vertical ? parent.height - height : 0
+                radius: 2; color: slider.enabled ? root.accent : root.muted
+            }
         }
         handle: Rectangle {
-            x: slider.leftPadding + slider.visualPosition * slider.availableWidth - width/2
-            y: (slider.height-height)/2; width: 14; height: 14; radius: 7; color: slider.enabled ? root.accent : root.muted
+            x: slider.vertical ? (slider.width - width) / 2 : slider.leftPadding + slider.visualPosition * slider.availableWidth - width / 2
+            y: slider.vertical ? slider.topPadding + slider.visualPosition * (slider.availableHeight - height) : (slider.height - height) / 2
+            width: 14; height: 14; radius: 7; color: slider.enabled ? root.accent : root.muted
             border.width: slider.activeFocus ? 3 : 0; border.color: root.ink
         }
+    }
+    component SettingsHeading: RowLayout {
+        required property string label
+        property string glyph: "settings"
+        Layout.fillWidth: true; Layout.topMargin: 12; Layout.bottomMargin: 2; spacing: 8
+        Glyph { kind: parent.glyph; tint: root.accent; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
+        Copy { text: parent.label; font.pixelSize: 13; font.weight: Font.DemiBold }
+        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line; Layout.leftMargin: 4 }
+    }
+    component QualityChoice: Choice {
+        id: qualityChoice
+        required property string sourceId
+        Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 34
+        property var levels: sourceId === "netease" ? ["standard", "higher", "exhigh", "lossless", "hires"]
+            : sourceId === "tencent" ? ["standard", "exhigh", "lossless", "master"] : ["standard", "exhigh", "lossless"]
+        model: sourceId === "netease" ? ["标准", "较高", "极高", "无损 FLAC", "Hi-Res"]
+            : sourceId === "tencent" ? ["标准", "高音质 320", "无损 FLAC", "实验母带"] : ["标准", "高音质 320", "无损 FLAC"]
+        Binding { target: qualityChoice; property: "currentIndex"; value: Math.max(0, qualityChoice.levels.indexOf(player.sourceQualities[qualityChoice.sourceId])) }
+        onActivated: function(index) { player.setSourceQuality(sourceId, levels[index]) }
     }
 
     component SectionTab: Action {
@@ -538,6 +579,24 @@ ApplicationWindow {
                     }
                 }
             }
+        }
+    }
+    UpPopup {
+        id: volumeMenu; objectName: "volumePopup"; anchorItem: volumeButton
+        width: 68; height: 160
+        onOpened: volumeSlider.forceActiveFocus()
+        contentItem: ColumnLayout {
+            spacing: 4
+            Copy { text: player.volume + "%"; font.pixelSize: 12; Layout.alignment: Qt.AlignHCenter; color: root.muted }
+            TrackSlider {
+                id: volumeSlider; objectName: "volumeSlider"
+                orientation: Qt.Vertical; Layout.fillHeight: true; Layout.alignment: Qt.AlignHCenter
+                from: 0; to: 100; stepSize: 1; wheelEnabled: true
+                Accessible.name: "音量，" + player.volume + "%"
+                onMoved: player.setVolume(Math.round(value))
+                Binding { target: volumeSlider; property: "value"; value: player.volume; when: !volumeSlider.pressed }
+            }
+            Glyph { kind: "volume"; tint: root.muted; Layout.preferredWidth: 16; Layout.preferredHeight: 16; Layout.alignment: Qt.AlignHCenter; Accessible.ignored: true }
         }
     }
     UpPopup {
@@ -697,30 +756,23 @@ ApplicationWindow {
                         Copy { text: root.clock(player.duration); color: root.muted; font.pixelSize: 12 }
                     }
                     RowLayout {
-                        Layout.fillWidth: true; spacing: 14
-                        Item { Layout.preferredWidth: 34 }
+                        Layout.fillWidth: true; spacing: 10
                         Item { Layout.fillWidth: true }
                         Action { objectName: "previousButton"; glyph: "previous"; quiet: true; Accessible.name: "上一首"; ToolTip.text: "上一首"; enabled: !player.busy&&player.tracks.length>0; onClicked: player.previous() }
                         Action { objectName: "playPauseButton"; glyph: player.playing ? "pause" : "play"; primary: true; implicitWidth: 46; implicitHeight: 46; cornerRadius: 23; Accessible.name: player.playing ? "暂停" : "播放"; ToolTip.text: Accessible.name; enabled: player.ready&&!player.busy; onClicked: player.toggle() }
                         Action { objectName: "nextButton"; glyph: "next"; quiet: true; Accessible.name: "下一首"; ToolTip.text: "下一首"; enabled: !player.busy&&player.tracks.length>0; onClicked: player.next() }
-                        Item { Layout.fillWidth: true }
                         Action {
                             id: modeButton; objectName: "playbackModeButton"; glyph: player.playbackMode; quiet: true
                             Accessible.name: "播放模式：" + root.playbackModeName
                             ToolTip.text: Accessible.name
                             onClicked: playbackMenu.opened ? playbackMenu.close() : playbackMenu.open()
                         }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 8
-                        Glyph { kind: "volume"; tint: root.muted }
-                        TrackSlider {
-                            id: volumeSlider; objectName: "volumeSlider"; Layout.fillWidth: true
-                            from: 0; to: 100; stepSize: 1; Accessible.name: "音量"
-                            onMoved: player.setVolume(Math.round(value))
-                            Binding { target: volumeSlider; property: "value"; value: player.volume; when: !volumeSlider.pressed }
+                        Action {
+                            id: volumeButton; objectName: "volumeButton"; glyph: "volume"; quiet: true; selected: volumeMenu.opened
+                            Accessible.name: "音量：" + player.volume + "%"; ToolTip.text: Accessible.name
+                            onClicked: volumeMenu.opened ? volumeMenu.close() : volumeMenu.open()
                         }
-                        Copy { text: player.volume+"%"; color: root.muted; font.pixelSize: 12; Layout.preferredWidth: 36; horizontalAlignment: Text.AlignRight }
+                        Item { Layout.fillWidth: true }
                     }
                     Hint { visible: player.busy; text: player.status }
                     RowLayout {
@@ -769,7 +821,7 @@ ApplicationWindow {
                                     readonly property bool currentAbove: currentItem ? currentItem.y + currentItem.height / 2 < contentY + height / 2 : currentIndex < 0
                                     highlightFollowsCurrentItem: false
                                     boundsBehavior: Flickable.StopAtBounds
-                                    spacing: 10; cacheBuffer: height
+                                    spacing: 0; cacheBuffer: height
                                     header: Item { width: 1; height: lyricView.height * 0.3 }
                                     footer: Item { width: 1; height: lyricView.height * 0.5 }
                                     function followCurrent() {
@@ -807,13 +859,21 @@ ApplicationWindow {
                                         required property int index
                                         readonly property bool active: index === player.currentLyricIndex
                                         width: lyricView.width - 14
-                                        height: Math.max(36, lyricWords.implicitHeight + 16)
-                                        Rectangle { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; width: 3; height: 20; radius: 1.5; color: root.accent; visible: lyricRow.active }
+                                        height: lyricWords.implicitHeight
+                                        FontMetrics { id: lyricMetrics; font: lyricOriginalText.font }
+                                        Rectangle {
+                                            objectName: "lyricMarker-" + lyricRow.index
+                                            anchors.left: parent.left; width: 3; height: Math.min(20, lyricMetrics.height, parent.height)
+                                            y: Math.max(0, Math.min(parent.height - height, lyricWords.y + lyricOriginalText.baselineOffset - lyricMetrics.ascent + (lyricMetrics.height - height) / 2))
+                                            radius: 1.5; color: root.accent; visible: lyricRow.active
+                                        }
                                         Column {
-                                            id: lyricWords; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 14; anchors.verticalCenter: parent.verticalCenter; spacing: 6
+                                            id: lyricWords; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 14; anchors.verticalCenter: parent.verticalCenter; spacing: 0
                                             Text {
+                                                id: lyricOriginalText
                                                 objectName: "lyricOriginal-" + lyricRow.index
                                                 width: parent.width; textFormat: Text.PlainText; wrapMode: Text.Wrap
+                                                lineHeight: root.lyricLineSpacing; lineHeightMode: Text.ProportionalHeight
                                                 text: root.lyricDisplayMode === 1 ? (lyricRow.modelData.translation || (lyricRow.modelData.original ? "暂无该句译文" : "♪")) : (lyricRow.modelData.original || "♪")
                                                 font.family: root.font.family; font.pixelSize: root.lyricFontSize + (lyricRow.active ? 2 : 0); font.weight: lyricRow.active ? Font.DemiBold : Font.Normal
                                                 color: lyricRow.active ? root.accent : root.muted
@@ -822,9 +882,16 @@ ApplicationWindow {
                                                 objectName: "lyricTranslation-" + lyricRow.index
                                                 width: parent.width; visible: root.lyricDisplayMode === 2 && text.length > 0
                                                 text: lyricRow.modelData.translation; textFormat: Text.PlainText; wrapMode: Text.Wrap
+                                                lineHeight: root.lyricLineSpacing; lineHeightMode: Text.ProportionalHeight
                                                 font.family: root.font.family; font.pixelSize: root.lyricFontSize + (lyricRow.active ? 2 : 0); color: lyricRow.active ? root.ink : root.muted
                                             }
                                         }
+                                    }
+                                    Connections {
+                                        target: root
+                                        function onLyricFontSizeChanged() { Qt.callLater(lyricView.followCurrent) }
+                                        function onLyricDisplayModeChanged() { Qt.callLater(lyricView.followCurrent) }
+                                        function onLyricLineSpacingChanged() { Qt.callLater(lyricView.followCurrent) }
                                     }
                                     Connections {
                                         target: player
@@ -846,10 +913,19 @@ ApplicationWindow {
                                 ScrollView {
                                     anchors.fill: parent; visible: player.lyricLines.length === 0; clip: true; contentWidth: availableWidth
                                     TextArea {
+                                        id: plainLyrics
                                         objectName: "lyricsText"; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
                                         textFormat: TextEdit.PlainText; font.pixelSize: root.lyricFontSize; color: root.ink
                                         selectionColor: root.accent; selectedTextColor: root.accentInk; background: null; padding: 8
                                         text: root.lyricDisplayMode===0 ? root.lyricText(player.lyrics) : root.lyricDisplayMode===1 ? (root.lyricText(player.translation)||"暂无译文") : root.lyricText(player.lyrics)+(player.translation.length>0 ? "\n\n—— 译文 ——\n\n"+root.lyricText(player.translation) : "")
+                                        function applyLineSpacing() { player.applyLyricLineSpacing(textDocument, root.lyricLineSpacing) }
+                                        Component.onCompleted: applyLineSpacing()
+                                        onTextChanged: applyLineSpacing()
+                                        onFontChanged: applyLineSpacing()
+                                        Connections {
+                                            target: root
+                                            function onLyricLineSpacingChanged() { plainLyrics.applyLineSpacing() }
+                                        }
                                     }
                                 }
                                 Action {
@@ -1128,72 +1204,118 @@ ApplicationWindow {
                                 }
                                 ScrollView {
                                     id: settingsScroll; clip: true; contentWidth: availableWidth
+                                    property bool customServiceExpanded: player.apiBase.length > 0
                                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                     ColumnLayout {
-                                        width: settingsScroll.availableWidth; spacing: 12
-                                        Copy { text: "歌词显示"; font.weight: Font.DemiBold }
-                                        Choice {
-                                            objectName: "lyricModeSelector"; Layout.fillWidth: true; Accessible.name: "歌词显示方式"
-                                            model: ["原文", "译文", "双语"]; currentIndex: root.lyricDisplayMode
-                                            onActivated: function(index) { lyricPreferences.displayMode = index; lyricPreferences.sync() }
+                                        width: settingsScroll.availableWidth; spacing: 8
+                                        SettingsHeading { label: "播放音质"; glyph: "volume"; Layout.topMargin: 0 }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 10
+                                            Copy { text: "网易云"; Layout.preferredWidth: 70; font.pixelSize: 13 }
+                                            QualityChoice { objectName: "qualitySelector"; sourceId: "netease"; Accessible.name: "网易云音质" }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 10
+                                            Copy { text: "QQ 音乐"; Layout.preferredWidth: 70; font.pixelSize: 13 }
+                                            QualityChoice { objectName: "qqQualitySelector"; sourceId: "tencent"; Accessible.name: "QQ音乐音质" }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 10
+                                            Copy { text: "酷我音乐"; Layout.preferredWidth: 70; font.pixelSize: 13 }
+                                            QualityChoice { objectName: "kuwoQualitySelector"; sourceId: "kuwo"; Accessible.name: "酷我音乐音质" }
+                                        }
+                                        Hint { text: "各曲库单独保存；切换当前歌曲的音质会保留播放进度。高档不可用时自动尝试较低档。" }
+                                        Hint { visible: player.sourceQualities.tencent === "master"; text: "实验母带文件较大，可能增加加载时间；采样规格不代表原始母带品质。" }
+                                        Hint { objectName: "actualQualityInfo"; visible: player.online; text: player.qualityInfo }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 8
+                                            Copy { text: "输出设备"; font.pixelSize: 13; Layout.preferredWidth: 70 }
+                                            Choice {
+                                                id: outputs; objectName: "outputSelector"; Layout.fillWidth: true; Layout.minimumWidth: 0
+                                                model: player.audioOutputs; textRole: "name"; valueRole: "id"; Accessible.name: "音频输出设备"
+                                                function syncSelection() { currentIndex = indexOfValue(player.selectedOutput) }
+                                                Component.onCompleted: syncSelection()
+                                                onModelChanged: Qt.callLater(syncSelection)
+                                                onActivated: player.selectOutput(currentValue)
+                                                Connections { target: player; function onAudioSettingsChanged() { outputs.syncSelection() } }
+                                            }
+                                            Action { glyph: "refresh"; quiet: true; Accessible.name: "刷新输出设备"; ToolTip.text: Accessible.name; onClicked: player.refreshOutputs() }
+                                        }
+                                        SettingsHeading { label: "歌词"; glyph: "lyrics" }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 10
+                                            Copy { text: "显示方式"; Layout.preferredWidth: 70; font.pixelSize: 13 }
+                                            Choice {
+                                                objectName: "lyricModeSelector"; Layout.fillWidth: true; Accessible.name: "歌词显示方式"
+                                                model: ["原文", "译文", "双语"]; currentIndex: root.lyricDisplayMode
+                                                onActivated: function(index) { lyricPreferences.displayMode = index; lyricPreferences.sync() }
+                                            }
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            Copy { text: "歌词字号"; Layout.fillWidth: true }
-                                            Copy { objectName: "lyricFontSizeValue"; text: root.lyricFontSize; color: root.muted }
+                                            Copy { text: "字号"; font.pixelSize: 13; Layout.fillWidth: true }
+                                            Copy { objectName: "lyricFontSizeValue"; text: root.lyricFontSize; color: root.muted; font.pixelSize: 12 }
                                         }
                                         TrackSlider {
                                             id: lyricSizeSlider; objectName: "lyricFontSizeSlider"; Layout.fillWidth: true
-                                            from: 14; to: 26; stepSize: 1; Accessible.name: "歌词字号，14 至 26"
+                                            from: 10; to: 30; stepSize: 1; Accessible.name: "歌词字号，10 至 30"
                                             onMoved: { lyricPreferences.fontSize = Math.round(value); lyricPreferences.sync() }
                                             Binding { target: lyricSizeSlider; property: "value"; value: root.lyricFontSize; when: !lyricSizeSlider.pressed }
                                         }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Copy { text: "行距"; font.pixelSize: 13; Layout.fillWidth: true }
+                                            Copy { objectName: "lyricLineSpacingValue"; text: root.lyricLineSpacing.toFixed(1) + "×"; color: root.muted; font.pixelSize: 12 }
+                                        }
+                                        TrackSlider {
+                                            id: lyricSpacingSlider; objectName: "lyricLineSpacingSlider"; Layout.fillWidth: true
+                                            from: 0.8; to: 3.0; stepSize: 0.1; Accessible.name: "歌词行距，0.8 至 3 倍"
+                                            onMoved: { lyricPreferences.lineSpacing = root.normalizedLineSpacing(value); lyricPreferences.sync() }
+                                            Binding { target: lyricSpacingSlider; property: "value"; value: root.lyricLineSpacing; when: !lyricSpacingSlider.pressed }
+                                        }
                                         Copy {
-                                            objectName: "lyricFontPreview"; text: "让音乐留在手边"; Layout.fillWidth: true
+                                            objectName: "lyricFontPreview"; text: "让音乐留在手边\n陪你走过每个清晨"; Layout.fillWidth: true
+                                            lineHeight: root.lyricLineSpacing; lineHeightMode: Text.ProportionalHeight
                                             font.pixelSize: root.lyricFontSize + 2; font.weight: Font.DemiBold; color: root.accent; wrapMode: Text.Wrap
                                         }
-                                        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
-                                        Copy { text: "外观"; font.weight: Font.DemiBold }
-                                        Choice {
-                                            objectName: "themeSelector"; Layout.fillWidth: true; Accessible.name: "界面主题"
-                                            model: ["跟随系统", "浅色", "深色"]; currentIndex: appearance.mode
-                                            onActivated: function(index) {appearance.mode=index;appearance.sync()}
+                                        SettingsHeading { label: "外观"; glyph: "spark" }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 10
+                                            Copy { text: "主题"; Layout.preferredWidth: 70; font.pixelSize: 13 }
+                                            Choice {
+                                                objectName: "themeSelector"; Layout.fillWidth: true; Accessible.name: "界面主题"
+                                                model: ["跟随系统", "浅色", "深色"]; currentIndex: appearance.mode
+                                                onActivated: function(index) { appearance.mode = index; appearance.sync() }
+                                            }
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            Copy { text: "整体大小"; Layout.fillWidth: true }
-                                            Copy { text: Math.round(root.contentScale*100)+"%"; color: root.muted }
+                                            Copy { text: "整体大小"; font.pixelSize: 13; Layout.fillWidth: true }
+                                            Copy { text: Math.round(root.contentScale * 100) + "%"; color: root.muted; font.pixelSize: 12 }
                                         }
                                         TrackSlider {
                                             id: sizeSlider; objectName: "windowScaleSlider"; Layout.fillWidth: true
                                             from: 90; to: 140; stepSize: 5; Accessible.name: "悬浮窗整体缩放"
-                                            onMoved: appearance.windowScale=value/100
-                                            Binding { target: sizeSlider; property: "value"; value: appearance.windowScale*100; when: !sizeSlider.pressed }
+                                            onMoved: appearance.windowScale = value / 100
+                                            Binding { target: sizeSlider; property: "value"; value: appearance.windowScale * 100; when: !sizeSlider.pressed }
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            Copy { text: "背景不透明度"; Layout.fillWidth: true }
-                                            Copy { text: Math.round(appearance.backgroundOpacity*100)+"%"; color: root.muted }
+                                            Copy { text: "背景不透明度"; font.pixelSize: 13; Layout.fillWidth: true }
+                                            Copy { text: Math.round(appearance.backgroundOpacity * 100) + "%"; color: root.muted; font.pixelSize: 12 }
                                         }
                                         TrackSlider {
                                             id: opacitySlider; objectName: "backgroundOpacitySlider"; Layout.fillWidth: true
                                             from: 20; to: 100; stepSize: 5; Accessible.name: "背景不透明度"
-                                            onMoved: appearance.backgroundOpacity=value/100
-                                            Binding { target: opacitySlider; property: "value"; value: appearance.backgroundOpacity*100; when: !opacitySlider.pressed }
+                                            onMoved: appearance.backgroundOpacity = value / 100
+                                            Binding { target: opacitySlider; property: "value"; value: appearance.backgroundOpacity * 100; when: !opacitySlider.pressed }
                                         }
-                                        Hint { text: "可拖动右下角等比缩放；透明度只影响背景。" }
-                                        Action { objectName: "resetAppearanceButton"; text: "恢复大小、背景和位置"; Layout.fillWidth: true; onClicked: root.resetAppearance() }
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            ColumnLayout {
-                                                Layout.fillWidth: true; spacing: 4
-                                                Copy { text: "界面动效" }
-                                                Hint { text: "按钮按压与面板轻量过渡" }
-                                            }
+                                            Copy { text: "界面动效"; font.pixelSize: 13; Layout.fillWidth: true }
                                             Switch {
-                                                id: motionSwitch
-                                                objectName: "animationsSwitch"; checked: appearance.animationsEnabled
-                                                implicitHeight: 34; padding: 0
+                                                id: motionSwitch; objectName: "animationsSwitch"
+                                                checked: appearance.animationsEnabled; implicitHeight: 30; padding: 0
                                                 Accessible.name: "界面动效"
                                                 onToggled: { appearance.animationsEnabled = checked; appearance.sync() }
                                                 indicator: Rectangle {
@@ -1201,71 +1323,52 @@ ApplicationWindow {
                                                     implicitWidth: 38; implicitHeight: 22; radius: 11
                                                     color: motionSwitch.checked ? root.accent : root.control
                                                     border.width: motionSwitch.activeFocus ? 2 : 1; border.color: motionSwitch.activeFocus ? root.accent : root.fieldBorder
-                                                    scale: appearance.animationsEnabled && motionSwitch.down ? 0.965 : 1
-                                                    Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: motionSwitch.down ? 80 : 150; easing.type: Easing.OutCubic } }
                                                     Rectangle { x: motionSwitch.checked ? 19 : 3; y: 3; width: 16; height: 16; radius: 8; color: motionSwitch.checked ? root.accentInk : root.muted }
                                                 }
                                             }
                                         }
-                                        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
-                                        Copy { text: "在线音质"; font.weight: Font.DemiBold }
-                                        Choice {
-                                            id: qualitySelector; objectName: "qualitySelector"; Layout.fillWidth: true; enabled: !player.busy && player.qualitySelectable; Accessible.name: "在线音质"
-                                            model: player.qualitySelectable ? ["标准", "较高", "极高", "无损 FLAC", "Hi-Res"] : ["普通音质"]
-                                            property var levels: ["standard","higher","exhigh","lossless","hires"]
-                                            currentIndex: player.qualitySelectable ? levels.indexOf(player.quality) : 0
-                                            function syncSelection() { currentIndex = player.qualitySelectable ? levels.indexOf(player.quality) : 0 }
-                                            onModelChanged: Qt.callLater(syncSelection)
-                                            onActivated: function(index) {if (player.qualitySelectable) player.setQuality(levels[index])}
-                                            Connections { target: player; function onChanged(){qualitySelector.syncSelection()} }
-                                        }
-                                        Hint { text: player.qualityInfo + (player.qualitySelectable && player.quality==="hires" ? "\nHi-Res 为请求档位，实际音源可能回落。" : "") }
-                                        Hint { text: player.qualitySelectable ? "网易云音源不可用时自动尝试备用。GD 音乐台（music.gdstudio.xyz） / INJAHOW。" : "QQ 音乐、酷我音乐使用普通音质。" }
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            Copy { text: "音频输出"; font.weight: Font.DemiBold; Layout.fillWidth: true }
-                                            Action { text: "刷新"; quiet: true; onClicked: player.refreshOutputs() }
+                                            Hint { text: "透明度只影响背景。" }
+                                            Action { objectName: "resetAppearanceButton"; text: "重置外观"; quiet: true; Accessible.name: "恢复窗口大小、背景和位置"; onClicked: root.resetAppearance() }
                                         }
-                                        Choice {
-                                            id: outputs; objectName: "outputSelector"; Layout.fillWidth: true
-                                            model: player.audioOutputs; textRole: "name"; valueRole: "id"; Accessible.name: "音频输出设备"
-                                            function syncSelection(){currentIndex=indexOfValue(player.selectedOutput)}
-                                            Component.onCompleted: syncSelection()
-                                            onModelChanged: Qt.callLater(syncSelection)
-                                            onActivated: player.selectOutput(currentValue)
-                                            Connections { target: player; function onAudioSettingsChanged(){outputs.syncSelection()} }
-                                        }
-                                        Hint { text: "当前："+player.outputName }
-                                        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
-                                        Copy { text: "音乐服务"; font.weight: Font.DemiBold }
+                                        SettingsHeading { label: "搜索与服务"; glyph: "search" }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 8
-                                            Copy { text: "搜索显示数量"; Layout.fillWidth: true }
+                                            Copy { text: "结果数量"; Layout.fillWidth: true; font.pixelSize: 13 }
                                             Choice {
                                                 id: searchLimitSelector; objectName: "searchResultLimitSelector"
-                                                Layout.preferredWidth: 104; implicitHeight: 32
-                                                Accessible.name: "搜索显示数量"
+                                                Layout.preferredWidth: 108; implicitHeight: 34; Accessible.name: "搜索显示数量"
                                                 property var limits: [10, 20, 30, 50, 100]
                                                 model: ["10 条", "20 条", "30 条", "50 条", "100 条"]
                                                 Binding { target: searchLimitSelector; property: "currentIndex"; value: searchLimitSelector.limits.indexOf(player.searchResultLimit) }
                                                 onActivated: function(index) { player.searchResultLimit = limits[index] }
                                             }
                                         }
-                                        Hint { objectName: "searchResultLimitHint"; text: "所选曲库合计最多显示 " + player.searchResultLimit + " 条结果，歌曲与歌单共用；修改后从下次搜索生效。" }
-                                        Hint { text: player.apiBase.length===0 ? "网易云使用内置接口；QQ 音乐、酷我音乐按搜索中的勾选查询。" : "自定义地址仅用于网易云；QQ 音乐、酷我音乐仍按勾选查询。" }
-                                        Field {
-                                            id: apiAddress; objectName: "apiAddress"; Layout.fillWidth: true
-                                            text: player.apiBase; placeholderText: "网易云兼容 API 地址（可选）"; Accessible.name: "自定义网易云服务地址"
+                                        Hint { objectName: "searchResultLimitHint"; text: "所选曲库合计最多 " + player.searchResultLimit + " 条，歌曲与歌单共用；下次搜索生效。" }
+                                        Action {
+                                            objectName: "customServiceToggle"; text: "自定义网易云服务"; glyph: settingsScroll.customServiceExpanded ? "up" : "chevron"
+                                            quiet: true; Layout.fillWidth: true; selected: settingsScroll.customServiceExpanded
+                                            Accessible.description: settingsScroll.customServiceExpanded ? "已展开" : "点击展开地址设置"
+                                            onClicked: settingsScroll.customServiceExpanded = !settingsScroll.customServiceExpanded
                                         }
-                                        RowLayout {
-                                            Layout.fillWidth: true; spacing: 8
-                                            Action { text: "保存地址"; Layout.fillWidth: true; enabled: !player.busy; onClicked: player.setApiBase(apiAddress.text) }
-                                            Action { text: "恢复内置"; Layout.fillWidth: true; enabled: !player.busy; onClicked: {player.setApiBase("");apiAddress.text=""} }
+                                        ColumnLayout {
+                                            visible: settingsScroll.customServiceExpanded; Layout.fillWidth: true; spacing: 8
+                                            Hint { text: "仅用于网易云。留空使用内置接口。" }
+                                            Field {
+                                                id: apiAddress; objectName: "apiAddress"; Layout.fillWidth: true
+                                                text: player.apiBase; placeholderText: "兼容 API 地址（可选）"; Accessible.name: "自定义网易云服务地址"
+                                            }
+                                            RowLayout {
+                                                Layout.fillWidth: true; spacing: 8
+                                                Item { Layout.fillWidth: true }
+                                                Action { text: "恢复内置"; quiet: true; enabled: !player.busy; onClicked: { player.setApiBase(""); apiAddress.text = "" } }
+                                                Action { text: "保存"; primary: true; enabled: !player.busy; onClicked: player.setApiBase(apiAddress.text) }
+                                            }
+                                            Hint { text: player.searchMessage; visible: text.length > 0 }
                                         }
-                                        Hint { text: player.searchMessage; visible: text.length>0 }
-                                        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
-                                        Copy { text: "浮音 1.0.0-preview · Windows"; font.weight: Font.DemiBold }
-                                        Hint { text: "拖动顶部移动窗口，减号收为图标。\n更多中的“退出浮音”会停止播放并退出。\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起" }
+                                        SettingsHeading { label: "浮音 1.1.0-preview"; glyph: "info" }
+                                        Hint { text: "Windows 桌面预览 · 拖动顶部移动窗口\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起" }
                                     }
                                 }
                                 Item {
