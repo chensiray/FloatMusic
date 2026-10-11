@@ -9,6 +9,9 @@
 #include <QRect>
 #include "playliststore.h"
 #include "musicapi.h"
+#include "playbackstore.h"
+#include "globalshortcuts.h"
+#include "sleeptimer.h"
 
 class PlayerController : public QObject {
     Q_OBJECT
@@ -66,6 +69,14 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList lyricLines READ lyricLines NOTIFY lyricLinesChanged)
     Q_PROPERTY(int currentLyricIndex READ currentLyricIndex NOTIFY currentLyricChanged)
     Q_PROPERTY(int lyricOffset READ lyricOffset WRITE setLyricOffset NOTIFY lyricOffsetChanged)
+    Q_PROPERTY(QVariantList queueEntries READ queueEntries NOTIFY queueChanged)
+    Q_PROPERTY(QString currentQueueEntry READ currentQueueEntry NOTIFY queueChanged)
+    Q_PROPERTY(QVariantList historyEntries READ historyEntries NOTIFY historyChanged)
+    Q_PROPERTY(QString playbackMessage READ playbackMessage NOTIFY playbackMessageChanged)
+    Q_PROPERTY(QString sleepMode READ sleepMode NOTIFY sleepChanged)
+    Q_PROPERTY(int sleepRemaining READ sleepRemaining NOTIFY sleepChanged)
+    Q_PROPERTY(QString sleepText READ sleepText NOTIFY sleepChanged)
+    Q_PROPERTY(QObject *shortcuts READ shortcuts CONSTANT)
 public:
     explicit PlayerController(QObject *parent = nullptr);
     explicit PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent = nullptr);
@@ -127,6 +138,24 @@ public:
     QVariantList lyricLines() const { return m_lyricLines; }
     int currentLyricIndex() const { return m_currentLyricIndex; }
     int lyricOffset() const { return m_lyricOffset; }
+    QVariantList queueEntries() const;
+    QString currentQueueEntry() const;
+    QVariantList historyEntries() const;
+    QString playbackMessage() const { return m_playbackMessage; }
+    QString sleepMode() const;
+    int sleepRemaining() const;
+    QString sleepText() const;
+    QObject *shortcuts() { return &m_shortcuts; }
+    Q_INVOKABLE void enqueueTrack(const QVariantMap &track, const QString &placement);
+    Q_INVOKABLE void playQueueEntry(const QString &entryId);
+    Q_INVOKABLE void moveQueueEntry(const QString &entryId, int to);
+    Q_INVOKABLE void removeQueueEntry(const QString &entryId);
+    Q_INVOKABLE void clearPlaybackQueue();
+    Q_INVOKABLE void playHistoryTrack(const QString &id);
+    Q_INVOKABLE void clearPlaybackHistory();
+    Q_INVOKABLE void startSleepTimer(int minutes);
+    Q_INVOKABLE void sleepAfterCurrentTrack();
+    Q_INVOKABLE void cancelSleepTimer();
     Q_INVOKABLE void setPlaybackMode(const QString &mode);
     Q_INVOKABLE void setLyricOffset(int milliseconds);
     Q_INVOKABLE void toggleFavorite();
@@ -183,7 +212,21 @@ signals:
     void playbackModeChanged();
     void currentLyricChanged();
     void lyricOffsetChanged();
+    void queueChanged();
+    void historyChanged();
+    void playbackMessageChanged();
+    void sleepChanged();
+    void toggleWindowRequested();
 private:
+    void initializePlaybackTools();
+    void setPlaybackMessage(const QString &message);
+    void playNowTrack(const QVariantMap &track);
+    void recordStartedTrack();
+    void pauseForSleep();
+    QString m_playbackMessage, m_loadedQueueEntry, m_requestedQueueEntry;
+    QVariantList m_pendingQueueSnapshot;
+    int m_pendingQueueIndex = -1;
+    bool m_historyPending = false;
     void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false, qint64 resumePosition = -1, bool continueSources = false);
     bool tryNextAudioSource();
     bool rejectUnexpectedDuration();
@@ -221,9 +264,15 @@ private:
     void publishOverlayUi();
     QByteArray m_overlayUi;
     QString m_overlayMessage;
+    QVariantList m_androidQueueEntries, m_androidHistoryEntries;
+    QString m_androidQueueEntry, m_androidSleepMode = "off", m_androidSleepText = QStringLiteral("未开启");
+    int m_androidSleepRemaining = 0;
 #endif
     PlaylistStore m_library;
     MusicApi m_api;
+    PlaybackStore m_playbackStore;
+    GlobalShortcuts m_shortcuts;
+    SleepTimer m_sleepTimer;
     QVariantList m_searchResults;
     QStringList m_searchSources;
     int m_searchResultLimit = 30;

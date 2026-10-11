@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.floatmusic.v12servicetest">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="36" />
+    <application android:label="FloatMusic 1.2 playback regression" android:hasCode="true" />
+    <instrumentation android:name="org.floatmusic.player.PlaybackServiceV12Test" android:targetPackage="org.floatmusic.player" />
+</manifest>

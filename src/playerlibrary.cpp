@@ -88,7 +88,7 @@ void PlayerController::libraryAction(const QString &action, const QVariantMap &a
         });
     } else if (action == "playOnline") {
         const auto list = m_onlinePlaylist.value("tracks").toList(); const int index = args.value("index", -1).toInt();
-        if (!m_busy && index >= 0 && index < list.size()) loadTrack(list[index].toMap(), true);
+        if (!m_busy && index >= 0 && index < list.size()) playNowTrack(list[index].toMap());
     } else if (action == "addOnline") {
         if (m_onlinePlaylistLoading || m_onlinePlaylist.isEmpty()) { setLibraryMessage(QStringLiteral("请先打开并等待歌单加载完成。")); return; }
         mergePlaylist(m_onlinePlaylist, target);

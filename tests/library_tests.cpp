@@ -510,7 +510,9 @@ private slots:
         const auto songs=player.tracks();const auto saved=songs.last().toMap();QVERIFY(QFile::remove(local.fileName()));QVERIFY(QFile::exists(saved["path"].toString()));
         {PlayerController reopened;QCOMPARE(reopened.tracks().size(),4);reopened.playTrack(saved["id"].toString());QTRY_VERIFY(reopened.playing());reopened.toggle();}
         player.removeTrack(saved["id"].toString());QCOMPARE(player.tracks().size(),3);
-        player.selectPlaylist("default");player.next();QVERIFY(!player.playing());
+        player.selectPlaylist("default");
+        QCOMPARE(player.queueEntries().size(), 4);
+        player.next();QTRY_COMPARE(player.currentTrack(),QString("netease:101"));QTRY_VERIFY(player.playing());
     }
 };
 QTEST_GUILESS_MAIN(LibraryTests)

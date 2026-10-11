@@ -74,7 +74,7 @@ ApplicationWindow {
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: "浮音 1.1.0-preview.2 · 桌面预览"
+    title: "浮音 1.2.0-preview · 桌面预览"
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -101,6 +101,7 @@ ApplicationWindow {
     function collapse() {
         playbackMenu.close(); volumeMenu.close(); lyricTiming.close()
         libraryMenu.close(); selectionMenu.close(); targetSheet.close(); importSheet.close(); exportSheet.close(); descriptionSheet.close(); playlistDialog.close(); deleteDialog.close(); removeDialog.close(); trackMenu.close()
+        queueMenu.close(); historyMenu.close(); playbackRemoval.close(); shortcutCapture.close()
         floating.x = root.x; floating.y = root.y
         section = ""; detail = ""; showingOnlinePlaylist = false; root.hide(); fitWindow(floating); saveIconPosition()
     }
@@ -188,6 +189,38 @@ ApplicationWindow {
         if (track.source === "kuwo") return "酷我音乐"
         return "本地"
     }
+    function openTrackMenu(track, sourceId, index) {
+        trackMenu.track = track
+        trackMenu.sourceId = sourceId || ""
+        trackMenu.trackId = track.id
+        trackMenu.trackName = track.name
+        trackMenu.trackIndex = index === undefined ? -1 : index
+        trackMenu.open()
+    }
+    function queueIndex(entryId) {
+        for (var i = 0; i < player.queueEntries.length; ++i)
+            if (player.queueEntries[i].queueId === entryId) return i
+        return -1
+    }
+    function confirmPlaybackRemoval(kind, entryId, name) {
+        playbackRemoval.kind = kind
+        playbackRemoval.entryId = entryId || ""
+        playbackRemoval.trackName = name || ""
+        playbackRemoval.open()
+    }
+    function historyTime(timestamp) {
+        var date = new Date(Number(timestamp))
+        if (!isFinite(date.getTime())) return ""
+        return Qt.formatDateTime(date, "MM-dd hh:mm")
+    }
+    function captureShortcut(binding) {
+        shortcutCapture.action = binding.action
+        shortcutCapture.label = binding.label
+        shortcutCapture.previous = binding.sequence
+        shortcutCapture.candidate = ""
+        shortcutCapture.failure = ""
+        shortcutCapture.open()
+    }
     function showTransfer(move) {
         targetSheet.sourceId = player.activePlaylist
         targetSheet.ids = selectedTrackIds.slice()
@@ -237,6 +270,7 @@ ApplicationWindow {
     Connections {
         target: player
         property string lastPlaylist: ""
+        function onToggleWindowRequested() { root.visible ? root.collapse() : root.activateWindow() }
         function onLibraryChanged() {
             if (lastPlaylist !== player.activePlaylist) {
                 lastPlaylist = player.activePlaylist
@@ -272,7 +306,7 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Ctrl+F"; enabled: root.visible && !root.sheetOpen; onActivated: {root.showingOnlinePlaylist=false;root.openDetail("search");Qt.callLater(function(){(root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning();keywords.forceActiveFocus()})} }
     Shortcut { sequence: "Ctrl+O"; enabled: root.visible && !root.sheetOpen; onActivated: root.chooseMusic() }
-    readonly property bool sheetOpen: playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened
+    readonly property bool sheetOpen: playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened || queueMenu.opened || historyMenu.opened || playbackRemoval.opened || shortcutCapture.opened
     Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.closeOnlinePlaylist();else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
     component Glyph: Canvas {
         id: glyph
@@ -318,6 +352,9 @@ ApplicationWindow {
             else if (kind === "folder") path([[3,7],[10,7],[12,9],[21,9],[21,20],[3,20],[3,7],[3,4],[10,4],[12,7]])
             else if (kind === "list") { for(var y=6;y<=18;y+=6){path([[9,y],[21,y]]);c.fillRect(3,y-1,2,2)} }
             else if (kind === "drag") { for(var dy=6;dy<=18;dy+=6){c.fillRect(8,dy-1,2,2);c.fillRect(14,dy-1,2,2)} }
+            else if (kind === "history") { c.beginPath();c.arc(12,12,8,3.5,9.3);c.stroke();path([[3,3],[3,9],[9,9]]);path([[12,7],[12,12],[16,14]]) }
+            else if (kind === "timer") { c.beginPath();c.arc(12,13,8,0,Math.PI*2);c.stroke();path([[9,2],[15,2]]);path([[12,5],[12,13],[16,13]]) }
+            else if (kind === "keyboard") { path([[3,6],[21,6],[21,18],[3,18]],true);for(var ky=9;ky<=12;ky+=3)for(var kx=6;kx<=18;kx+=4)c.fillRect(kx,ky,1.5,1);path([[8,15],[16,15]]) }
             else if (kind === "heart") { c.beginPath();c.moveTo(12,20);c.bezierCurveTo(-4,10,5,-1,12,7);c.bezierCurveTo(19,-1,28,10,12,20);c.stroke() }
             else if (kind === "settings") { for(var j=0;j<3;j++){var yy=6+j*6;path([[3,yy],[21,yy]]);c.clearRect(7+j*3,yy-2,4,4);c.strokeRect(7+j*3,yy-2,4,4)} }
             else if (kind === "volume") { path([[3,9],[7,9],[12,5],[12,19],[7,15],[3,15]],true);c.beginPath();c.arc(12,12,6,-0.8,0.8);c.stroke();c.beginPath();c.arc(12,12,10,-0.8,0.8);c.stroke() }
@@ -620,13 +657,17 @@ ApplicationWindow {
         id: song
         required property var track
         property string extraText: ""
+        property string playObjectName: ""
+        property string menuObjectName: ""
+        property string note: ""
         property int rank: 0
         signal playRequested()
         signal extraRequested()
         signal removeRequested()
+        signal menuRequested()
         property bool removable: false
         width: ListView.view ? ListView.view.width : 320
-        height: 58; radius: 8
+        height: note.length ? 76 : 58; radius: 8
         color: player.currentTrack === track.id ? root.selection : songHover.hovered ? root.backdrop : "transparent"
         HoverHandler { id: songHover }
         RowLayout {
@@ -636,10 +677,12 @@ ApplicationWindow {
                 Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
                 Copy { Layout.fillWidth: true; text: song.track.name; font.weight: Font.DemiBold }
                 TrackMetadata { Layout.fillWidth: true; Layout.minimumWidth: 0; track: song.track }
+                Copy { visible: song.note.length > 0; Layout.fillWidth: true; text: song.note; font.pixelSize: 12; color: root.muted }
             }
-            Action { glyph: "play"; quiet: true; enabled: !player.busy; Accessible.name: "播放 " + song.track.name + "，" + root.trackSourceName(song.track); ToolTip.text: Accessible.name; onClicked: song.playRequested() }
+            Action { objectName: song.playObjectName; glyph: "play"; quiet: true; enabled: !player.busy; Accessible.name: "播放 " + song.track.name + "，" + root.trackSourceName(song.track); ToolTip.text: Accessible.name; onClicked: song.playRequested() }
             Action { visible: song.extraText.length > 0; glyph: "add"; quiet: true; Accessible.name: "加入当前歌单"; ToolTip.text: "加入当前歌单"; onClicked: song.extraRequested() }
             Action { visible: song.removable; glyph: "close"; quiet: true; Accessible.name: "移除 " + song.track.name; ToolTip.text: Accessible.name; onClicked: song.removeRequested() }
+            Action { objectName: song.menuObjectName; glyph: "more"; quiet: true; Accessible.name: "操作 " + song.track.name; ToolTip.text: Accessible.name; onClicked: song.menuRequested() }
         }
     }
     FileDialog {
@@ -708,7 +751,7 @@ ApplicationWindow {
         scale: root.contentScale; transformOrigin: Item.TopLeft
         clip: true
         ScrollView {
-            id: outerScroll; anchors.fill: parent; clip: true
+            id: outerScroll; objectName: "outerScroll"; anchors.fill: parent; clip: true
             contentWidth: availableWidth; contentHeight: shell.implicitHeight
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
             ColumnLayout {
@@ -730,6 +773,7 @@ ApplicationWindow {
                             ToolTip.text: "拖动这里移动窗口"; ToolTip.visible: headerHover.hovered
                             HoverHandler { id: headerHover }
                         }
+                        Action { objectName: "sleepStatusButton"; visible: player.sleepMode !== "off"; glyph: "timer"; quiet: true; selected: true; Accessible.name: player.sleepText; ToolTip.text: player.sleepText; onClicked: root.openDetail("sleep") }
                         Action { objectName: "collapseButton"; glyph: "minus"; quiet: true; Accessible.name: "收为图标"; ToolTip.text: "收为图标"; onClicked: root.collapse() }
                     }
                     Copy {
@@ -758,9 +802,9 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true; spacing: 10
                         Item { Layout.fillWidth: true }
-                        Action { objectName: "previousButton"; glyph: "previous"; quiet: true; Accessible.name: "上一首"; ToolTip.text: "上一首"; enabled: !player.busy&&player.tracks.length>0; onClicked: player.previous() }
+                        Action { objectName: "previousButton"; glyph: "previous"; quiet: true; Accessible.name: "上一首"; ToolTip.text: "上一首"; enabled: !player.busy&&player.queueEntries.length>0; onClicked: player.previous() }
                         Action { objectName: "playPauseButton"; glyph: player.playing ? "pause" : "play"; primary: true; implicitWidth: 46; implicitHeight: 46; cornerRadius: 23; Accessible.name: player.playing ? "暂停" : "播放"; ToolTip.text: Accessible.name; enabled: player.ready&&!player.busy; onClicked: player.toggle() }
-                        Action { objectName: "nextButton"; glyph: "next"; quiet: true; Accessible.name: "下一首"; ToolTip.text: "下一首"; enabled: !player.busy&&player.tracks.length>0; onClicked: player.next() }
+                        Action { objectName: "nextButton"; glyph: "next"; quiet: true; Accessible.name: "下一首"; ToolTip.text: "下一首"; enabled: !player.busy&&player.queueEntries.length>0; onClicked: player.next() }
                         Action {
                             id: modeButton; objectName: "playbackModeButton"; glyph: player.playbackMode; quiet: true
                             Accessible.name: "播放模式：" + root.playbackModeName
@@ -795,7 +839,8 @@ ApplicationWindow {
                     id: drawer; objectName: "sharedDrawer"
                     visible: root.section.length>0
                     Layout.fillWidth: true
-                    Layout.preferredHeight: visible ? (root.section==="more" && root.detail==="" ? moreMenu.implicitHeight+32 : Math.max(root.section === "playlist" || root.detail === "search" || root.detail === "rankings" ? 280 : 180, Math.min(root.section === "playlist" || root.detail === "search" || root.detail === "rankings" ? 520 : 350, (workArea.height - 16) / contentScale - playerCard.implicitHeight - 48))) : 0
+                    readonly property bool tallList: root.section === "playlist" || ["search", "rankings", "queue", "history"].indexOf(root.detail) >= 0
+                    Layout.preferredHeight: visible ? (root.section==="more" && root.detail==="" ? moreMenu.implicitHeight+32 : Math.max(tallList ? 280 : 180, Math.min(tallList ? 520 : 350, (workArea.height - 16) / contentScale - playerCard.implicitHeight - 48))) : 0
                     StackLayout {
                         anchors.fill: parent; anchors.margins: 16
                         currentIndex: root.section==="lyrics" ? 0 : root.section==="playlist" ? 1 : 2
@@ -986,6 +1031,7 @@ ApplicationWindow {
                                     Action { glyph: "close"; quiet: true; Accessible.name: "退出多选"; ToolTip.text: Accessible.name; onClicked: root.clearTrackSelection() }
                                 }
                                 Hint { text: player.libraryMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
+                                Hint { text: player.playbackMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                             }
                             ListView {
                                 id: songs; objectName: "playlistView"; Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 58; clip: true
@@ -1083,14 +1129,12 @@ ApplicationWindow {
                                             onClicked: { if (root.selectingTracks) root.toggleTrack(libraryTrack.modelData.id); else if (!player.busy) player.playTrack(libraryTrack.modelData.id) }
                                         }
                                         Action {
+                                            objectName: "libraryMenu_" + libraryTrack.modelData.id
                                             visible: !root.selectingTracks; glyph: "more"; quiet: true
                                             Accessible.name: "管理 " + libraryTrack.modelData.name; ToolTip.text: Accessible.name
                                             onClicked: {
-                                                trackMenu.sourceId = player.activePlaylist
-                                                trackMenu.trackId = libraryTrack.modelData.id
-                                                trackMenu.trackName = libraryTrack.modelData.name
-                                                trackMenu.trackIndex = player.tracks.map(function(t) { return t.id }).indexOf(libraryTrack.modelData.id)
-                                                trackMenu.open()
+                                                root.openTrackMenu(libraryTrack.modelData, player.activePlaylist,
+                                                    player.tracks.map(function(t) { return t.id }).indexOf(libraryTrack.modelData.id))
                                             }
                                         }
                                     }
@@ -1104,25 +1148,29 @@ ApplicationWindow {
                         ColumnLayout {
                             spacing: 10
                             RowLayout {
-                                visible: root.detail.length>0 && root.detail!=="search" && root.detail!=="rankings" && !root.showingOnlinePlaylist; Layout.fillWidth: true
+                                visible: root.detail === "settings" && !root.showingOnlinePlaylist; Layout.fillWidth: true
                                 Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail="" }
                                 Item { Layout.fillWidth: true }
                                 Copy { text: root.detail==="search" ? "搜索音乐" : root.detail==="favorites" ? "我的收藏" : "设置"; font.weight: Font.DemiBold }
                             }
                             StackLayout {
-                                Layout.fillWidth: true; Layout.fillHeight: true
-                                currentIndex: root.showingOnlinePlaylist ? 4 : root.detail==="search" ? 1 : root.detail==="settings" ? 2 : root.detail==="rankings" ? 3 : 0
+                                Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 0
+                                currentIndex: root.showingOnlinePlaylist ? 4 : root.detail==="search" ? 1 : root.detail==="settings" ? 2 : root.detail==="rankings" ? 3 : root.detail==="queue" ? 5 : root.detail==="history" ? 6 : root.detail==="sleep" ? 7 : 0
                                 ColumnLayout {
                                     id: moreMenu; spacing: 4
                                     MenuEntry { text: "搜索音乐"; glyph: "search"; Layout.fillWidth: true; onClicked: root.openDetail("search") }
                                     MenuEntry { objectName: "rankingsEntry"; text: "排行榜"; glyph: "ranking"; Layout.fillWidth: true; onClicked: root.openDetail("rankings") }
                                     MenuEntry { text: "我的收藏"; glyph: "heart"; Layout.fillWidth: true; onClicked: root.openDetail("favorites") }
+                                    MenuEntry { objectName: "queueEntry"; text: "播放队列 · " + player.queueEntries.length + " 首"; glyph: "list"; Layout.fillWidth: true; onClicked: root.openDetail("queue") }
+                                    MenuEntry { objectName: "historyEntry"; text: "最近播放"; glyph: "history"; Layout.fillWidth: true; onClicked: root.openDetail("history") }
+                                    MenuEntry { objectName: "sleepEntry"; text: player.sleepMode === "off" ? "睡眠定时" : player.sleepText; glyph: "timer"; Layout.fillWidth: true; onClicked: root.openDetail("sleep") }
                                     Rectangle { Layout.fillWidth: true; Layout.topMargin: 4; Layout.bottomMargin: 4; implicitHeight: 1; color: root.line }
                                     MenuEntry { text: "导入音乐"; glyph: "import"; Layout.fillWidth: true; enabled: !player.busy; onClicked: root.chooseMusic() }
                                     MenuEntry { text: player.currentFavorite ? "取消收藏" : "收藏当前"; glyph: "heart"; navigates: false; Layout.fillWidth: true; enabled: player.ready; onClicked: player.toggleFavorite() }
                                     MenuEntry { text: "设置"; glyph: "settings"; Layout.fillWidth: true; onClicked: root.openDetail("settings") }
                                     MenuEntry { objectName: "exitButton"; text: "退出浮音"; glyph: "exit"; navigates: false; Layout.fillWidth: true; Accessible.name: "退出并停止播放"; onClicked: root.quitApp() }
                                     Hint { text: player.favoriteMessage; visible: text.length>0 }
+                                    Hint { text: player.playbackMessage; visible: text.length>0; maximumLineCount: 3; elide: Text.ElideRight }
                                     Hint { Layout.topMargin: 8; text: "也可将音频拖入窗口或图标\nMP3 / WAV / FLAC / OGG / M4A / AAC · 单首 ≤ 30 MiB" }
                                 }
                                 Item {
@@ -1153,6 +1201,7 @@ ApplicationWindow {
                                             Action { objectName: "searchButton"; glyph: "search"; text: (root.searchKind === "songs" ? player.searching : player.playlistSearching) ? "搜索中" : "搜索"; enabled: player.searchSources.length > 0 && !(root.searchKind === "songs" ? player.searching : player.playlistSearching); onClicked: root.startSearch() }
                                         }
                                         Hint { text: root.searchKind === "songs" ? player.searchMessage : player.playlistSearchMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
+                                        Hint { text: player.playbackMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                                     }
                                     StackLayout {
                                         anchors.fill: parent
@@ -1166,8 +1215,10 @@ ApplicationWindow {
                                             delegate: SongRow {
                                                 required property var modelData; required property int index
                                                 track: modelData; extraText: "+"
+                                                menuObjectName: "searchMenu_" + index
                                                 onPlayRequested: player.playSearchResult(index)
                                                 onExtraRequested: player.addSearchResult(index)
+                                                onMenuRequested: root.openTrackMenu(modelData)
                                             }
                                             footer: Item {
                                                 width: results.width; height: results.count === 0 ? 80 : 0
@@ -1203,7 +1254,7 @@ ApplicationWindow {
                                     }
                                 }
                                 ScrollView {
-                                    id: settingsScroll; clip: true; contentWidth: availableWidth
+                                    id: settingsScroll; objectName: "settingsScroll"; clip: true; contentWidth: availableWidth
                                     property bool customServiceExpanded: player.apiBase.length > 0
                                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                     ColumnLayout {
@@ -1332,6 +1383,45 @@ ApplicationWindow {
                                             Hint { text: "透明度只影响背景。" }
                                             Action { objectName: "resetAppearanceButton"; text: "重置外观"; quiet: true; Accessible.name: "恢复窗口大小、背景和位置"; onClicked: root.resetAppearance() }
                                         }
+                                        SettingsHeading { label: "全局快捷键"; glyph: "keyboard" }
+                                        Hint { text: player.shortcuts.nativeEnabled ? "其他程序在前台时也可使用。点击组合键录入新设置。" : "当前环境不启用全局按键；仍可保存快捷键设置。" }
+                                        Repeater {
+                                            model: player.shortcuts.bindings
+                                            delegate: ColumnLayout {
+                                                id: shortcutRow
+                                                required property var modelData
+                                                Layout.fillWidth: true; spacing: 4
+                                                Copy { text: shortcutRow.modelData.label; Layout.fillWidth: true; font.pixelSize: 13 }
+                                                RowLayout {
+                                                    Layout.fillWidth: true; spacing: 6
+                                                    Action {
+                                                        objectName: "shortcutEdit_" + shortcutRow.modelData.action
+                                                        text: shortcutRow.modelData.sequence || "已禁用"
+                                                        Layout.fillWidth: true; Layout.minimumWidth: 0
+                                                        Accessible.name: "修改" + shortcutRow.modelData.label + "快捷键，" + text
+                                                        ToolTip.text: text
+                                                        contentItem: Copy { text: parent.text; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                                        onClicked: root.captureShortcut(shortcutRow.modelData)
+                                                    }
+                                                    Action {
+                                                        objectName: "shortcutDisable_" + shortcutRow.modelData.action
+                                                        text: "禁用"; quiet: true; enabled: shortcutRow.modelData.sequence.length > 0
+                                                        Accessible.name: "禁用" + shortcutRow.modelData.label + "快捷键"
+                                                        onClicked: player.shortcuts.setBinding(shortcutRow.modelData.action, "")
+                                                    }
+                                                    Action {
+                                                        objectName: "shortcutDefault_" + shortcutRow.modelData.action
+                                                        text: "默认"; quiet: true
+                                                        enabled: shortcutRow.modelData.sequence !== shortcutRow.modelData.defaultSequence || shortcutRow.modelData.error.length > 0
+                                                        Accessible.name: "恢复" + shortcutRow.modelData.label + "默认快捷键"
+                                                        onClicked: player.shortcuts.setBinding(shortcutRow.modelData.action, shortcutRow.modelData.defaultSequence)
+                                                    }
+                                                }
+                                                Hint { visible: shortcutRow.modelData.error.length > 0; text: shortcutRow.modelData.error; color: root.danger }
+                                            }
+                                        }
+                                        Hint { objectName: "shortcutSettingsMessage"; visible: player.shortcuts.message.length > 0; text: player.shortcuts.message; color: root.danger }
+                                        Action { objectName: "resetShortcutDefaults"; text: "恢复全部默认快捷键"; quiet: true; Layout.fillWidth: true; onClicked: player.shortcuts.resetDefaults() }
                                         SettingsHeading { label: "搜索与服务"; glyph: "search" }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 8
@@ -1367,7 +1457,7 @@ ApplicationWindow {
                                             }
                                             Hint { text: player.searchMessage; visible: text.length > 0 }
                                         }
-                                        SettingsHeading { label: "浮音 1.1.0-preview"; glyph: "info" }
+                                        SettingsHeading { label: "浮音 1.2.0-preview"; glyph: "info" }
                                         Hint { text: "Windows 桌面预览 · 拖动顶部移动窗口\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起" }
                                     }
                                 }
@@ -1475,13 +1565,201 @@ ApplicationWindow {
                                             Hint { text: player.onlinePlaylist.description || "暂无简介"; maximumLineCount: 5; elide: Text.ElideRight }
                                             Hint { text: player.onlinePlaylist.warning || ""; visible: text.length > 0; color: root.danger }
                                             Hint { text: player.onlinePlaylistLoading ? "正在读取歌单与歌曲…" : player.libraryMessage; visible: text.length > 0 }
+                                            Hint { text: player.playbackMessage; visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                                             Item { height: 4; width: 1 }
                                         }
                                         delegate: SongRow {
                                             required property var modelData; required property int index
                                             track: modelData; rank: root.onlinePlaylistSource === "rankings" ? (modelData.playlistPosition !== undefined ? modelData.playlistPosition : index + 1) : 0
+                                            menuObjectName: "onlineMenu_" + index
                                             onPlayRequested: player.libraryAction("playOnline", { index: index })
+                                            onMenuRequested: root.openTrackMenu(modelData)
                                         }
+                                    }
+                                }
+                                Item {
+                                    ColumnLayout {
+                                        id: queueTools; parent: queueView.headerItem
+                                        width: queueView.width - 12; spacing: 6
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 6
+                                            Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail = "" }
+                                            Copy { text: "播放队列"; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                                            Action { objectName: "clearQueueButton"; text: "清空"; quiet: true; enabled: player.queueEntries.length > 0; onClicked: root.confirmPlaybackRemoval("queue") }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 6
+                                            Copy { objectName: "queueCount"; text: player.queueEntries.length + " 首"; color: root.accent; font.pixelSize: 12 }
+                                            Copy { text: "拖动手柄排序，也可使用歌曲菜单"; Layout.fillWidth: true; font.pixelSize: 12; color: root.muted }
+                                        }
+                                        Hint { visible: player.ready && player.currentQueueEntry.length === 0 && player.queueEntries.length > 0; text: "当前歌曲已移出队列，仍会继续播放。" }
+                                        Hint { visible: player.playbackMessage.length > 0; text: player.playbackMessage; maximumLineCount: 3; elide: Text.ElideRight }
+                                    }
+                                    ListView {
+                                        id: queueView; objectName: "queueView"; anchors.fill: parent; clip: true
+                                        model: player.queueEntries
+                                        headerPositioning: ListView.InlineHeader
+                                        header: Item { width: queueView.width - 12; height: queueTools.implicitHeight + 8 }
+                                        boundsBehavior: Flickable.StopAtBounds
+                                        property string dragEntryId: ""
+                                        property int dragFrom: -1
+                                        property int dragTo: -1
+                                        property real dragPointerY: 0
+                                        // Hold the pressed occurrence while delegates scroll past it.
+                                        currentIndex: dragFrom
+                                        highlightFollowsCurrentItem: false
+                                        function updateDropTarget() {
+                                            var firstRowY = headerItem ? headerItem.y + headerItem.height : originY
+                                            dragTo = Math.max(0, Math.min(count - 1, Math.floor((contentY + dragPointerY - firstRowY) / 58)))
+                                        }
+                                        function endReorder(commit) {
+                                            var entryId = dragEntryId, to = dragTo, from = dragFrom
+                                            dragEntryId = ""; dragFrom = -1; dragTo = -1
+                                            if (commit && entryId.length && from >= 0 && to >= 0 && from !== to)
+                                                player.moveQueueEntry(entryId, to)
+                                        }
+                                        onModelChanged: endReorder(false)
+                                        onVisibleChanged: if (!visible) endReorder(false)
+                                        ScrollBar.vertical: ScrollBar {}
+                                        Timer {
+                                            interval: 45; repeat: true; running: queueView.dragFrom >= 0
+                                            onTriggered: {
+                                                var delta = queueView.dragPointerY < 28 ? -12 : queueView.dragPointerY > queueView.height - 28 ? 12 : 0
+                                                if (delta) {
+                                                    queueView.contentY = Math.max(queueView.originY, Math.min(queueView.originY + Math.max(0, queueView.contentHeight - queueView.height), queueView.contentY + delta))
+                                                    queueView.updateDropTarget()
+                                                }
+                                            }
+                                        }
+                                        delegate: Rectangle {
+                                            id: queuedTrack
+                                            required property var modelData
+                                            required property int index
+                                            objectName: "queueRow_" + modelData.queueId
+                                            readonly property bool current: player.currentQueueEntry === modelData.queueId
+                                            width: queueView.width - 10; height: 58; radius: 8
+                                            color: current ? root.selection : queueHover.hovered ? root.backdrop : "transparent"
+                                            opacity: queueView.dragEntryId === modelData.queueId ? 0.6 : 1
+                                            HoverHandler { id: queueHover }
+                                            Rectangle {
+                                                anchors.left: parent.left; anchors.right: parent.right; height: 3; radius: 1.5
+                                                y: queueView.dragTo > queueView.dragFrom ? parent.height - height : 0
+                                                color: root.accent; visible: queueView.dragFrom >= 0 && queueView.dragTo === queuedTrack.index && queueView.dragTo !== queueView.dragFrom
+                                            }
+                                            RowLayout {
+                                                anchors.fill: parent; spacing: 4
+                                                Item {
+                                                    Layout.preferredWidth: 30; Layout.fillHeight: true
+                                                    Glyph { anchors.centerIn: parent; kind: "drag"; tint: root.muted }
+                                                    MouseArea {
+                                                        objectName: "queueDrag_" + queuedTrack.modelData.queueId
+                                                        anchors.fill: parent; preventStealing: true
+                                                        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                                        property real pressY: 0
+                                                        property bool moved: false
+                                                        Accessible.name: "拖动排序 " + queuedTrack.modelData.name
+                                                        onPressed: function(mouse) { pressY = mouse.y; moved = false }
+                                                        onPositionChanged: function(mouse) {
+                                                            if (!pressed) return
+                                                            if (!moved && Math.abs(mouse.y - pressY) < Qt.styleHints.startDragDistance) return
+                                                            if (!moved) { moved = true; queueView.dragFrom = queuedTrack.index; queueView.dragEntryId = queuedTrack.modelData.queueId }
+                                                            queueView.dragPointerY = mapToItem(queueView, mouse.x, mouse.y).y
+                                                            queueView.updateDropTarget()
+                                                        }
+                                                        onReleased: queueView.endReorder(true)
+                                                        onCanceled: queueView.endReorder(false)
+                                                    }
+                                                    ToolTip.visible: queueHandleHover.hovered && queueView.dragEntryId.length === 0; ToolTip.text: "拖动排序，也可在菜单中上移、下移"
+                                                    HoverHandler { id: queueHandleHover }
+                                                }
+                                                Button {
+                                                    id: queueTap
+                                                    objectName: "queuePlay_" + queuedTrack.modelData.queueId
+                                                    Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.fillHeight: true; padding: 4
+                                                    enabled: !player.busy
+                                                    Accessible.name: (queuedTrack.current ? "当前歌曲，" : "播放 ") + queuedTrack.modelData.name + "，" + root.trackSourceName(queuedTrack.modelData)
+                                                    contentItem: ColumnLayout {
+                                                        spacing: 4
+                                                        Copy { text: queuedTrack.modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold; color: queuedTrack.current ? root.accent : root.ink }
+                                                        TrackMetadata { track: queuedTrack.modelData; Layout.fillWidth: true; Layout.minimumWidth: 0 }
+                                                    }
+                                                    background: Rectangle { color: "transparent"; radius: 8; border.width: parent.activeFocus ? 2 : 0; border.color: root.accent }
+                                                    onClicked: player.playQueueEntry(queuedTrack.modelData.queueId)
+                                                }
+                                                Glyph { visible: queuedTrack.current; kind: player.playing ? "play" : "pause"; tint: root.accent; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
+                                                Action {
+                                                    objectName: "queueMenu_" + queuedTrack.modelData.queueId
+                                                    glyph: "more"; quiet: true; Accessible.name: "队列操作 " + queuedTrack.modelData.name; ToolTip.text: Accessible.name
+                                                    onClicked: { queueMenu.entryId = queuedTrack.modelData.queueId; queueMenu.track = queuedTrack.modelData; queueMenu.open() }
+                                                }
+                                            }
+                                        }
+                                        footer: Item {
+                                            width: queueView.width; height: queueView.count === 0 ? 90 : 0
+                                            Hint { objectName: "queueEmptyState"; anchors.centerIn: parent; width: parent.width - 16; horizontalAlignment: Text.AlignHCenter; visible: queueView.count === 0; text: "队列为空\n在歌曲菜单中选择“下一首播放”或“加入队尾”" }
+                                        }
+                                    }
+                                }
+                                Item {
+                                    ColumnLayout {
+                                        id: historyTools; parent: historyView.headerItem
+                                        width: historyView.width - 12; spacing: 6
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 6
+                                            Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail = "" }
+                                            Copy { text: "最近播放"; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                                            Action { objectName: "clearHistoryButton"; text: "清空"; quiet: true; enabled: player.historyEntries.length > 0; onClicked: root.confirmPlaybackRemoval("history") }
+                                        }
+                                        Hint { text: player.historyEntries.length + " 首 · 最近听过的歌曲，最多保留 200 首" }
+                                        Hint { visible: player.playbackMessage.length > 0; text: player.playbackMessage; maximumLineCount: 3; elide: Text.ElideRight }
+                                    }
+                                    ListView {
+                                        id: historyView; objectName: "historyView"; anchors.fill: parent; clip: true
+                                        model: player.historyEntries
+                                        headerPositioning: ListView.InlineHeader
+                                        header: Item { width: historyView.width - 12; height: historyTools.implicitHeight + 8 }
+                                        boundsBehavior: Flickable.StopAtBounds
+                                        ScrollBar.vertical: ScrollBar {}
+                                        delegate: SongRow {
+                                            required property var modelData
+                                            required property int index
+                                            track: modelData; note: root.historyTime(modelData.playedAtMs)
+                                            playObjectName: "historyPlay_" + index
+                                            menuObjectName: "historyMenu_" + index
+                                            onPlayRequested: player.playHistoryTrack(modelData.id)
+                                            onMenuRequested: { historyMenu.track = modelData; historyMenu.open() }
+                                        }
+                                        footer: Item {
+                                            width: historyView.width; height: historyView.count === 0 ? 90 : 0
+                                            Hint { objectName: "historyEmptyState"; anchors.centerIn: parent; width: parent.width - 16; horizontalAlignment: Text.AlignHCenter; visible: historyView.count === 0; text: "还没有最近播放\n歌曲开始播放后会出现在这里" }
+                                        }
+                                    }
+                                }
+                                ScrollView {
+                                    id: sleepScroll; objectName: "sleepScroll"; clip: true; contentWidth: availableWidth
+                                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                    ColumnLayout {
+                                        width: sleepScroll.availableWidth; spacing: 10
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Action { glyph: "back"; text: "更多"; quiet: true; onClicked: root.detail = "" }
+                                            Copy { text: "睡眠定时"; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                                        }
+                                        Hint { objectName: "sleepStatus"; text: player.sleepMode === "off" ? "定时结束时暂停音乐" : player.sleepText; color: player.sleepMode === "off" ? root.muted : root.accent }
+                                        GridLayout {
+                                            Layout.fillWidth: true; columns: 3; columnSpacing: 6
+                                            Action { objectName: "sleepPreset15"; text: "15 分钟"; Layout.fillWidth: true; onClicked: player.startSleepTimer(15) }
+                                            Action { objectName: "sleepPreset30"; text: "30 分钟"; Layout.fillWidth: true; onClicked: player.startSleepTimer(30) }
+                                            Action { objectName: "sleepPreset60"; text: "60 分钟"; Layout.fillWidth: true; onClicked: player.startSleepTimer(60) }
+                                        }
+                                        Copy { text: "自定义 · 1–180 分钟"; font.pixelSize: 13 }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 8
+                                            Field { id: sleepMinutes; objectName: "sleepMinutes"; Layout.fillWidth: true; Layout.minimumWidth: 0; text: "45"; maximumLength: 3; inputMethodHints: Qt.ImhDigitsOnly; validator: IntValidator { bottom: 1; top: 180 } Accessible.name: "定时分钟数，1 至 180"; onAccepted: if (startCustomSleep.enabled) player.startSleepTimer(Number(text)) }
+                                            Action { id: startCustomSleep; objectName: "startCustomSleep"; text: "开始"; selected: true; enabled: /^\d{1,3}$/.test(sleepMinutes.text) && Number(sleepMinutes.text) >= 1 && Number(sleepMinutes.text) <= 180; onClicked: player.startSleepTimer(Number(sleepMinutes.text)) }
+                                        }
+                                        Action { objectName: "sleepAfterCurrent"; text: "播完当前歌曲"; glyph: "music"; Layout.fillWidth: true; enabled: player.ready || player.busy; onClicked: player.sleepAfterCurrentTrack() }
+                                        Action { objectName: "cancelSleepButton"; text: "取消定时"; quiet: true; Layout.fillWidth: true; enabled: player.sleepMode !== "off"; onClicked: player.cancelSleepTimer() }
                                     }
                                 }
                             }
@@ -1550,18 +1828,107 @@ ApplicationWindow {
     }
     LibrarySheet {
         id: trackMenu; heading: "歌曲操作"
+        property var track: ({})
         property string sourceId: ""
         property string trackId: ""
         property string trackName: ""
         property int trackIndex: -1
         Hint { text: trackMenu.trackName }
+        Action { objectName: "trackEnqueueNext"; text: "下一首播放"; glyph: "next"; Layout.fillWidth: true; onClicked: { player.enqueueTrack(trackMenu.track, "next"); trackMenu.close() } }
+        Action { objectName: "trackEnqueueTail"; text: "加入队尾"; glyph: "list"; Layout.fillWidth: true; onClicked: { player.enqueueTrack(trackMenu.track, "tail"); trackMenu.close() } }
         RowLayout {
-            Layout.fillWidth: true; spacing: 8
+            visible: trackMenu.sourceId.length > 0; Layout.fillWidth: true; spacing: 8
             Action { text: "上移"; glyph: "up"; Layout.fillWidth: true; enabled: trackMenu.trackIndex > 0; onClicked: { if (root.usePlaylist(trackMenu.sourceId)) player.libraryAction("moveTrack", { from: trackMenu.trackIndex, to: trackMenu.trackIndex - 1 }); trackMenu.close() } }
             Action { text: "下移"; glyph: "down"; Layout.fillWidth: true; enabled: trackMenu.trackIndex >= 0 && trackMenu.trackIndex < player.tracks.length - 1; onClicked: { if (root.usePlaylist(trackMenu.sourceId)) player.libraryAction("moveTrack", { from: trackMenu.trackIndex, to: trackMenu.trackIndex + 1 }); trackMenu.close() } }
         }
-        Action { text: "选择这首歌"; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(trackMenu.sourceId)) { filter.text = ""; root.selectingTracks = true; root.selectedTrackIds = [trackMenu.trackId] }; trackMenu.close() } }
-        Action { text: "从歌单移除"; Layout.fillWidth: true; onClicked: { trackMenu.close(); root.confirmRemove([trackMenu.trackId], trackMenu.sourceId) } }
+        Action { visible: trackMenu.sourceId.length > 0; text: "选择这首歌"; Layout.fillWidth: true; onClicked: { if (root.usePlaylist(trackMenu.sourceId)) { filter.text = ""; root.selectingTracks = true; root.selectedTrackIds = [trackMenu.trackId] }; trackMenu.close() } }
+        Action { visible: trackMenu.sourceId.length > 0; text: "从歌单移除"; Layout.fillWidth: true; onClicked: { trackMenu.close(); root.confirmRemove([trackMenu.trackId], trackMenu.sourceId) } }
+    }
+    LibrarySheet {
+        id: queueMenu; heading: "队列操作"
+        property string entryId: ""
+        property var track: ({})
+        readonly property int entryIndex: root.queueIndex(entryId)
+        Hint { text: queueMenu.track.name || "" }
+        Action { objectName: "queuePlayNow"; text: "现在播放"; glyph: "play"; Layout.fillWidth: true; enabled: queueMenu.entryIndex >= 0 && !player.busy; onClicked: { player.playQueueEntry(queueMenu.entryId); queueMenu.close() } }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Action { objectName: "queueMoveUp"; text: "上移"; glyph: "up"; Layout.fillWidth: true; enabled: queueMenu.entryIndex > 0; onClicked: { player.moveQueueEntry(queueMenu.entryId, queueMenu.entryIndex - 1); queueMenu.close() } }
+            Action { objectName: "queueMoveDown"; text: "下移"; glyph: "down"; Layout.fillWidth: true; enabled: queueMenu.entryIndex >= 0 && queueMenu.entryIndex < player.queueEntries.length - 1; onClicked: { player.moveQueueEntry(queueMenu.entryId, queueMenu.entryIndex + 1); queueMenu.close() } }
+        }
+        Action { objectName: "queueRemove"; text: "从队列移除"; Layout.fillWidth: true; enabled: queueMenu.entryIndex >= 0; onClicked: { queueMenu.close(); root.confirmPlaybackRemoval("entry", queueMenu.entryId, queueMenu.track.name) } }
+    }
+    LibrarySheet {
+        id: historyMenu; heading: "最近播放操作"
+        property var track: ({})
+        Hint { text: historyMenu.track.name || "" }
+        Action { objectName: "historyReplay"; text: "再次播放"; glyph: "play"; Layout.fillWidth: true; enabled: !player.busy; onClicked: { player.playHistoryTrack(historyMenu.track.id); historyMenu.close() } }
+        Action { objectName: "historyEnqueueNext"; text: "下一首播放"; glyph: "next"; Layout.fillWidth: true; onClicked: { player.enqueueTrack(historyMenu.track, "next"); historyMenu.close() } }
+        Action { objectName: "historyEnqueueTail"; text: "加入队尾"; glyph: "list"; Layout.fillWidth: true; onClicked: { player.enqueueTrack(historyMenu.track, "tail"); historyMenu.close() } }
+    }
+    LibrarySheet {
+        id: playbackRemoval
+        property string kind: "queue"
+        property string entryId: ""
+        property string trackName: ""
+        heading: kind === "history" ? "清空最近播放？" : kind === "entry" ? "移除队列歌曲？" : "清空播放队列？"
+        Hint { text: playbackRemoval.kind === "history" ? "清空最近播放记录？正在播放的歌曲会继续。" : playbackRemoval.kind === "entry" ? "从队列移除“" + playbackRemoval.trackName + "”？若是当前歌曲，本首仍会继续播放。" : "清空 " + player.queueEntries.length + " 首队列歌曲？当前歌曲会继续，播完后停止。" }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Action { objectName: "cancelPlaybackRemoval"; text: "取消"; Layout.fillWidth: true; onClicked: playbackRemoval.close() }
+            Action {
+                objectName: "confirmPlaybackRemoval"; text: playbackRemoval.kind === "entry" ? "移除" : "清空"; Layout.fillWidth: true
+                onClicked: {
+                    if (playbackRemoval.kind === "history") player.clearPlaybackHistory()
+                    else if (playbackRemoval.kind === "entry") player.removeQueueEntry(playbackRemoval.entryId)
+                    else player.clearPlaybackQueue()
+                    playbackRemoval.close()
+                }
+            }
+        }
+    }
+    LibrarySheet {
+        id: shortcutCapture; heading: "修改快捷键"
+        property string action: ""
+        property string label: ""
+        property string previous: ""
+        property string candidate: ""
+        property string failure: ""
+        onOpened: { player.shortcuts.setCapturing(true); shortcutCaptureField.forceActiveFocus() }
+        onClosed: player.shortcuts.setCapturing(false)
+        Hint { text: shortcutCapture.label + " · 当前：" + (shortcutCapture.previous || "已禁用") }
+        Hint { text: "按下新的组合键，包含 Ctrl、Alt 或 Windows 键。" }
+        Item {
+            id: shortcutCaptureField; objectName: "shortcutCaptureField"
+            Layout.fillWidth: true; implicitHeight: 52; activeFocusOnTab: true
+            Accessible.name: "录入" + shortcutCapture.label + "快捷键"
+            Accessible.description: shortcutCapture.candidate || "等待按下组合键"
+            Rectangle { anchors.fill: parent; radius: 8; color: root.control; border.color: shortcutCaptureField.activeFocus ? root.accent : root.fieldBorder; border.width: shortcutCaptureField.activeFocus ? 2 : 1 }
+            Copy { anchors.fill: parent; anchors.margins: 10; text: shortcutCapture.candidate || "按下组合键…"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; color: shortcutCapture.candidate.length ? root.accent : root.muted }
+            MouseArea { anchors.fill: parent; onClicked: shortcutCaptureField.forceActiveFocus() }
+            Keys.onShortcutOverride: function(event) { event.accepted = true }
+            Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape && event.modifiers === Qt.NoModifier) { shortcutCapture.close(); event.accepted = true; return }
+                if (event.isAutoRepeat) { event.accepted = true; return }
+                var sequence = player.shortcuts.captureSequence(event.key, event.modifiers)
+                if (sequence.length) { shortcutCapture.candidate = sequence; shortcutCapture.failure = "" }
+                else if ([Qt.Key_Control, Qt.Key_Alt, Qt.Key_Shift, Qt.Key_Meta].indexOf(event.key) < 0)
+                    shortcutCapture.failure = "请包含 Ctrl、Alt 或 Windows 键。"
+                event.accepted = true
+            }
+        }
+        Hint { objectName: "shortcutCaptureError"; visible: shortcutCapture.failure.length > 0; text: shortcutCapture.failure; color: root.danger }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Action { objectName: "cancelShortcutBinding"; text: "取消"; Layout.fillWidth: true; onClicked: shortcutCapture.close() }
+            Action {
+                objectName: "saveShortcutBinding"; text: "保存"; selected: true; Layout.fillWidth: true; enabled: shortcutCapture.candidate.length > 0
+                onClicked: {
+                    if (player.shortcuts.setBinding(shortcutCapture.action, shortcutCapture.candidate)) shortcutCapture.close()
+                    else { shortcutCapture.failure = player.shortcuts.message; shortcutCaptureField.forceActiveFocus() }
+                }
+            }
+        }
     }
     LibrarySheet {
         id: targetSheet; heading: mode === "online" ? "导入在线歌单" : mode === "move" ? "移动歌曲" : "复制歌曲"

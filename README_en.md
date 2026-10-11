@@ -4,9 +4,9 @@
 
 **Keep music close at hand.** FloatMusic is a floating music player for Windows and Android. It rests as a draggable music-note icon; clicking it opens a player card so you can control playback, read lyrics, and change tracks while using other apps.
 
-Current version: **1.1 · Windows and Android preview**, accepted by the user. Windows is `1.1.0-preview.2`; Android is `1.1.0-preview.1`, with version code 15. Source code and packages are available in the [1.1 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.1.0-preview).
+Current version: **1.2 · Windows and Android preview**. Both platforms use `1.2.0-preview`; Android version code is 16. Source code and packages are available in the [1.2 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.2.0-preview).
 
-Version 1.1 saves quality preferences separately for all three libraries and adds QQ 320 / FLAC / experimental master and Kuwo 320 / FLAC, with lower-quality fallback when a tier is unavailable. Volume is now a button in the playback controls that opens a vertical slider upward. Lyric font size spans 10–30, with adjustable 0.8–3.0× line spacing, a default of 1×, live previews, and saved preferences. Settings are grouped by function. Tracks from different platforms and local files can still share playlists; multi-platform playlists, rankings, and the search result limit remain available. See the [Windows 1.1 acceptance guide](docs/Windows-1.1-验收说明.md) and [Android 1.1 acceptance guide](docs/Android-1.1-验收说明.md).
+Version 1.2 adds a separate playback queue, listening history, and a sleep timer. Schedule a track next or append it to the queue; duplicate occurrences, drag reordering, removal, clearing, and restart restoration are supported. Windows adds editable global shortcuts, while Android media notifications gain playback, progress, mode, and volume controls. Mixed playlists, independent quality preferences, and lyric size and spacing remain available. See the [Windows 1.2 acceptance guide](docs/Windows-1.2-验收说明.md) and [Android 1.2 acceptance guide](docs/Android-1.2-验收说明.md).
 
 ## Main features
 
@@ -16,19 +16,23 @@ Version 1.1 saves quality preferences separately for all three libraries and add
 - **Backup audio sources**: Built-in NetEase playback prefers GD Studio and tries other sources after URL, connection, or decoding failures. Settings show the actual source and audio format.
 - **Independent quality**: NetEase offers standard through Hi-Res; QQ offers standard / 320 / FLAC / experimental master; Kuwo offers standard / 320 / FLAC. Each preference is saved separately. Unavailable tiers fall back to lower tiers for the same track, and actual audio specifications are displayed.
 - **Playback controls**: Play, pause, seek, previous/next track, volume, and audio output selection. The volume button opens a vertical slider upward. Sequential, repeat-all, repeat-one, and shuffle modes are supported. Restarting restores the track and position in a paused state.
+- **Playback queue**: Schedule a track next or at the end, keep duplicate occurrences independent, drag to reorder, remove or clear, and restore order and the current entry paused after restarting.
+- **Listening history**: Record up to 200 tracks that actually began playing; replay, add to a queue or playlist, or clear the history.
+- **Sleep timer**: Choose 15 / 30 / 60 minutes, a custom 1–180 minutes, or stop after the current track. Cancel at any time; restarting disables the timer.
+- **Shortcuts and notifications**: Edit Windows global shortcuts in settings; Android provides system media notifications and controls.
 - **Lyrics**: Choose original, translation, or bilingual lyrics in settings, adjust font size from 10–30 and line spacing from 0.8–3.0×, and preview and save changes. Timed lyrics highlight and slightly enlarge the current line; after manual scrolling, an arrow returns to it. Each track can have its own timing adjustment.
 - **Playlists and favorites**: Manage local playlists and the built-in Favorites playlist, edit descriptions, reorder by dragging, move / copy / remove multiple selections, and import/export JSON. Both platforms support mixed playlists containing all three online sources and local music.
 - **Appearance**: Light, dark, or system theme; draggable floating cards with proportional scaling and background opacity controls.
 
 ## Download and run
 
-This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.1 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.1.0-preview):
+This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.2 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.2.0-preview):
 
 | Platform | Download | How to use |
 |---|---|---|
-| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.1.0-preview/FloatMusic-1.1.0-preview.2-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
-| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.1.0-preview/FloatMusic-1.1.0-preview.1-android-arm64.apk) | Android 9 or later; an older build with the same signature can be updated in place |
-| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.1.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
+| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.2.0-preview/FloatMusic-1.2.0-preview-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
+| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.2.0-preview/FloatMusic-1.2.0-preview-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
+| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.2.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
 
 Other versions are listed under [Releases](https://github.com/chensiray/FloatMusic/releases). To compile the app yourself, see the [build guide](docs/DEVELOPMENT.md).
 
@@ -48,11 +52,11 @@ Before upgrading, close the old app through **More → Exit FloatMusic (更多 �
 
 1. Install the ARM64 APK, open FloatMusic, and tap **Show floating window (显示悬浮窗)** on the welcome screen.
 2. Allow display over other apps when prompted, then return and use the music-note icon. Allowing media notifications enables playback controls in the notification area.
-3. Tap the icon to expand the card, then use **More → Import music (更多 → 导入音乐)** or **More → Search (更多 → 搜索)**.
+3. Tap the icon to expand the card, then use **More → Import music (更多 → 导入音乐)** or **More → Search music (更多 → 搜索音乐)**.
 
 Returning to the welcome screen hides an existing overlay; leaving it restores the overlay. Playback can continue when the card is collapsed or another app is active, though phone power-saving policies may limit background duration.
 
-Preview APKs use a debug signature. The 1.1 package has been verified to use the same signature as 1.0; device installation details are in the [verification notes](VERIFICATION.md). If Android reports a signature mismatch, back up playlists and confirm the package source before proceeding; do not immediately uninstall the old version.
+Preview APKs use a debug signature. The 1.2 package has been verified to use the same signature as 1.1; device installation details are in the [verification notes](VERIFICATION.md). If Android reports a signature mismatch, back up playlists and confirm the package source before proceeding; do not immediately uninstall the old version.
 
 ## Using the player card
 
@@ -64,9 +68,12 @@ The volume button sits beside previous, play/pause, next, and playback mode. Cli
 |---|---|
 | Lyrics (歌词) | Read timed lyrics, return to the current line, adjust timing, or fetch again; original/translation selection, font size, and spacing are in settings on both platforms |
 | Playlists (歌单) | Select a playlist, view its description and count, and manage, reorder, select, import, or export tracks through the operations panel |
-| More → Search music (更多 → 搜索音乐; “搜索” on Android) | Switch between song and playlist search; open online playlist details, preview tracks, or import the entire playlist |
+| More → Search music (更多 → 搜索音乐) | Switch between song and playlist search; open online playlist details, preview tracks, or import the entire playlist |
+| More → Playback queue (更多 → 播放队列) | View the current playback order, reorder by dragging, play, remove, or clear |
+| More → Listening history (更多 → 最近播放) | Replay recently heard tracks, add them to the queue or a playlist, or clear history |
+| More → Sleep timer (更多 → 睡眠定时) | Set a countdown or stop after the current track, view status, or cancel |
 | More → Rankings (更多 → 排行榜) | Fetch hot charts and other rankings, view details, preview, import, or refresh |
-| More → Favorite current / My favorites (更多 → 收藏当前 / 我的收藏; “收藏” on Android) | Favorite the current track; Favorites shares sorting and batch management with other playlists |
+| More → Favorite current / My favorites (更多 → 收藏当前 / 我的收藏; “收藏歌单” on Android) | Favorite the current track; Favorites shares sorting and batch management with other playlists |
 | More → Settings (更多 → 设置) | Grouped playback quality, lyrics, appearance, search, and service controls for independent quality, font size, spacing, output devices, and more |
 | More → Exit FloatMusic (更多 → 退出浮音) | Stop playback, remove the overlay, and exit the app |
 
@@ -77,6 +84,22 @@ The playlist and search toolbars scroll with their content, leaving more room fo
 Check one or more libraries above the search field on either platform; all are selected by default, and songs and playlists share the selection. Search again after changing libraries. Clearing all selections prompts you to choose at least one. Search results and current playback information show their source, and matching song names are not merged across platforms. Set the combined limit under **More → Settings → Search result count (更多 → 设置 → 搜索显示数量)**. Songs and playlists share this limit; changes apply to the next search and survive a restart.
 
 After importing a local file, click play. Previewing a search result does not automatically add it to a playlist. Select playback mode to the right of the next-track button. Sequential playback stops naturally at the playlist's end; repeat and shuffle modes continue changing tracks. Favorites and playlists stay on the device and are not synchronized to a NetEase account.
+
+## Playback queue, history, and sleep timer
+
+Choose Play next (下一首播放) or Add to queue (加入队尾) from a track menu without interrupting the current track. Scheduled next tracks take priority over repeat or shuffle modes. Duplicate tracks can be added, reordered, and removed independently. Clicking a track in a saved playlist creates a queue from that playlist, replacing the old queue only after audio is successfully prepared. Selecting or organizing saved playlists alone does not replace the queue.
+
+The queue holds up to 10,000 entries and supports drag or menu reordering. Removing the current entry lets its audio continue; clearing stops playback when that track ends. Order, current entry, and position are restored paused after restarting. The playback queue is separate from saved playlists, so clearing it does not delete them.
+
+History keeps up to 200 tracks that actually began playing, moving replayed tracks to the top. Failed loads or tracks merely added to the queue are not recorded. Replay, add to the queue or a playlist, or clear the history. Resuming paused audio or reloading its quality within the same playback does not create another record; actively resuming after an app restart records the new listening session.
+
+The sleep timer offers 15 / 30 / 60 minutes, a custom 1–180 minutes, and stopping after the current track. The countdown continues while paused or in the background. Expiry prevents delayed loads or audio-focus recovery from starting playback automatically. Cancel at any time; restarting disables the timer.
+
+## Shortcuts and Android media notifications
+
+View or edit Windows combinations under More → Settings → Global shortcuts (更多 → 设置 → 全局快捷键). Disable shortcuts or restore defaults; conflicts retain the previous configuration. Defaults are `Ctrl+Alt+Space` for play/pause, `Ctrl+Alt+Left / Right` for previous/next, `Ctrl+Alt+Up / Down` for volume, and `Ctrl+Alt+M` to expand/collapse. These work while other apps are in front. Existing `Ctrl+F`, `Ctrl+O`, and `Esc` shortcuts remain local to the player window.
+
+Android media notifications display the track, artist, progress, and duration, with previous/next, play/pause, playback mode, and volume controls. Seek where the system provides a progress slider. Volume opens the floating card's vertical slider; close the notification panel to adjust it. The welcome-screen action returns to the overlay, and a file picker delays the popup until selection ends. The phone system determines order, collapsing, and lock-screen display. Notification and overlay permissions are still required.
 
 ## Importing and organizing playlists
 
@@ -95,7 +118,7 @@ The clipboard accepts full NetEase, QQ, and Kuwo playlist URLs, such as `music.1
 
 **JSON does not contain audio files.** Online tracks can be imported on another device, but playback still depends on online services. Local tracks only record file locations; inaccessible references are skipped with a message on the destination device. Exporting a playlist neither downloads songs nor replaces an audio backup.
 
-Version 1.1 continues to export JSON version 1, preserving each online track's platform and original ID without saving temporary playback URLs. Older NetEase playlists and 0.9 mixed playlists remain compatible. Both platforms running 0.9 / 1.0 / 1.1 can exchange mixed playlists. Older builds such as Android 0.8 skip QQ and Kuwo tracks with a message, so check the version before importing.
+Version 1.2 continues to export JSON version 1, preserving each online track's platform and original ID without saving temporary playback URLs. Older NetEase playlists and 0.9 mixed playlists remain compatible. Both platforms running 0.9 / 1.0 / 1.1 / 1.2 can exchange mixed playlists. Older builds such as Android 0.8 skip QQ and Kuwo tracks with a message, so check the version before importing.
 
 ## Rankings
 
@@ -136,7 +159,7 @@ Local imports save an audio copy in the app data directory. The original file is
 
 Playlists support bulk JSON import and drag reordering. Bulk audio-file import, local LRC import, and downloading online songs are not currently supported. Phone power-saving policies, screen sizes, and Bluetooth devices still need ongoing compatibility work.
 
-Version 1.1's automated checks, anonymous API samples, and device installation details are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
+Version 1.2's automated checks, anonymous API samples, and device installation details are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
 
 To report a problem, open an [Issue](https://github.com/chensiray/FloatMusic/issues) and include the app version, OS/device model, reproduction steps, and actual behavior.
 
