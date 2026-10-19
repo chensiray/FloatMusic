@@ -2,11 +2,17 @@
 
 [简体中文](README.md) | [English](README_en.md)
 
+![FloatMusic 1.3 promotional poster](assets/branding/floatmusic-github-poster-en.png)
+
+*Interface language: Simplified Chinese.*
+
 **Keep music close at hand.** FloatMusic is a floating music player for Windows and Android. It rests as a draggable music-note icon; clicking it opens a player card so you can control playback, read lyrics, and change tracks while using other apps.
 
-Current version: **1.2 · Windows and Android preview**. Both platforms use `1.2.0-preview`; Android version code is 16. Source code and packages are available in the [1.2 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.2.0-preview).
+Current version: **1.3 · Windows and Android preview**. Windows uses `1.3.0-preview`; Android uses `1.3.0-preview.1` (icon revision, version code 18). Source code and packages are available in the [1.3 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.3.0-preview).
 
-Version 1.2 adds a separate playback queue, listening history, and a sleep timer. Schedule a track next or append it to the queue; duplicate occurrences, drag reordering, removal, clearing, and restart restoration are supported. Windows adds editable global shortcuts, while Android media notifications gain playback, progress, mode, and volume controls. Mixed playlists, independent quality preferences, and lyric size and spacing remain available. See the [Windows 1.2 acceptance guide](docs/Windows-1.2-验收说明.md) and [Android 1.2 acceptance guide](docs/Android-1.2-验收说明.md).
+Version 1.3 focuses on visual details: pearlescent light surfaces, cyan and pink-violet iridescent edges, a violet play button, and clearer layers in the dark theme and popups. Both platforms use a new pearlescent music-note app icon and a matching circular floating icon, while retaining the 1.2 layout, control positions, and interactions. See the [Windows 1.3 preview guide](docs/Windows-1.3-预览说明.md), [Android 1.3 acceptance guide](docs/Android-1.3-验收说明.md), and [icon acceptance guide](docs/图标-验收说明.md).
+
+The separate playback queue, listening history, and sleep timer remain available. Schedule a track next or append it to the queue; duplicate occurrences, drag reordering, removal, clearing, and restart restoration are supported. Windows provides editable global shortcuts, while Android media notifications support playback, progress, mode, and volume controls. Mixed playlists, independent quality preferences, and lyric size and spacing are unchanged.
 
 ## Main features
 
@@ -22,17 +28,17 @@ Version 1.2 adds a separate playback queue, listening history, and a sleep timer
 - **Shortcuts and notifications**: Edit Windows global shortcuts in settings; Android provides system media notifications and controls.
 - **Lyrics**: Choose original, translation, or bilingual lyrics in settings, adjust font size from 10–30 and line spacing from 0.8–3.0×, and preview and save changes. Timed lyrics highlight and slightly enlarge the current line; after manual scrolling, an arrow returns to it. Each track can have its own timing adjustment.
 - **Playlists and favorites**: Manage local playlists and the built-in Favorites playlist, edit descriptions, reorder by dragging, move / copy / remove multiple selections, and import/export JSON. Both platforms support mixed playlists containing all three online sources and local music.
-- **Appearance**: Light, dark, or system theme; draggable floating cards with proportional scaling and background opacity controls.
+- **Appearance**: Pearlescent iridescent surfaces in light, dark, or system theme, with matching popups and selection states; a pearlescent music-note app icon and a circular floating icon. Floating cards support dragging, proportional scaling, and background opacity controls.
 
 ## Download and run
 
-This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.2 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.2.0-preview):
+This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.3 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.3.0-preview):
 
 | Platform | Download | How to use |
 |---|---|---|
-| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.2.0-preview/FloatMusic-1.2.0-preview-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
-| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.2.0-preview/FloatMusic-1.2.0-preview-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
-| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.2.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
+| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.3.0-preview/FloatMusic-1.3.0-preview-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
+| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.3.0-preview/FloatMusic-1.3.0-preview.1-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
+| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.3.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
 
 Other versions are listed under [Releases](https://github.com/chensiray/FloatMusic/releases). To compile the app yourself, see the [build guide](docs/DEVELOPMENT.md).
 
@@ -41,7 +47,7 @@ The main environments used are Windows 11 x64 and Android ARM64. Android 9 is th
 ### Windows
 
 1. Extract the complete runtime package and run `FloatMusic.exe`. Do not move the EXE alone; keep its DLLs and plugins in the same directory.
-2. Click the blue music-note icon to open the player card.
+2. Click the pearlescent music-note icon to open the player card.
 3. Select **More → Import music (更多 → 导入音乐)** or **More → Search music (更多 → 搜索音乐)** and choose a track.
 
 Launching Windows again brings the existing window forward. Both the icon and card accept a single dragged audio file.
@@ -56,7 +62,7 @@ Before upgrading, close the old app through **More → Exit FloatMusic (更多 �
 
 Returning to the welcome screen hides an existing overlay; leaving it restores the overlay. Playback can continue when the card is collapsed or another app is active, though phone power-saving policies may limit background duration.
 
-Preview APKs use a debug signature. The 1.2 package has been verified to use the same signature as 1.1; device installation details are in the [verification notes](VERIFICATION.md). If Android reports a signature mismatch, back up playlists and confirm the package source before proceeding; do not immediately uninstall the old version.
+Preview APKs use a debug signature, and the 1.3 icon revision retains the signature of previous previews. The original 1.3 build (version code 17) was updated in place and its interface checked on a phone. No phone was connected when this icon revision (version code 18) was built, so its revised icons have not been checked on a physical device in this round. See the [verification notes](VERIFICATION.md). If Android reports a signature mismatch, back up playlists and confirm the package source before proceeding; do not immediately uninstall the old version.
 
 ## Using the player card
 
@@ -118,7 +124,7 @@ The clipboard accepts full NetEase, QQ, and Kuwo playlist URLs, such as `music.1
 
 **JSON does not contain audio files.** Online tracks can be imported on another device, but playback still depends on online services. Local tracks only record file locations; inaccessible references are skipped with a message on the destination device. Exporting a playlist neither downloads songs nor replaces an audio backup.
 
-Version 1.2 continues to export JSON version 1, preserving each online track's platform and original ID without saving temporary playback URLs. Older NetEase playlists and 0.9 mixed playlists remain compatible. Both platforms running 0.9 / 1.0 / 1.1 / 1.2 can exchange mixed playlists. Older builds such as Android 0.8 skip QQ and Kuwo tracks with a message, so check the version before importing.
+Version 1.3 continues to export JSON version 1, preserving each online track's platform and original ID without saving temporary playback URLs. Older NetEase playlists and 0.9 mixed playlists remain compatible. Both platforms running 0.9 / 1.0 / 1.1 / 1.2 / 1.3 can exchange mixed playlists. Older builds such as Android 0.8 skip QQ and Kuwo tracks with a message, so check the version before importing.
 
 ## Rankings
 
@@ -159,7 +165,7 @@ Local imports save an audio copy in the app data directory. The original file is
 
 Playlists support bulk JSON import and drag reordering. Bulk audio-file import, local LRC import, and downloading online songs are not currently supported. Phone power-saving policies, screen sizes, and Bluetooth devices still need ongoing compatibility work.
 
-Version 1.2's automated checks, anonymous API samples, and device installation details are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
+Version 1.3's build, interface checks, and device installation details, along with earlier online API samples, are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
 
 To report a problem, open an [Issue](https://github.com/chensiray/FloatMusic/issues) and include the app version, OS/device model, reproduction steps, and actual behavior.
 

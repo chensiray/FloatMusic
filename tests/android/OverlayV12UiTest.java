@@ -35,6 +35,9 @@ public final class OverlayV12UiTest extends Instrumentation {
     private OverlayWindow overlay;
     private RecordingService service;
     private Context fixtureContext;
+    private String fixturePrefix;
+    private File fixtureRoot;
+    private final ArrayList<String> fixturePreferenceNames=new ArrayList<>();
     private Object store;
     private boolean screenshots,wasForeground,wasPicking;
     private final StringBuilder report=new StringBuilder();
@@ -79,10 +82,11 @@ public final class OverlayV12UiTest extends Instrumentation {
     private void prepare(String scene){
         try{
             String prefix="v12-ui-"+scene+"-"+SystemClock.uptimeMillis()+"-";
-            File root=new File(getTargetContext().getCacheDir(),prefix);require(root.mkdirs(),"fixture file root created independently of user state");
+            fixturePrefix=prefix;fixturePreferenceNames.clear();
+            File root=new File(getTargetContext().getCacheDir(),prefix);fixtureRoot=root;require(root.mkdirs(),"fixture file root created independently of user state");
             File files=new File(root,"files"),cache=new File(root,"cache");require(files.mkdirs()&&cache.mkdirs(),"isolated file and cache directories");
             fixtureContext=new ContextWrapper(getTargetContext()){
-                @Override public SharedPreferences getSharedPreferences(String name,int mode){return getTargetContext().getSharedPreferences(prefix+name,mode);}
+                @Override public SharedPreferences getSharedPreferences(String name,int mode){if(!fixturePreferenceNames.contains(name))fixturePreferenceNames.add(name);return getTargetContext().getSharedPreferences(prefix+name,mode);}
                 @Override public File getFilesDir(){return files;}
                 @Override public File getCacheDir(){return cache;}
                 @Override public File getNoBackupFilesDir(){return files;}
@@ -245,7 +249,10 @@ public final class OverlayV12UiTest extends Instrumentation {
     private void dispose(){
         if(overlay!=null)overlay.close();if(service!=null){((Handler)field(service,"handler")).removeCallbacksAndMessages(null);((ExecutorService)field(service,"importer")).shutdownNow();}
         PlayerBridge.foreground=wasForeground;PlayerBridge.picking=wasPicking;overlay=null;service=null;store=null;activeDrag=null;PlayerBridge.takeEvents();
+        if(fixturePrefix!=null)for(String name:fixturePreferenceNames)getTargetContext().deleteSharedPreferences(fixturePrefix+name);
+        deleteFixtureTree(fixtureRoot);fixturePreferenceNames.clear();fixturePrefix=null;fixtureRoot=null;fixtureContext=null;
     }
+    private static void deleteFixtureTree(File path){if(path==null)return;if(path.isDirectory()){File[] children=path.listFiles();if(children!=null)for(File child:children)deleteFixtureTree(child);}path.delete();}
     private static ArrayList<View> findDescriptions(View view,String prefix){ArrayList<View> result=new ArrayList<>();collectDescriptions(view,prefix,result);return result;}
     private static void collectDescriptions(View view,String prefix,ArrayList<View> result){if(view.getContentDescription()!=null&&view.getContentDescription().toString().startsWith(prefix))result.add(view);if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)collectDescriptions(((ViewGroup)view).getChildAt(i),prefix,result);}
     private static View findDescription(View view,String prefix){ArrayList<View> matches=findDescriptions(view,prefix);return matches.isEmpty()?null:matches.get(0);}

@@ -30,17 +30,19 @@ ApplicationWindow {
     property rect workArea: Qt.rect(0, 0, 1280, 720)
     readonly property real contentScale: Math.min(Math.max(0.9, Math.min(1.4, appearance.windowScale)), Math.max(0.4, (workArea.width - 16) / baseWidth))
     readonly property bool darkMode: appearance.mode === 2 || (appearance.mode === 0 && Qt.styleHints.colorScheme === Qt.Dark)
-    readonly property color backdrop: darkMode ? "#111924" : "#F4F6FA"
-    readonly property color surface: darkMode ? "#192332" : "#FCFDFF"
-    readonly property color elevated: darkMode ? "#222F41" : "#FFFFFF"
-    readonly property color control: darkMode ? "#243044" : "#EEF2F8"
-    readonly property color ink: darkMode ? "#EDF2FA" : "#202C41"
-    readonly property color muted: darkMode ? "#AAB8CD" : "#596A80"
-    readonly property color accent: darkMode ? "#91B6FF" : "#2B61D7"
-    readonly property color accentInk: darkMode ? "#101722" : "#FFFFFF"
-    readonly property color selection: darkMode ? "#243B60" : "#E8EFFF"
-    readonly property color line: darkMode ? "#34445A" : "#DCE4EF"
-    readonly property color fieldBorder: darkMode ? "#687C97" : "#8190A5"
+    readonly property color backdrop: darkMode ? "#131728" : "#F1F1F8"
+    readonly property color surface: darkMode ? "#191C2C" : "#F5F5FA"
+    readonly property color elevated: darkMode ? "#252C43" : "#F9F9FC"
+    readonly property color control: darkMode ? "#2A2D49" : "#EEEDF8"
+    readonly property color ink: darkMode ? "#F2F1FB" : "#18213D"
+    readonly property color muted: darkMode ? "#ADB1C8" : "#68718D"
+    readonly property color accent: darkMode ? "#B79BFF" : "#703AFF"
+    readonly property color accentInk: darkMode ? "#191C2C" : "#FFFFFF"
+    readonly property color primaryFill: darkMode ? "#8554EE" : accent
+    readonly property color primaryInk: darkMode ? "#FBF9FF" : accentInk
+    readonly property color selection: darkMode ? "#3E2D65" : "#EBE5FA"
+    readonly property color line: darkMode ? "#343950" : "#DFDFEB"
+    readonly property color fieldBorder: darkMode ? "#778AB0" : "#9E9DB6"
     readonly property color danger: darkMode ? "#FF9B93" : "#B42318"
     readonly property int lyricDisplayMode: Math.max(0, Math.min(2, lyricPreferences.displayMode))
     readonly property int lyricFontSize: Math.max(10, Math.min(30, lyricPreferences.fontSize))
@@ -74,7 +76,7 @@ ApplicationWindow {
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: "浮音 1.2.0-preview · 桌面预览"
+    title: "浮音 1.3.0-preview · 桌面预览"
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -380,17 +382,30 @@ ApplicationWindow {
             Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: action.down ? 80 : 150; easing.type: Easing.OutCubic } }
             RowLayout {
                 id: buttonContents; anchors.centerIn: parent; spacing: 6
-                Glyph { visible: action.glyph.length > 0; kind: action.glyph; tint: action.primary && action.enabled ? root.accentInk : action.selected && action.enabled ? root.accent : (action.enabled ? root.ink : root.muted); Layout.preferredWidth: 18; Layout.preferredHeight: 18 }
-                Text { visible: action.text.length > 0; text: action.text; font: action.font; color: action.primary && action.enabled ? root.accentInk : action.selected && action.enabled ? root.accent : action.enabled ? root.ink : root.muted; horizontalAlignment: Text.AlignHCenter }
+                Glyph { visible: action.glyph.length > 0; kind: action.glyph; tint: action.primary && action.enabled ? root.primaryInk : action.selected && action.enabled ? root.accent : (action.enabled ? root.ink : root.muted); Layout.preferredWidth: 18; Layout.preferredHeight: 18 }
+                Text { visible: action.text.length > 0; text: action.text; font: action.font; color: action.primary && action.enabled ? root.primaryInk : action.selected && action.enabled ? root.accent : action.enabled ? root.ink : root.muted; horizontalAlignment: Text.AlignHCenter }
             }
         }
         background: Rectangle {
             radius: action.cornerRadius
             scale: action.visualScale
             Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: action.down ? 80 : 150; easing.type: Easing.OutCubic } }
-            color: !action.enabled ? (action.quiet ? "transparent" : root.backdrop) : action.primary ? (action.down ? Qt.darker(root.accent, 1.12) : root.accent) : action.selected || action.down || action.hovered ? root.selection : action.quiet ? "transparent" : root.control
+            color: !action.enabled ? (action.quiet ? "transparent" : root.backdrop) : action.primary ? (action.down ? Qt.darker(root.primaryFill, 1.12) : root.primaryFill) : action.selected || action.down || action.hovered ? root.selection : action.quiet ? "transparent" : root.control
             border.width: action.activeFocus ? 2 : 0
             border.color: root.accent
+            gradient: action.primary && action.enabled ? pearlFinish : null
+            Gradient {
+                id: pearlFinish
+                GradientStop { position: 0; color: root.darkMode ? (action.down ? Qt.lighter(root.primaryFill, 1.04) : "#B097FF") : action.down ? root.accent : Qt.lighter(root.accent, 1.35) }
+                GradientStop { position: 0.38; color: action.down ? Qt.darker(root.primaryFill, 1.08) : root.primaryFill }
+                GradientStop { position: 1; color: root.darkMode ? (action.down ? Qt.darker(root.primaryFill, 1.24) : "#683CE0") : Qt.darker(root.accent, action.down ? 1.18 : 1.10) }
+            }
+            Rectangle {
+                anchors.fill: parent; anchors.margins: 2
+                radius: Math.max(0, parent.radius - 2); color: "transparent"
+                visible: action.primary && action.enabled
+                border.width: 0.8; border.color: root.darkMode ? "#44E7DEFF" : "#BBFFFFFF"
+            }
         }
         ToolTip.visible: hovered && ToolTip.text.length > 0
         ToolTip.delay: 600
@@ -581,7 +596,7 @@ ApplicationWindow {
         scale: root.contentScale; transformOrigin: Popup.TopLeft
         margins: 8; padding: 8; focus: true; modal: true; dim: false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { radius: 12; color: root.elevated; border.color: root.fieldBorder }
+        background: PrismaticSurface { radius: 12; darkMode: root.darkMode; elevated: true }
         enter: Transition {
             enabled: appearance.animationsEnabled
             NumberAnimation { targets: [upPopup.contentItem, upPopup.background]; property: "opacity"; from: 0; to: 1; duration: 130; easing.type: Easing.OutCubic }
@@ -697,9 +712,17 @@ ApplicationWindow {
         flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         onClosing: function(event) { event.accepted = true; root.quitApp() }
         Rectangle {
-            anchors.fill: parent; anchors.margins: 2; radius: 30; color: root.accent
-            border.color: root.surface; border.width: iconMouse.containsMouse ? 2 : 1
-            Glyph { anchors.centerIn: parent; width: 30; height: 30; tint: root.accentInk }
+            anchors.fill: parent; anchors.margins: 2; radius: 30; color: "transparent"
+            Image {
+                objectName: "floatingIconArtwork"
+                anchors.fill: parent
+                source: "qrc:/icons/floatmusic-floating.png"
+                fillMode: Image.PreserveAspectFit; smooth: true; mipmap: true
+            }
+            Rectangle {
+                anchors.fill: parent; radius: 30; color: "transparent"
+                border.color: root.accent; border.width: iconMouse.containsMouse ? 2 : 0
+            }
             MouseArea {
                 id: iconMouse
                 anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -737,9 +760,9 @@ ApplicationWindow {
         }
     }
     // Opacity belongs to the painted background, never to the native window or controls.
-    Rectangle {
-        anchors.fill: parent; radius: 20 * root.contentScale; color: root.surface
-        opacity: Math.max(0.2, Math.min(1, appearance.backgroundOpacity))
+    PrismaticSurface {
+        anchors.fill: parent; radius: 20 * root.contentScale; darkMode: root.darkMode
+        backgroundOpacity: Math.max(0.2, Math.min(1, appearance.backgroundOpacity))
     }
     DropArea {
         id: drop; anchors.fill: parent
@@ -1457,7 +1480,7 @@ ApplicationWindow {
                                             }
                                             Hint { text: player.searchMessage; visible: text.length > 0 }
                                         }
-                                        SettingsHeading { label: "浮音 1.2.0-preview"; glyph: "info" }
+                                        SettingsHeading { label: "浮音 1.3.0-preview"; glyph: "info" }
                                         Hint { text: "Windows 桌面预览 · 拖动顶部移动窗口\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起" }
                                     }
                                 }
@@ -1782,7 +1805,7 @@ ApplicationWindow {
         y: Math.max(8, (root.height - height * root.contentScale) / 2)
         scale: root.contentScale; transformOrigin: Popup.TopLeft
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { color: root.elevated; radius: 14; border.color: root.fieldBorder }
+        background: PrismaticSurface { radius: 14; darkMode: root.darkMode; elevated: true }
         enter: Transition {
             enabled: appearance.animationsEnabled
             NumberAnimation { targets: [sheet.contentItem, sheet.background]; property: "opacity"; from: 0; to: 1; duration: 140; easing.type: Easing.OutCubic }

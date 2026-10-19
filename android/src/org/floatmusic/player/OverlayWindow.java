@@ -100,13 +100,18 @@ final class OverlayWindow {
     private int dp(float n){return Math.round(n*service.getResources().getDisplayMetrics().density);}
     private boolean dark(){return PlayerBridge.isDark(service);}
     private int color(String light,String night){return Color.parseColor(dark()?night:light);}
-    private int ink(){return color("#182338","#EDF2FA");}
-    private int muted(){return color("#56657A","#ABB8CC");}
-    private int accent(){return color("#2458D3","#83ABFF");}
-    private int accentInk(){return color("#FFFFFF","#101722");}
-    private int surface(){return color("#FFFFFF","#192333");}
-    private int selection(){return color("#E8EFFF","#243B60");}
+    private int ink(){return color("#18213D","#F2F1FB");}
+    private int muted(){return color("#68718D","#ADB1C8");}
+    private int accent(){return color("#703AFF","#B79BFF");}
+    private int accentInk(){return color("#FFFFFF","#191C2C");}
+    private int primaryInk(){return color("#FFFFFF","#FBF9FF");}
+    private int selection(){return color("#EBE5FA","#3E2D65");}
     private GradientDrawable background(int fill,int radius){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(radius));return d;}
+    private Drawable materialBackground(int radius,boolean elevated){return new PrismaticDrawable(dark(),elevated,dp(radius),service.getResources().getDisplayMetrics().density);}
+    private GradientDrawable primaryBackground(int radius){
+        GradientDrawable d=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{color("#A58BFF","#B097FF"),color("#703AFF","#8554EE"),color("#6635E8","#683CE0")});
+        d.setCornerRadius(dp(radius));return d;
+    }
     /** 36dp visual surfaces inside 48dp native touch bounds. */
     private Drawable buttonBackground(boolean selected){
         GradientDrawable idle=background(selected?selection():Color.TRANSPARENT,10);
@@ -115,8 +120,8 @@ final class OverlayWindow {
         return new InsetDrawable(new RippleDrawable(ColorStateList.valueOf(selection()),states,background(Color.WHITE,10)),dp(4),dp(6),dp(4),dp(6));
     }
     private Drawable iconBackground(boolean primary){
-        GradientDrawable idle=background(primary?accent():Color.TRANSPARENT,20);
-        GradientDrawable focus=background(primary?accent():Color.TRANSPARENT,20);focus.setStroke(dp(1),primary?ink():accent());
+        GradientDrawable idle=primary?primaryBackground(20):background(Color.TRANSPARENT,20);
+        GradientDrawable focus=primary?primaryBackground(20):background(Color.TRANSPARENT,20);focus.setStroke(dp(1),primary?primaryInk():accent());
         StateListDrawable states=new StateListDrawable();states.addState(new int[]{android.R.attr.state_focused},focus);states.addState(new int[]{},idle);
         return new InsetDrawable(new RippleDrawable(ColorStateList.valueOf(selection()),states,background(Color.WHITE,20)),dp(4));
     }
@@ -259,7 +264,9 @@ final class OverlayWindow {
         if(window!=null){syncVisibility();return;}
         expanded=false;
         IconButton icon=new IconButton("music", "浮音，点击展开，拖动移动", true);
-        icon.setBackground(background(accent(),28));icon.setOnClickListener(v->expand());drag(icon);
+        int iconId=service.getResources().getIdentifier("floatmusic_floating","drawable",service.getPackageName());
+        if(iconId!=0){icon.kind="brand";icon.setBackground(service.getDrawable(iconId));}else icon.setBackground(primaryBackground(28));
+        icon.setOnClickListener(v->expand());drag(icon);
         window=icon;
         params=new WindowManager.LayoutParams(dp(56),dp(56),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
@@ -306,7 +313,7 @@ final class OverlayWindow {
         IconButton next=new IconButton("next","下一首",false);next.setOnClickListener(v->act("next",""));control(controls,next);
         modeButton=new IconButton("sequential","播放模式",false);modeButton.setOnClickListener(v->showModes());control(controls,modeButton);
         volumeButton=new IconButton("volume","音量",false);volumeButton.setOnClickListener(v->{if(volumePopupOpen)dismissPopup();else showVolume();});control(controls,volumeButton);gap(shell,4);add(shell,controls,48);
-        LinearLayout tabs=row();tabs.setBackground(background(color("#F3F5F8","#202D40"),12));lyricsTab=button("歌词",()->toggle("lyrics"));playlistTab=button("歌单",()->toggle("playlist"));moreTab=button("更多",()->toggle("more"));
+        LinearLayout tabs=row();tabs.setBackground(background(color("#EEEDF8","#2A2D49"),12));lyricsTab=button("歌词",()->toggle("lyrics"));playlistTab=button("歌单",()->toggle("playlist"));moreTab=button("更多",()->toggle("more"));
         weighted(tabs,lyricsTab,48);weighted(tabs,playlistTab,48);weighted(tabs,moreTab,48);add(shell,tabs,48);
         error=text("",13,false);error.setTextColor(color("#B42318","#FF9B93"));error.setPadding(0,dp(8),0,0);error.setOnClickListener(v->send("retryPlayback",""));error.setContentDescription("播放失败，点击重试");add(shell,error,-2);
         drawer=column();
@@ -341,9 +348,9 @@ final class OverlayWindow {
     private void applyOpacity(){
         int opacity=Math.max(20,Math.min(100,prefs.getInt("opacity",100)));
         // Keep the window and all controls opaque; only the decorative surface is translucent.
-        shell.setBackground(background((surface() & 0x00ffffff) | (Math.round(255*opacity/100f)<<24),22));
+        Drawable material=materialBackground(22,false);material.setAlpha(Math.round(255*opacity/100f));shell.setBackground(material);
     }
-    private SeekBar slider(){SeekBar b=new SeekBar(service);b.setPadding(dp(8),0,dp(8),0);b.setProgressTintList(ColorStateList.valueOf(accent()));b.setThumbTintList(ColorStateList.valueOf(accent()));b.setProgressBackgroundTintList(ColorStateList.valueOf(color("#D5DEEB","#3A465A")));return b;}
+    private SeekBar slider(){SeekBar b=new SeekBar(service);b.setPadding(dp(8),0,dp(8),0);b.setProgressTintList(ColorStateList.valueOf(accent()));b.setThumbTintList(ColorStateList.valueOf(accent()));b.setProgressBackgroundTintList(ColorStateList.valueOf(color("#DFDFEB","#343950")));return b;}
     private static String clock(int ms){int s=ms/1000;return String.format(Locale.ROOT,"%d:%02d",s/60,s%60);}
     void update(JSONObject data){
         playback=data;
@@ -400,7 +407,7 @@ final class OverlayWindow {
         drawer.removeAllViews();sourceInfo=null;drawer.setVisibility(section.isEmpty()?View.GONE:View.VISIBLE);
         styleTab(lyricsTab,"lyrics");styleTab(playlistTab,"playlist");styleTab(moreTab,"more");
         if(section.isEmpty())return;
-        gap(drawer,section.equals("lyrics")?6:12);View line=new View(service);line.setBackgroundColor(color("#D5DEEB","#3A465A"));add(drawer,line,1);gap(drawer,section.equals("lyrics")?6:12);
+        gap(drawer,section.equals("lyrics")?6:12);View line=new View(service);line.setBackgroundColor(color("#DFDFEB","#343950"));add(drawer,line,1);gap(drawer,section.equals("lyrics")?6:12);
         feedback=text(feedbackMessage(),13,true);feedback.setVisibility(feedbackMessage().isEmpty()?View.GONE:View.VISIBLE);add(drawer,feedback,-2);
         if(section.equals("lyrics"))buildLyrics();
         else if(section.equals("playlist"))buildPlaylist();
@@ -542,10 +549,10 @@ final class OverlayWindow {
     private void showPopup(View anchor,LinearLayout content,int widthDp){
         if(popupLayer==null||!expanded)return;dismissPopup();
         int width=Math.min(dp(widthDp),scaled.getWidth()-dp(16));
-        content.setPadding(dp(8),dp(8),dp(8),dp(8));content.setBackground(background(surface(),16));content.setClickable(true);
+        content.setPadding(dp(8),dp(8),dp(8),dp(8));content.setBackgroundColor(Color.TRANSPARENT);content.setClickable(true);
         content.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED));
         int[] bounds=popupBounds(anchor,width,content.getMeasuredHeight(),dp(56));
-        ScrollView menu=new ScrollView(service);menu.setBackground(background(surface(),16));menu.setElevation(dp(8));menu.addView(content);
+        ScrollView menu=new ScrollView(service);menu.setBackground(materialBackground(16,true));menu.setClipToOutline(true);menu.setElevation(dp(8));menu.addView(content);
         FrameLayout.LayoutParams layout=new FrameLayout.LayoutParams(bounds[2],bounds[3]);layout.leftMargin=bounds[0];layout.topMargin=bounds[1];
         popupLayer.addView(menu,layout);popupLayer.setVisibility(View.VISIBLE);popupLayer.bringToFront();
     }
@@ -557,7 +564,7 @@ final class OverlayWindow {
     }
     private void showVolume(){
         if(popupLayer==null||!expanded)return;hideKeyboard();dismissPopup();popupFocusReturn=volumeButton;
-        LinearLayout content=column();content.setPadding(dp(8),dp(8),dp(8),dp(8));content.setBackground(background(surface(),16));content.setElevation(dp(8));content.setClickable(true);
+        LinearLayout content=column();content.setPadding(dp(8),dp(8),dp(8),dp(8));content.setBackground(materialBackground(16,true));content.setClipToOutline(true);content.setElevation(dp(8));content.setClickable(true);
         int gain=Math.max(0,Math.min(100,playback.optInt("volume",70)));
         volumeText=text(gain+"%",12,true);volumeText.setGravity(Gravity.CENTER);volumeText.setIncludeFontPadding(false);add(content,volumeText,24);
         volume=new VerticalVolumeSlider();volume.setMax(100);volume.setProgress(gain);volume.setContentDescription("音量，"+gain+"%，向上增加");content.addView(volume,new LinearLayout.LayoutParams(-1,0,1));
@@ -579,7 +586,7 @@ final class OverlayWindow {
     /** Full-card, unscaled sheets keep long menus and text fields usable on a small phone. */
     private void showPanel(String label,LinearLayout content){
         if(popupLayer==null||!expanded)return;View previous=window.findFocus();dismissPopup();popupFocusReturn=previous;
-        LinearLayout panel=column();panel.setPadding(dp(12),dp(12),dp(12),dp(12));panel.setBackground(background(surface(),16));panel.setClickable(true);
+        LinearLayout panel=column();panel.setPadding(dp(12),dp(12),dp(12),dp(12));panel.setBackgroundColor(Color.TRANSPARENT);panel.setClickable(true);
         LinearLayout header=row();TextView heading=text(label,18,false);heading.setTypeface(null,Typeface.BOLD);header.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
         Button close=button("关闭",this::dismissPopup);LinearLayout.LayoutParams closeLayout=new LinearLayout.LayoutParams(dp(64),dp(48));closeLayout.leftMargin=dp(8);header.addView(close,closeLayout);add(panel,header,48);gap(panel,8);add(panel,content,-2);
         int width=Math.max(dp(160),scaled.getWidth()-dp(16));int maxHeight=Math.max(dp(80),scaled.getHeight()-dp(16));
@@ -590,7 +597,7 @@ final class OverlayWindow {
                 int cap=Math.max(dp(64),scaled.getMeasuredHeight()-dp(16));
                 super.onMeasure(w,MeasureSpec.makeMeasureSpec(Math.min(MeasureSpec.getSize(h),cap),MeasureSpec.AT_MOST));
             }
-        };menu.setFillViewport(false);menu.setBackground(background(surface(),16));menu.setElevation(dp(8));menu.addView(panel);
+        };menu.setFillViewport(false);menu.setBackground(materialBackground(16,true));menu.setClipToOutline(true);menu.setElevation(dp(8));menu.addView(panel);
         FrameLayout.LayoutParams layout=new FrameLayout.LayoutParams(width,Math.min(panel.getMeasuredHeight(),maxHeight),Gravity.CENTER);layout.setMargins(dp(8),dp(8),dp(8),dp(8));
         popupLayer.setBackgroundColor(0x55000000);popupLayer.addView(menu,layout);popupLayer.setVisibility(View.VISIBLE);popupLayer.bringToFront();
         heading.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
@@ -698,8 +705,8 @@ final class OverlayWindow {
     }
     private EditText field(String label,String value){
         EditText e=new EditText(service);e.setSingleLine(true);e.setTextColor(ink());e.setHintTextColor(muted());e.setTextSize(14);e.setHint(label);e.setContentDescription(label);e.setText(value);e.setPadding(dp(12),0,dp(12),0);e.setMinHeight(dp(48));
-        GradientDrawable bg=background(color("#F3F5F8","#233044"),10);
-        GradientDrawable focused=background(color("#F3F5F8","#233044"),10);focused.setStroke(dp(1),accent());
+        GradientDrawable bg=background(color("#EEEDF8","#2A2D49"),10);
+        GradientDrawable focused=background(color("#EEEDF8","#2A2D49"),10);focused.setStroke(dp(1),accent());
         StateListDrawable states=new StateListDrawable();states.addState(new int[]{android.R.attr.state_focused},focused);states.addState(new int[]{},bg);e.setBackground(new InsetDrawable(states,0,dp(4),0,dp(4)));
         e.setOnTouchListener((v,event)->{if(event.getAction()==MotionEvent.ACTION_DOWN)enableKeyboard(e);return false;});
         return e;
@@ -815,7 +822,7 @@ final class OverlayWindow {
         songRows(parent,array(online,"tracks"),"online");
     }
     private boolean onlineCurrent(String id){JSONObject online=ui.optJSONObject("onlinePlaylist");if(online!=null&&!ui.optBoolean("onlinePlaylistLoading")&&id.equals(online.optString("id")))return true;notice("在线歌单已更新，请重新打开详情。");return false;}
-    private void divider(LinearLayout parent){View line=new View(service);line.setBackgroundColor(color("#D5DEEB","#3A465A"));add(parent,line,1);}
+    private void divider(LinearLayout parent){View line=new View(service);line.setBackgroundColor(color("#DFDFEB","#343950"));add(parent,line,1);}
     private void songRows(LinearLayout parent,JSONArray tracks,String source){
         if(tracks.length()==0){hint(parent,source.equals("results")?(selectedSearchSources().length()==0?"勾选曲库后即可搜索歌曲。":"输入歌名，查找想听的音乐。") :"这里还没有歌曲。可在更多中搜索或导入。");return;}
         LinearLayout songs=column();add(parent,songs,-2);boolean local=source.equals("tracks");String sourceId=activePlaylist();JSONObject online=ui.optJSONObject("onlinePlaylist");String onlineId=online==null?"":online.optString("id");
@@ -938,7 +945,7 @@ final class OverlayWindow {
     private void settingsHeading(String label){
         if(!sourceQualityButtons.isEmpty())gap(drawer,8);
         LinearLayout heading=row();TextView caption=text(label,13,false);caption.setTypeface(null,Typeface.BOLD);heading.addView(caption,new LinearLayout.LayoutParams(-2,-2));
-        View line=new View(service);line.setBackgroundColor(color("#D5DEEB","#3A465A"));LinearLayout.LayoutParams layout=new LinearLayout.LayoutParams(0,dp(1),1);layout.leftMargin=dp(12);heading.addView(line,layout);add(drawer,heading,28);
+        View line=new View(service);line.setBackgroundColor(color("#DFDFEB","#343950"));LinearLayout.LayoutParams layout=new LinearLayout.LayoutParams(0,dp(1),1);layout.leftMargin=dp(12);heading.addView(line,layout);add(drawer,heading,28);
     }
     private void settingChoice(String label,Button choice){
         LinearLayout setting=row();TextView caption=text(label,13,false);setting.addView(caption,new LinearLayout.LayoutParams(dp(80),-2));choice.setSingleLine(true);choice.setEllipsize(TextUtils.TruncateAt.END);setting.addView(choice,new LinearLayout.LayoutParams(0,dp(48),1));add(drawer,setting,48);
@@ -1091,7 +1098,7 @@ final class OverlayWindow {
             // AbsSeekBar positions its thumb from physical getWidth() on every progress change.
             // Draw directly in vertical coordinates so snapshots, keys and touch share the same track.
             float x=getWidth()/2f,top=Math.min(getPaddingLeft(),getHeight()/2f),bottom=Math.max(top,getHeight()-getPaddingLeft()),y=volumeThumbY(getProgress(),getHeight(),getPaddingLeft());
-            trackPaint.setStyle(Paint.Style.STROKE);trackPaint.setStrokeCap(Paint.Cap.ROUND);trackPaint.setStrokeWidth(dp(3));trackPaint.setColor(color("#D5DEEB","#3A465A"));canvas.drawLine(x,top,x,bottom,trackPaint);
+            trackPaint.setStyle(Paint.Style.STROKE);trackPaint.setStrokeCap(Paint.Cap.ROUND);trackPaint.setStrokeWidth(dp(3));trackPaint.setColor(color("#DFDFEB","#343950"));canvas.drawLine(x,top,x,bottom,trackPaint);
             trackPaint.setColor(accent());canvas.drawLine(x,y,x,bottom,trackPaint);
             int radius=dp(7),cx=Math.round(x),cy=Math.round(y);Drawable thumb=getThumb();thumb.setBounds(cx-radius,cy-radius,cx+radius,cy+radius);thumb.draw(canvas);
             if(isPressed()||hasFocus()){trackPaint.setColor(ink());trackPaint.setStrokeWidth(dp(1));canvas.drawCircle(x,y,dp(6),trackPaint);}
@@ -1132,7 +1139,7 @@ final class OverlayWindow {
         @Override protected void onDetachedFromWindow(){resetPress(this);super.onDetachedFromWindow();}
         @Override public void setEnabled(boolean enabled){super.setEnabled(enabled);setAlpha(enabled?1f:.45f);if(!enabled)resetPress(this);}
         @Override public void onInitializeAccessibilityNodeInfo(android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(info);info.setClassName(Button.class.getName());if(kind.equals("volume"))info.setCanOpenPopup(true);}
-        @Override protected void onDraw(Canvas c){super.onDraw(c);c.save();float size=dp(20);c.translate((getWidth()-size)/2,(getHeight()-size)/2);c.scale(size/24,size/24);paint.setColor(primary?accentInk():ink());paint.setAlpha(isEnabled()?255:90);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.8f);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
+        @Override protected void onDraw(Canvas c){super.onDraw(c);if(kind.equals("brand"))return;c.save();float size=dp(20);c.translate((getWidth()-size)/2,(getHeight()-size)/2);c.scale(size/24,size/24);paint.setColor(primary?primaryInk():ink());paint.setAlpha(isEnabled()?255:90);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.8f);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
             if(kind.equals("minus"))c.drawLine(5,12,19,12,paint);
             else if(kind.equals("grip")){paint.setStyle(Paint.Style.FILL);for(int x:new int[]{8,16})for(int y:new int[]{6,12,18})c.drawCircle(x,y,1.5f,paint);}
             else if(kind.equals("up")||kind.equals("down")){if(kind.equals("down")){c.translate(0,24);c.scale(1,-1);}c.drawLine(12,20,12,4,paint);c.drawLine(12,4,6,10,paint);c.drawLine(12,4,18,10,paint);}

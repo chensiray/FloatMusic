@@ -1,0 +1,56 @@
+{
+  "application": {
+    "source": "artifacts/icon-design-2026-10-19/floatmusic-pearl-icon-v1.png",
+    "sourceSha256": "c90a37d6f8fd9e5f10670720db61a10f3898d9f6fb309635900ad8235d113661",
+    "sourceSize": [
+      1254,
+      1254
+    ],
+    "outputSize": [
+      1024,
+      1024
+    ],
+    "crop": "none",
+    "artEdits": "none"
+  },
+  "floating": {
+    "source": "artifacts/icon-design-2026-10-19/floatmusic-round-icon-v1.png",
+    "sourceSha256": "a0d05d29a3186ee448ee26db330bb8fc65e25df67f756ace16fa827ca2f811b4",
+    "sourceSize": [
+      1254,
+      1254
+    ],
+    "outputSize": [
+      512,
+      512
+    ],
+    "circleCenter": [
+      626.5,
+      626.5
+    ],
+    "circleRadius": 584,
+    "alphaTransition": [
+      583.5,
+      584.5
+    ],
+    "alphaFormula": "source alpha * clamp(584.5 - distance, 0, 1)",
+    "rgbEdits": "none",
+    "changedAlphaPixels": 9427,
+    "zeroedAlphaPixels": 9012,
+    "changedOpaquePixels": 0,
+    "highestZeroedSourceAlpha": 8
+  },
+  "scaling": "System.Drawing HighQualityBicubic; SourceCopy; HighQuality pixel offset; TileFlipXY edge wrap",
+  "windowsIcon": {
+    "sizes": [
+      16,
+      24,
+      32,
+      48,
+      64,
+      128,
+      256
+    ],
+    "encoding": "32-bit BGRA DIB + AND mask for every entry"
+  }
+}

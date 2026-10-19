@@ -12,13 +12,13 @@ ApplicationWindow {
     property int themeMode: player.androidThemeMode()
     property bool animationsEnabled: player.androidAnimationsEnabled()
     readonly property bool dark: themeMode === 2 || (themeMode === 0 && Qt.styleHints.colorScheme === Qt.Dark)
-    readonly property color ink: dark ? "#EDF2FA" : "#182338"
-    readonly property color muted: dark ? "#ABB8CC" : "#56657A"
-    readonly property color accent: dark ? "#83ABFF" : "#2458D3"
-    readonly property color accentInk: dark ? "#101722" : "#FFFFFF"
-    readonly property color surface: dark ? "#192333" : "#FFFFFF"
-    readonly property color line: dark ? "#3A465A" : "#D5DEEB"
-    color: dark ? "#101722" : "#F3F5F8"
+    readonly property color ink: dark ? "#F2F1FB" : "#18213D"
+    readonly property color muted: dark ? "#ADB1C8" : "#68718D"
+    readonly property color accent: dark ? "#B79BFF" : "#703AFF"
+    readonly property color surface: dark ? "#191C2C" : "#F5F5FA"
+    readonly property color line: dark ? "#343950" : "#DFDFEB"
+    color: dark ? "#131728" : "#F1F1F8"
+    background: PrismaticSurface { radius: 0; darkMode: welcomeWindow.dark }
     Component.onCompleted: player.initializeAndroidUi()
     function animatePress(control, animation, pressed) {
         animation.stop()
@@ -70,7 +70,7 @@ ApplicationWindow {
                     Layout.bottomMargin: 24
                     Label { text: "浮音"; font.pixelSize: 20; font.bold: true; color: welcomeWindow.ink }
                     Item { Layout.fillWidth: true }
-                    Label { text: "FloatMusic 1.2"; font.pixelSize: 12; color: welcomeWindow.muted }
+                    Label { text: "FloatMusic 1.3"; font.pixelSize: 12; color: welcomeWindow.muted }
                 }
 
                 Item {
@@ -79,39 +79,12 @@ ApplicationWindow {
                     Layout.preferredHeight: pageScroll.availableHeight < 700 ? 112 : 148
                     Layout.bottomMargin: 24
                     Accessible.ignored: true
-                    Rectangle {
+                    Image {
+                        objectName: "welcomeAppIcon"
                         anchors.centerIn: parent
-                        width: parent.height; height: width; radius: width / 2
-                        color: "transparent"; border.width: 1; border.color: welcomeWindow.line
-                    }
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: parent.height - 22; height: width; radius: width / 2
-                        color: welcomeWindow.surface
-                        border.width: 1; border.color: welcomeWindow.line
-                    }
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: parent.height - 48; height: width; radius: width / 2
-                        color: welcomeWindow.accent
-                        Canvas {
-                            anchors.centerIn: parent
-                            width: 46; height: 46
-                            property color ink: welcomeWindow.accentInk
-                            onInkChanged: requestPaint()
-                            onPaint: {
-                                var ctx = getContext("2d")
-                                ctx.reset()
-                                ctx.strokeStyle = ink; ctx.fillStyle = ink
-                                ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.lineJoin = "round"
-                                ctx.beginPath()
-                                ctx.moveTo(17, 33); ctx.lineTo(17, 12)
-                                ctx.lineTo(35, 8); ctx.lineTo(35, 29)
-                                ctx.moveTo(17, 19); ctx.lineTo(35, 15); ctx.stroke()
-                                ctx.beginPath(); ctx.ellipse(6, 29, 11, 8); ctx.fill()
-                                ctx.beginPath(); ctx.ellipse(24, 25, 11, 8); ctx.fill()
-                            }
-                        }
+                        width: parent.height; height: width
+                        source: "qrc:/icons/floatmusic-floating.png"
+                        fillMode: Image.PreserveAspectFit; smooth: true; mipmap: true
                     }
                 }
 
@@ -155,7 +128,7 @@ ApplicationWindow {
                         scale: showOverlay.feedbackScale
                         anchors.centerIn: parent
                         width: parent.width; height: 40; radius: 10
-                        color: welcomeWindow.dark ? (showOverlay.down ? "#304C76" : "#243B60") : (showOverlay.down ? "#D5E2FC" : "#E8EFFF")
+                        color: welcomeWindow.dark ? (showOverlay.down ? "#4A3576" : "#3E2D65") : (showOverlay.down ? "#DED3F6" : "#EBE5FA")
                         border.width: showOverlay.visualFocus ? 2 : 0
                         border.color: welcomeWindow.ink
                     }
@@ -178,7 +151,8 @@ ApplicationWindow {
                 Rectangle {
                     Layout.fillWidth: true; Layout.topMargin: 24
                     implicitHeight: tips.implicitHeight + 32
-                    radius: 16; color: welcomeWindow.surface
+                    radius: 16; color: "transparent"
+                    PrismaticSurface { anchors.fill: parent; radius: 16; elevated: true; darkMode: welcomeWindow.dark }
                     RowLayout {
                         id: tips
                         anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }

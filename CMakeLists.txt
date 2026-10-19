@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(FloatMusic VERSION 1.2.0 LANGUAGES CXX)
+project(FloatMusic VERSION 1.3.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Concurrent Network)
@@ -7,9 +7,15 @@ qt_standard_project_setup(REQUIRES 6.8)
 set(CATALOG_SOURCES src/musicapi.cpp src/musicapi.h src/musiccatalog.cpp src/catalogcodec.cpp src/catalogcodec.h)
 set(PLAYER_SOURCES src/playerlibrary.cpp src/playerplayback.cpp src/playlistdocument.cpp src/playlistdocument.h src/playercontroller.cpp src/playercontroller.h src/audiofilepolicy.cpp src/audiofilepolicy.h src/playliststore.cpp src/playliststore.h ${CATALOG_SOURCES} src/lyrictimeline.cpp src/lyrictimeline.h src/playbackstore.cpp src/playbackstore.h src/globalshortcuts.cpp src/globalshortcuts.h src/sleeptimer.cpp src/sleeptimer.h)
 qt_add_executable(FloatMusic src/main.cpp src/singleinstance.cpp src/singleinstance.h ${PLAYER_SOURCES})
-qt_add_qml_module(FloatMusic URI FloatMusic QML_FILES qml/Main.qml qml/AndroidMain.qml)
+qt_add_qml_module(FloatMusic URI FloatMusic QML_FILES qml/Main.qml qml/AndroidMain.qml qml/PrismaticSurface.qml)
+set(FLOATMUSIC_ICON_FILES assets/icons/floatmusic-app.png assets/icons/floatmusic-floating.png)
+qt_add_resources(FloatMusic "floatmusic_icons" PREFIX "/icons" BASE "assets/icons" FILES ${FLOATMUSIC_ICON_FILES})
 target_link_libraries(FloatMusic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Concurrent Qt6::Network)
 if(WIN32)
+    enable_language(RC)
+    configure_file(resources/floatmusic.rc.in "${CMAKE_CURRENT_BINARY_DIR}/floatmusic.rc" @ONLY)
+    set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/floatmusic.rc" PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/floatmusic-app.ico")
+    target_sources(FloatMusic PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/floatmusic.rc")
     link_libraries(user32)
     target_link_libraries(FloatMusic PRIVATE user32)
 endif()
@@ -25,8 +31,8 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
         QT_ANDROID_MIN_SDK_VERSION 28
         QT_ANDROID_TARGET_SDK_VERSION 36
-        QT_ANDROID_VERSION_CODE 16
-        QT_ANDROID_VERSION_NAME "1.2.0-preview"
+        QT_ANDROID_VERSION_CODE 18
+        QT_ANDROID_VERSION_NAME "1.3.0-preview.1"
         QT_ANDROID_APP_NAME "浮音 · 功能验证")
 endif()
 option(FLOATMUSIC_TESTS "Build desktop tests" OFF)
@@ -95,4 +101,7 @@ if(FLOATMUSIC_TESTS AND NOT ANDROID)
     add_test(NAME multisource_controller COMMAND multisource_controller_tests -o multisource-controller-tests.txt,txt)
     set_target_properties(multisource_api_tests catalog_api_tests playlistdocument_tests multisource_controller_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     set_tests_properties(multisource_api platform_catalogs mixed_playlist_documents multisource_controller PROPERTIES TIMEOUT 90)
+    foreach(icon_test_target player_tests v12_ui_tests)
+        qt_add_resources(${icon_test_target} "${icon_test_target}_icons" PREFIX "/icons" BASE "assets/icons" FILES ${FLOATMUSIC_ICON_FILES})
+    endforeach()
 endif()

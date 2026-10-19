@@ -7,7 +7,7 @@ $env:JAVA_HOME = 'C:\DevTools\jdk-21'
 $cmake = 'C:\Qt\Tools\CMake_64\bin\cmake.exe'
 New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
 if ([IO.Path]::GetFullPath($sourceRoot) -ne $stageRoot) {
-    foreach ($entry in @('CMakeLists.txt','src','qml','android','tests','scripts','README.md','VERIFICATION.md','BACKLOG.md','CHANGELOG.md')) {
+    foreach ($entry in @('CMakeLists.txt','src','qml','android','assets','resources','tests','scripts','README.md','VERIFICATION.md','BACKLOG.md','CHANGELOG.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $entry))) { continue }
         Copy-Item -LiteralPath (Join-Path $sourceRoot $entry) -Destination $stageRoot -Recurse -Force
     }
