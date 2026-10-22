@@ -46,6 +46,8 @@ public class PlaybackService extends Service {
     private String title = "还没有导入音乐", error = "";
     private File pendingFile;
     private OverlayWindow overlay;
+    private FloatingLyricsWindow floatingLyrics;
+    private JSONObject libraryUi=new JSONObject();
     private JSONArray queue = new JSONArray();
     private PlaybackQueueStore playbackStore;
     private final PlaybackSleepTimer sleepTimer = new PlaybackSleepTimer(SystemClock::elapsedRealtime);
@@ -77,10 +79,11 @@ public class PlaybackService extends Service {
         @Override public void run() { if (destroyed) return; checkSleepDeadline(); update(); if(SystemClock.elapsedRealtime()-lastSessionSave>=5000)saveSession(false); handler.postDelayed(this, 250); }
     };
     @Override public void onCreate() {
-        super.onCreate(); instance = this;
+        super.onCreate(); instance = this;UiStrings.initialize(this);libraryUi=PlayerBridge.uiData();
         audio = (AudioManager)getSystemService(AUDIO_SERVICE);
         volume = getSharedPreferences("audio",MODE_PRIVATE).getInt("volume",70);
         overlay = new OverlayWindow(this);
+        floatingLyrics = new FloatingLyricsWindow(this);
         try {
             JSONObject saved = new JSONObject(getSharedPreferences("queue",MODE_PRIVATE).getString("data","{}"));
             queue = saved.optJSONArray("tracks"); if (queue == null) queue = new JSONArray();
@@ -113,7 +116,7 @@ public class PlaybackService extends Service {
             }
         }, handler).build();
         NotificationManager manager = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
-        manager.createNotificationChannel(new NotificationChannel(CHANNEL, "音乐播放", NotificationManager.IMPORTANCE_LOW));
+        manager.createNotificationChannel(new NotificationChannel(CHANNEL, UiStrings.text("音乐播放"), NotificationManager.IMPORTANCE_LOW));
         session = new MediaSession(this, "FloatMusic");
         session.setCallback(new MediaSession.Callback() {
             @Override public void onPlay() { play(); }
@@ -707,6 +710,7 @@ public class PlaybackService extends Service {
         if(destroyed)return;
         JSONObject state=playbackSnapshot();PlayerBridge.publish(state);
         if(overlay!=null)overlay.update(state);
+        if(floatingLyrics!=null)floatingLyrics.update(state,libraryUi);
         if(notifications!=null) {
             notifications.updateSession(state);
             String stamp=state.optString("title")+"|"+state.optString("currentTrack")+"|"+state.optBoolean("playing")+"|"
@@ -723,8 +727,14 @@ public class PlaybackService extends Service {
         }
         notificationVolumePending=false;overlay.showVolumeFromNotification();
     }
-    void syncOverlay() { if(overlay!=null)overlay.syncVisibility();openNotificationVolume(); }
-    void refreshOverlayData() { if(overlay!=null)overlay.refreshData(PlayerBridge.uiData()); }
+    void syncOverlay() { if(overlay!=null)overlay.syncVisibility();if(floatingLyrics!=null)floatingLyrics.syncVisibility();openNotificationVolume(); }
+    void refreshOverlayData() { libraryUi=PlayerBridge.uiData();if(overlay!=null)overlay.refreshData(libraryUi);if(floatingLyrics!=null)floatingLyrics.update(playbackSnapshot(),libraryUi); }
+    void refreshFloatingLyrics(){if(floatingLyrics!=null)floatingLyrics.configurationChanged();}
+    void openFloatingLyricSettings(){if(overlay!=null)overlay.openLyricSettings();}
+    void languageChanged(){
+        ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(new NotificationChannel(CHANNEL,UiStrings.text("音乐播放"),NotificationManager.IMPORTANCE_LOW));
+        if(overlay!=null)overlay.configurationChanged();refreshFloatingLyrics();notificationStamp="";refreshNotification();update();
+    }
     private void showOverlay() {
         if(!Settings.canDrawOverlays(this)){report("请先允许浮音显示悬浮窗。");return;}
         getSharedPreferences("window",MODE_PRIVATE).edit().putBoolean("enabled",true).apply();
@@ -738,11 +748,13 @@ public class PlaybackService extends Service {
     @Override public void onConfigurationChanged(android.content.res.Configuration config) {
         super.onConfigurationChanged(config);
         if(overlay!=null)overlay.configurationChanged();
+        if(floatingLyrics!=null)floatingLyrics.configurationChanged();
     }
     @Override public void onDestroy() {
         saveSession(true);
         destroyed=true; audio.unregisterAudioDeviceCallback(deviceCallback); generation++; audioResolver.cancel(); importer.shutdownNow(); handler.removeCallbacks(ticker);
         if(overlay!=null){overlay.close();overlay=null;}
+        if(floatingLyrics!=null){floatingLyrics.close();floatingLyrics=null;}
         if(player != null) { player.release(); player=null; }
         cancelPending(); abandonFocus();
         if(session != null) session.release(); try { unregisterReceiver(noisy); } catch(Exception ignored) {}

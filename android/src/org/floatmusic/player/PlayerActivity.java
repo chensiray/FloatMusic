@@ -27,6 +27,7 @@ public class PlayerActivity extends QtActivity {
     private boolean picking = false;
     private boolean pendingPick = false;
     @Override public void onCreate(Bundle saved) {
+        UiStrings.initialize(this);
         super.onCreate(saved);
         PlayerBridge.activity = new WeakReference<>(this);
         if (Build.VERSION.SDK_INT >= 33) {
@@ -87,7 +88,7 @@ public class PlayerActivity extends QtActivity {
             waitingOverlay=false;
             if(!Settings.canDrawOverlays(this)) {
                 overlayRequested=false;
-                Toast.makeText(this,"允许悬浮权限后，即可在图标中使用浮音",Toast.LENGTH_LONG).show();
+                Toast.makeText(this,UiStrings.text("允许悬浮权限后，即可在图标中使用浮音"),Toast.LENGTH_LONG).show();
             } else completeOverlayRequest();
         }
     }
@@ -159,7 +160,7 @@ public class PlayerActivity extends QtActivity {
         Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*");
         picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try { picking = true; startActivityForResult(picker, PICK_AUDIO); }
-        catch (Exception e) { picking = false; PlayerBridge.picking = false; Toast.makeText(this, "无法打开文件选择器：" + e.getMessage(), Toast.LENGTH_LONG).show(); }
+        catch (Exception e) { picking = false; PlayerBridge.picking = false; Toast.makeText(this, UiStrings.text("无法打开文件选择器：") + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
@@ -170,7 +171,7 @@ public class PlayerActivity extends QtActivity {
             if (PlaybackService.instance != null) PlaybackService.instance.syncOverlay();
             if (result == RESULT_OK && data != null && data.getData() != null) {
                 try { send("import", data.getData().toString()); }
-                catch (Exception e) { Toast.makeText(this, "无法启动播放服务：" + e.getMessage(), Toast.LENGTH_LONG).show(); }
+                catch (Exception e) { Toast.makeText(this, UiStrings.text("无法启动播放服务：") + e.getMessage(), Toast.LENGTH_LONG).show(); }
             }
             if (returnToOverlay) { returnToOverlay = false; moveTaskToBack(true); }
         }

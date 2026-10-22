@@ -17,6 +17,7 @@ param(
     [switch]$Package,
     [switch]$ConfigureOnly,
     [string[]]$Targets = @(),
+    [string]$ArtifactRoot,
     [string]$StageRoot,
     [ValidateRange(1, 32)][int]$Parallel = 4
 )
@@ -40,7 +41,8 @@ if ($StageRoot -match '[^\x00-\x7F]') {
 
 $stageSource = Join-Path $StageRoot 'source'
 $buildDir = Join-Path $StageRoot 'build'
-$artifactRoot = Join-Path $sourceRoot 'artifacts\v1.3-desktop-preview-2026-10-13'
+if (-not $ArtifactRoot) { $ArtifactRoot = Join-Path $sourceRoot 'artifacts\v1.4-desktop-lyrics-2026-10-20' }
+$artifactRoot = [IO.Path]::GetFullPath($ArtifactRoot)
 $appDir = Join-Path $artifactRoot 'app'
 $runId = 'run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $logDir = Join-Path (Join-Path $artifactRoot 'logs') $runId

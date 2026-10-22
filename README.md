@@ -2,17 +2,20 @@
 
 [简体中文](README.md) | [English](README_en.md)
 
-![浮音 FloatMusic 1.3 宣传海报](assets/branding/floatmusic-github-poster.png)
+![浮音 FloatMusic 宣传海报](assets/branding/floatmusic-github-poster.png)
 
 **让音乐留在手边。** 浮音是一款 Windows / Android 悬浮音乐播放器。平时收为可拖动的音符图标，点击后展开音乐卡片，在使用其他应用时也能控制播放、查看歌词和切换歌曲。
 
-当前版本：**1.3 · 双端预览**。Windows 为 `1.3.0-preview`，Android 为 `1.3.0-preview.1`（图标修订，版本码 18）。源码与安装包见 [1.3 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.3.0-preview)。
+当前版本：**1.4 · 双端预览**。Windows 为 `1.4.0-preview`，Android 为 `1.4.0-preview.3`（版本码 22），沿用验收通过的版本与签名。源码与安装包见 [1.4 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.4.0-preview)。
 
-1.3 聚焦细节与美术：浅色珠光阅读面、青蓝／粉紫虹彩边缘、紫色播放键，以及层次更清楚的深色界面和弹层。两端使用新的珠光音符应用图标与同款圆形悬浮图标，保留 1.2 的布局、控件位置和操作方式。查看 [Windows 1.3 预览说明](docs/Windows-1.3-预览说明.md)、[Android 1.3 验收说明](docs/Android-1.3-验收说明.md) 和[图标验收说明](docs/图标-验收说明.md)。
+1.4 新增中英文界面切换、独立透明桌面／悬浮歌词，以及两处歌词平滑滚动。独立歌词仅显示居中文字，支持 1／3／5／7／9 行、当前句高亮放大、上下文渐隐与明暗主题；文字可拖动，留白可点击到下方应用。Android 本轮优化了切换节奏、长双语文本和返回当前句的表现。查看 [Windows 使用与验收说明](docs/Windows-1.4-验收说明.md)、[Android 使用与验收说明](docs/Android-1.4-验收说明.md) 和[手机动效优化说明](docs/Android-1.4.0-preview.3-真机动效优化.md)。
 
 独立播放队列、最近播放和睡眠定时继续保留。歌曲可以安排为下一首或加入队尾，队列支持重复曲目、拖动排序、移除、清空与重启恢复。Windows 提供可修改的全局快捷键，Android 通知栏支持播放、进度、模式和音量控制。混合歌单、独立音质、歌词字号与行距等原有功能保持不变。
 
 ## 主要功能
+
+- **界面语言**：简体中文与 English 即时切换并保存；歌曲、歌手、用户歌单和歌词原文保持原样。
+- **独立歌词**：透明背景、居中排版，支持 1／3／5／7／9 行、字号与明暗主题；当前句高亮放大，上下文渐隐缩小。文字可拖动，留白点击穿透；Windows 另有右键与锁定位置操作。
 
 - **本地音乐**：导入 MP3、WAV、FLAC、OGG、M4A、AAC，单首不超过 30 MiB。Windows 还支持把文件拖入窗口或图标。
 - **在线搜索**：歌曲与歌单均可多选网易云、QQ 音乐、酷我音乐，结果标明来源并保存曲库选择；单库失败时保留其他库结果。设置可调整合计显示上限，结果轮流取自所选曲库；没有足够匹配项时按实际数量显示。
@@ -30,13 +33,13 @@
 
 ## 获取与运行
 
-本仓库提供源码。**Code → Download ZIP 下载的是源码，不能直接安装。** 请从 [1.3 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.3.0-preview) 下载对应平台的运行包：
+本仓库提供源码。**Code → Download ZIP 下载的是源码，不能直接安装。** 请从 [1.4 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.4.0-preview) 下载对应平台的运行包：
 
 | 平台 | 下载 | 使用方式 |
 |---|---|---|
-| Windows x64 | [完整运行包 ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.3.0-preview/FloatMusic-1.3.0-preview-windows-x64.zip) | 解压完整目录后运行 `FloatMusic.exe`，保留全部 DLL 和插件 |
-| Android ARM64 | [安装包 APK](https://github.com/chensiray/FloatMusic/releases/download/v1.3.0-preview/FloatMusic-1.3.0-preview.1-android-arm64-v8a.apk) | Android 9 及以上，同签名旧版可覆盖安装 |
-| 文件校验 | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.3.0-preview/SHA256SUMS.txt) | 核对下载文件的 SHA256 |
+| Windows x64 | [完整运行包 ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.4.0-preview/FloatMusic-1.4.0-preview-windows-x64.zip) | 解压完整目录后运行 `FloatMusic.exe`，保留全部 DLL 和插件 |
+| Android ARM64 | [安装包 APK](https://github.com/chensiray/FloatMusic/releases/download/v1.4.0-preview/FloatMusic-1.4.0-preview.3-android-arm64-v8a.apk) | Android 9 及以上，同签名旧版可覆盖安装 |
+| 文件校验 | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.4.0-preview/SHA256SUMS.txt) | 核对下载文件的 SHA256 |
 
 其他版本见 [Releases](https://github.com/chensiray/FloatMusic/releases)；自行编译见[构建说明](docs/DEVELOPMENT.md)。
 
@@ -60,7 +63,7 @@ Windows 重复启动会唤起已有窗口；图标和卡片都可以接收拖入
 
 返回欢迎页时，已有悬浮层会隐藏；离开后恢复。收起卡片或切换应用可继续播放，后台持续时间可能受手机省电策略影响。
 
-预览 APK 使用调试签名，1.3 图标修订包与此前预览版同签名。原 1.3（版本码 17）已完成真机覆盖安装与界面检查；本次图标修订包（版本码 18）构建时手机未连接，尚未进行本轮真机图标检查。详情见[验证说明](VERIFICATION.md)。若系统提示签名不一致，请先备份歌单并确认安装包来源，不要直接卸载旧版。
+预览 APK 沿用此前调试签名。Android 1.4（版本码 22）已在连接手机上保留数据覆盖安装并通过用户验收，21 项原生回归与 8 项安装后界面检查通过。验证范围见[验证说明](VERIFICATION.md)。若系统提示签名不一致，请先备份歌单并确认安装包来源，不要直接卸载旧版。
 
 ## 音乐卡片怎么用
 
@@ -122,7 +125,7 @@ Android 媒体通知显示歌曲、歌手、进度和时长，支持上下首、
 
 **JSON 不包含音频文件。** 在线曲目可在另一台设备导入，播放仍依赖在线服务；本地曲目只记录文件位置，在目标设备不可访问时会被跳过并提示。导出歌单不会下载歌曲，也不能替代本地音频备份。
 
-1.3 导出继续使用 JSON version 1，保留每首在线歌曲的平台和原始编号，不保存临时播放地址，兼容旧网易云歌单和 0.9 混合歌单。两端 0.9 / 1.0 / 1.1 / 1.2 / 1.3 可互相传递混合歌单；Android 0.8 等旧版本会跳过 QQ、酷我曲目并提示，导入前请确认版本。
+1.4 导出继续使用 JSON version 1，保留每首在线歌曲的平台和原始编号，不保存临时播放地址，兼容旧网易云歌单和 0.9 混合歌单。两端 0.9 / 1.0 / 1.1 / 1.2 / 1.3 / 1.4 可互相传递混合歌单；Android 0.8 等旧版本会跳过 QQ、酷我曲目并提示，导入前请确认版本。
 
 ## 排行榜
 
@@ -163,7 +166,7 @@ GD 音乐台 API 由 GD Studio 提供，按其公开规则仅用于个人学习�
 
 歌单支持 JSON 批量导入和拖动排序；目前不支持批量导入音频文件、本地 LRC 导入及在线歌曲下载。不同手机的省电策略、屏幕尺寸和蓝牙设备仍需持续适配。
 
-1.3 的构建、界面检查与手机安装状态，以及既有在线接口实测，见[验证说明](VERIFICATION.md)。第三方接口可能超时、限流或缺少歌曲，有限样本通过不代表所有曲目始终可播；酷狗尚未取得可播证据，本版未接入。不同设备适配和手机后台场景仍需扩大覆盖。
+1.4 的构建、界面检查与手机安装状态，以及既有在线接口实测，见[验证说明](VERIFICATION.md)。第三方接口可能超时、限流或缺少歌曲，有限样本通过不代表所有曲目始终可播；酷狗尚未取得可播证据，本版未接入。不同设备适配和手机后台场景仍需扩大覆盖。
 
 遇到问题可提交 [Issue](https://github.com/chensiray/FloatMusic/issues)，请附上应用版本、系统/设备型号、复现步骤与实际表现。
 

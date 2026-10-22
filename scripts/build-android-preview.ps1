@@ -35,7 +35,7 @@ if ($StageRoot -match '[^\x00-\x7F]') { throw "Compilation requires an ASCII pat
 
 $stageSource = Join-Path $StageRoot 'source'
 $buildDir = Join-Path $StageRoot 'build'
-if (-not $ArtifactRoot) { $ArtifactRoot = Join-Path $sourceRoot 'artifacts\v1.3-android-preview-2026-10-15' }
+if (-not $ArtifactRoot) { $ArtifactRoot = Join-Path $sourceRoot 'artifacts\v1.4-android-preview-2026-10-20' }
 $artifactRoot = [IO.Path]::GetFullPath($ArtifactRoot)
 $runId = 'run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $logDir = Join-Path (Join-Path $artifactRoot 'logs') $runId
@@ -177,8 +177,8 @@ try {
     $runInfo['versionName'] = $deployment.'android-version-name'
     $runInfo['versionCode'] = [int]$deployment.'android-version-code'
     if (-not $ConfigureOnly) {
-        if ($Package -and $deployment.'android-version-name' -notmatch '^1\.3\.') { throw 'Android version metadata must be updated to 1.3 before packaging.' }
-        if ($Package -and $runInfo.versionCode -le 16) { throw 'Android versionCode must exceed the installed 1.2 preview code 16.' }
+        if ($Package -and $deployment.'android-version-name' -notmatch '^1\.4\.') { throw 'Android version metadata must be updated to 1.4 before packaging.' }
+        if ($Package -and $runInfo.versionCode -le 18) { throw 'Android versionCode must exceed the 1.3 preview code 18.' }
         $target = if ($Package) { 'apk' } else { 'FloatMusic' }
         Invoke-LoggedCommand -Name 'build' -Executable $cmake -Arguments @('--build', $buildDir, '--target', $target, '--parallel', "$Parallel")
         if ($Package) {

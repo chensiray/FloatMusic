@@ -31,12 +31,12 @@ final class PlaylistDocuments {
     static void start(Context context, String json) {
         JSONObject request;
         try { request = new JSONObject(json); } catch (Exception e) { return; }
-        if (pending != null || PlayerBridge.picking) { reply(request, "", "请先完成当前文件操作。", false); return; }
+        if (pending != null || PlayerBridge.picking) { reply(request, "", UiStrings.text("请先完成当前文件操作。"), false); return; }
         pending = request; launched = false; waitingClipboard = false;
         try {
             context.startActivity(new Intent(context, PlayerActivity.class).putExtra("libraryDocument", true)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP));
-        } catch (Exception e) { pending = null; reply(request, "", "无法打开歌单文件窗口：" + e.getMessage(), false); }
+        } catch (Exception e) { pending = null; reply(request, "", UiStrings.text("无法打开歌单文件窗口：") + e.getMessage(), false); }
     }
     static void open(PlayerActivity activity) {
         if (pending == null || launched) return;
@@ -50,10 +50,10 @@ final class PlaylistDocuments {
         boolean exporting = pending.optString("operation").equals("export");
         Intent picker = new Intent(exporting ? Intent.ACTION_CREATE_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE).setType(exporting ? "application/json" : "*/*");
-        if (exporting) picker.putExtra(Intent.EXTRA_TITLE, pending.optString("name", "浮音歌单").replaceAll("[\\\\/:*?\"<>|]", "_") + ".json");
+        if (exporting) picker.putExtra(Intent.EXTRA_TITLE, pending.optString("name", UiStrings.text("浮音歌单")).replaceAll("[\\\\/:*?\"<>|]", "_") + ".json");
         else picker.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/plain", "application/octet-stream"});
         try { activity.startActivityForResult(picker, REQUEST); }
-        catch (Exception e) { finish(activity, "", "无法打开文件选择器：" + e.getMessage(), false); }
+        catch (Exception e) { finish(activity, "", UiStrings.text("无法打开文件选择器：") + e.getMessage(), false); }
     }
     static void focused(PlayerActivity activity) {
         if (!waitingClipboard || pending == null) return;
@@ -63,7 +63,7 @@ final class PlaylistDocuments {
             ClipData clip = clipboard.getPrimaryClip();
             CharSequence value = clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).getText() : null;
             finish(activity, value == null ? "" : value.toString(), "", false);
-        } catch (Exception e) { finish(activity, "", "无法读取剪贴板，请重新复制歌单内容。", false); }
+        } catch (Exception e) { finish(activity, "", UiStrings.text("无法读取剪贴板，请重新复制歌单内容。"), false); }
     }
     static boolean cancelPaste(PlayerActivity activity) {
         if (!waitingClipboard) return false;
@@ -90,31 +90,31 @@ final class PlaylistDocuments {
             try {
                 if (request.optString("operation").equals("export")) {
                     byte[] bytes = request.optString("text").getBytes(StandardCharsets.UTF_8);
-                    if (bytes.length > MAX_BYTES) throw new java.io.IOException("内容超过 8 MiB");
+                    if (bytes.length > MAX_BYTES) throw new java.io.IOException(UiStrings.text("内容超过 8 MiB"));
                     try (OutputStream out = context.getContentResolver().openOutputStream(uri, "wt")) {
-                        if (out == null) throw new java.io.IOException("目标文件不可写");
+                        if (out == null) throw new java.io.IOException(UiStrings.text("目标文件不可写"));
                         out.write(bytes); out.flush();
                     }
                 } else {
                     try (InputStream in = context.getContentResolver().openInputStream(uri);
                          ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-                        if (in == null) throw new java.io.IOException("文件不可读");
+                        if (in == null) throw new java.io.IOException(UiStrings.text("文件不可读"));
                         byte[] buffer = new byte[8192]; int count;
                         while ((count = in.read(buffer)) != -1) {
-                            if (out.size() + count > MAX_BYTES) throw new java.io.IOException("歌单文件不能超过 8 MiB");
+                            if (out.size() + count > MAX_BYTES) throw new java.io.IOException(UiStrings.text("歌单文件不能超过 8 MiB"));
                             out.write(buffer, 0, count);
                         }
                         text = out.toString(StandardCharsets.UTF_8.name());
                     }
                 }
-            } catch (Exception e) { error = "歌单文件操作失败：" + e.getMessage(); }
+            } catch (Exception e) { error = UiStrings.text("歌单文件操作失败：") + e.getMessage(); }
             reply(request, text, error, false);
         }, "playlist-document").start();
     }
     static void copy(Context context, String text) {
         String error = "";
-        try { ((ClipboardManager)context.getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("浮音歌单", text)); }
-        catch (Exception e) { error = "复制失败，内容可能过大，请改用文件导出。"; }
+        try { ((ClipboardManager)context.getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText(UiStrings.text("浮音歌单"), text)); }
+        catch (Exception e) { error = UiStrings.text("复制失败，内容可能过大，请改用文件导出。"); }
         try { report("clipboardResult", new JSONObject().put("error", error)); } catch (Exception ignored) { }
     }
 }

@@ -20,6 +20,8 @@
 #include <QSettings>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QWindow>
+#include <QRegion>
 #include <QAudioDevice>
 #include <QMediaMetaData>
 #include <QQuickTextDocument>
@@ -240,6 +242,22 @@ QString PlayerController::currentSourceName() const {
 void PlayerController::playSearchResult(int index) {
     if (m_busy || index < 0 || index >= m_searchResults.size()) return;
     playNowTrack(m_searchResults[index].toMap());
+}
+void PlayerController::setDesktopLyricInputRegion(QObject *object, const QVariantList &rectangles) {
+    auto *window = qobject_cast<QWindow *>(object);
+    if (!window || window->objectName() != "desktopLyricsWindow") return;
+    QRegion region;
+    const QRect bounds(QPoint(0, 0), window->size());
+    for (const auto &entry : rectangles) {
+        const QRectF rectangle = entry.toRectF();
+        if (rectangle.isValid() && std::isfinite(rectangle.x()) && std::isfinite(rectangle.y())
+            && std::isfinite(rectangle.width()) && std::isfinite(rectangle.height()))
+            region |= rectangle.toAlignedRect().intersected(bounds);
+    }
+    // An empty mask restores the entire rectangular input area. An off-window
+    // nonempty region instead makes a completely empty lyric window pass through.
+    if (region.isEmpty()) region = QRegion(-1, -1, 1, 1);
+    if (window->mask() != region) window->setMask(region);
 }
 void PlayerController::applyLyricLineSpacing(QObject *textDocument, qreal factor) {
     auto *quickDocument = qobject_cast<QQuickTextDocument *>(textDocument);

@@ -1,5 +1,13 @@
 # Android 音源解析器本地测试
 
+1.4 新增无需手机的回归入口 `./tests/android/run-v14-contract-tests.ps1`：编译真实原生源码，检查语言目录、歌词行数/渐隐/时间轴/小屏排布及原有队列、睡眠定时、通知策略。脚本使用已有 JSON 测试库，不下载依赖、不连接设备；悬浮歌词触摸与生命周期的真机验收项见 [Android 1.4 验收说明](../../docs/Android-1.4-验收说明.md)。
+
+歌词跳动及播放器切句跟随的原生回归：`./tests/android/run-lyric-regression.ps1 -DeviceSerial emulator-5580`。默认只接受已启动且有硬件加速的本地模拟器；用户授权真机测试后，必须显式传手机序列号与 `-AllowPhysicalDevice`。它将实际生产 Java 与隔离 Instrumentation 打包，不启动 Qt 或播放音频，并在测试包自己的目录保存截图。检查窗口身份、开关动效、横向锚点、无关刷新、相邻句跟随与手动返回，详见[歌词修复说明](../../docs/Android-1.4.0-preview.1-歌词修复.md)。
+
+`preview.2` 将原生回归扩展为 13 项：增加文字栅格稳定、三行／九行零可见表面重排、硬件合成、静止停止重绘及实际文字拖动／行间透传。支持 `-AdbPort` 使用独立调试服务。主机软件图形后端若崩溃，可用模拟器 `-gpu host -feature -Vulkan` 后端复验，见[滚动优化说明](../../docs/Android-1.4.0-preview.2-滚动优化.md)。
+
+`preview.3` 扩展为 21 项，新增两处真实动画帧间隔、九行、160 行长双语文本、静止刷新、跨 UID 点击透传、关闭动效后的手动返回，以及无障碍与键盘浏览。`-Cases 'floating-frame-pacing,player-frame-pacing'` 可选择场景。帧间隔预算按 60Hz 两帧加采样误差（35ms）检查 p95，并记录屏幕帧回调，以区别掉帧与整数像素停顿。整列高度检查排除视口居中留白，关注文字内容是否因高亮重新排版。测试额外安装 `org.floatmusic.lyricbackdrop` 作为无个人内容的独立背景，系统输入只注入合成歌词区域；完成后可移除它和 `org.floatmusic.lyricfixture`。详情见[真机动效优化说明](../../docs/Android-1.4.0-preview.3-真机动效优化.md)。
+
 在桌面 JDK 21 运行 APK 使用的 `AudioResolver.java` 与 `PlaybackService` 实际调用的 `TrackState.java`，由本地 HTTP 服务提供固定响应，不连接真实音源、读取用户配置或操作手机。
 
 保留此前六项网易云用例，覆盖 GD 音质参数与签名地址、错误音频/HTTP 523/Meting 重定向回退、自定义 API 独占、全部失败与冷却、取消及空 Meting 数组。另覆盖 QQ 普通音质和同 MID 备用、酷我原址优先与同 ID 中转备用、签名参数、来源排除、上游错误、ID 边界、网易云自定义服务对其他平台的隔离、请求中取消、总时限，以及 QQ CDN 的 HTTPS 等价地址白名单。

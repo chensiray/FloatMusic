@@ -1,5 +1,14 @@
 # 更新记录
 
+## 1.4 发布 · 2026-10-22 · 双语界面与独立歌词
+
+- 经用户验收，以 [v1.4.0-preview](https://github.com/chensiray/FloatMusic/releases/tag/v1.4.0-preview) 分发 Windows `1.4.0-preview` 与 Android `1.4.0-preview.3`（版本码 22），沿用原有签名与应用数据。
+- 双端增加简体中文／English 即时切换并保存；歌曲、歌手、用户歌单和歌词内容保持原文。
+- 新增独立透明歌词：居中排版、1／3／5／7／9 行、当前句高亮放大、上下文渐隐缩小、字号与明暗主题；文字可拖动，留白点击穿透。Windows 另支持右键菜单与位置锁定。
+- 播放器内和独立歌词均平滑跟随；手动翻看后可返回当前句，关闭动效时直接定位。Android 改为 260ms 切换、浮点位移、稳定文字排版，并修复惯性覆盖返回位置的问题，保留无障碍、键盘与滚轮浏览。
+- 发布前桌面完整离线回归 13/13、安卓七套功能回归、87 项持久化及 23 组音源／状态回归通过。此前最终手机源码的 21 项原生回归、已安装 APK 的 8 项界面回归通过，最终包已覆盖安装并获用户确认。
+- 中英文 README 更新功能、操作与下载链接；Windows 完整运行 ZIP、同签名 Android APK 与 SHA256 校验文件随 Release 提供。检查范围见[验证说明](VERIFICATION.md)。
+
 ## 1.3 发布 · 2026-10-19 · 珠光虹彩与全新图标
 
 - 经用户授权，以 [v1.3.0-preview](https://github.com/chensiray/FloatMusic/releases/tag/v1.3.0-preview) 分发 Windows `1.3.0-preview` 与 Android `1.3.0-preview.1`（版本码 18），沿用已交付的运行文件与签名。

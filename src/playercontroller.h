@@ -12,6 +12,7 @@
 #include "playbackstore.h"
 #include "globalshortcuts.h"
 #include "sleeptimer.h"
+#include "uilanguage.h"
 
 class PlayerController : public QObject {
     Q_OBJECT
@@ -77,6 +78,7 @@ class PlayerController : public QObject {
     Q_PROPERTY(int sleepRemaining READ sleepRemaining NOTIFY sleepChanged)
     Q_PROPERTY(QString sleepText READ sleepText NOTIFY sleepChanged)
     Q_PROPERTY(QObject *shortcuts READ shortcuts CONSTANT)
+    Q_PROPERTY(QObject *uiLanguage READ uiLanguage CONSTANT)
 public:
     explicit PlayerController(QObject *parent = nullptr);
     explicit PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent = nullptr);
@@ -146,6 +148,7 @@ public:
     int sleepRemaining() const;
     QString sleepText() const;
     QObject *shortcuts() { return &m_shortcuts; }
+    QObject *uiLanguage() { return &m_uiLanguage; }
     Q_INVOKABLE void enqueueTrack(const QVariantMap &track, const QString &placement);
     Q_INVOKABLE void playQueueEntry(const QString &entryId);
     Q_INVOKABLE void moveQueueEntry(const QString &entryId, int to);
@@ -163,6 +166,7 @@ public:
     Q_INVOKABLE void addFavorite(const QString &id);
     Q_INVOKABLE void removeFavorite(const QString &id);
     Q_INVOKABLE QRect desktopWorkArea(int x, int y) const;
+    Q_INVOKABLE void setDesktopLyricInputRegion(QObject *window, const QVariantList &rectangles);
     Q_INVOKABLE void applyLyricLineSpacing(QObject *textDocument, qreal factor);
     Q_INVOKABLE void setQuality(const QString &quality);
     Q_INVOKABLE void setSourceQuality(const QString &source, const QString &quality);
@@ -272,6 +276,7 @@ private:
     MusicApi m_api;
     PlaybackStore m_playbackStore;
     GlobalShortcuts m_shortcuts;
+    UiLanguage m_uiLanguage;
     SleepTimer m_sleepTimer;
     QVariantList m_searchResults;
     QStringList m_searchSources;

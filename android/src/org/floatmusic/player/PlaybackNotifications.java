@@ -193,15 +193,15 @@ public final class PlaybackNotifications {
         if (track == null) track = new JSONObject();
         String title = text(state, "title");
         if (title.isEmpty()) title = text(track, "name");
-        if (title.isEmpty()) title = "浮音";
+        if (title.isEmpty()) title = UiStrings.text("浮音");
         String source = text(state, "currentSourceName");
         if (source.isEmpty()) source = text(track, "sourceName");
         if (source.isEmpty()) {
             String platform = text(track, "source");
-            if ("netease".equals(platform)) source = "网易云";
-            else if ("tencent".equals(platform)) source = "QQ音乐";
-            else if ("kuwo".equals(platform)) source = "酷我音乐";
-            else if ("local".equals(platform)) source = "本地音频";
+            if ("netease".equals(platform)) source = UiStrings.text("网易云");
+            else if ("tencent".equals(platform)) source = UiStrings.text("QQ音乐");
+            else if ("kuwo".equals(platform)) source = UiStrings.text("酷我音乐");
+            else if ("local".equals(platform)) source = UiStrings.text("本地音频");
         }
         long duration = Math.max(0L, state.optLong("duration", 0L));
         long position = Math.max(0L, state.optLong("position", 0L));
@@ -219,21 +219,21 @@ public final class PlaybackNotifications {
             if (duration > 0L) nativeActions |= PlaybackState.ACTION_SEEK_TO;
         }
         if (canSkip) nativeActions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SKIP_TO_NEXT;
-        String mode = text(state, "playbackMode"), modeLabel = "顺序播放";
-        if ("loop".equals(mode)) modeLabel = "列表循环";
-        else if ("single".equals(mode)) modeLabel = "单曲循环";
-        else if ("shuffle".equals(mode)) modeLabel = "随机播放";
+        String mode = text(state, "playbackMode"), modeLabel = UiStrings.text("顺序播放");
+        if ("loop".equals(mode)) modeLabel = UiStrings.text("列表循环");
+        else if ("single".equals(mode)) modeLabel = UiStrings.text("单曲循环");
+        else if ("shuffle".equals(mode)) modeLabel = UiStrings.text("随机播放");
         else mode = "sequential";
         int volume = Math.max(0, Math.min(100, state.optInt("volume", 70)));
         Action[] actions = {
-            new Action("previous", "上一首", "floatmusic_previous", canSkip),
-            new Action("toggle", playing ? "暂停" : busy ? "加载中" : "播放", playing ? "floatmusic_pause" : "floatmusic_play", canToggle),
-            new Action("next", "下一首", "floatmusic_next", canSkip),
+            new Action("previous", UiStrings.text("上一首"), "floatmusic_previous", canSkip),
+            new Action("toggle", playing ? UiStrings.text("暂停") : busy ? UiStrings.text("加载中") : UiStrings.text("播放"), playing ? "floatmusic_pause" : "floatmusic_play", canToggle),
+            new Action("next", UiStrings.text("下一首"), "floatmusic_next", canSkip),
             new Action("cycleMode", modeLabel, "floatmusic_mode_" + mode, true),
-            new Action("notificationVolume", "音量 " + volume + "%", volume == 0 ? "floatmusic_volume_mute" : "floatmusic_volume", true)
+            new Action("notificationVolume", UiStrings.text("音量 ") + volume + "%", volume == 0 ? "floatmusic_volume_mute" : "floatmusic_volume", true)
         };
-        return new Policy(title, text(track, "artist"), source, duration, position,
-            playing ? busy ? "正在播放 · 正在加载音频…" : "正在播放" : busy ? "正在加载音频…" : ready ? "已暂停" : "待选择歌曲", nativeActions,
+        return new Policy(text(state,"currentTrack").isEmpty()?UiStrings.text(title):title, text(track, "artist"), UiStrings.text(source), duration, position,
+            playing ? busy ? UiStrings.text("正在播放 · 正在加载音频…") : UiStrings.text("正在播放") : busy ? UiStrings.text("正在加载音频…") : ready ? UiStrings.text("已暂停") : UiStrings.text("待选择歌曲"), nativeActions,
             playing ? PlaybackState.STATE_PLAYING : busy ? PlaybackState.STATE_BUFFERING : ready ? PlaybackState.STATE_PAUSED : PlaybackState.STATE_NONE,
             playing ? 1f : 0f, actions);
     }

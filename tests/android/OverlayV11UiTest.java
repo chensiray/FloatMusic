@@ -48,7 +48,7 @@ public final class OverlayV11UiTest extends Instrumentation {
                     if(scene.equals("volume-short")){runOnMainSync(this::shortViewport);waitForIdleSync();}
                     runOnMainSync(this::openVolume);waitForIdleSync();runOnMainSync(()->testVolume(scene.equals("volume-short")));waitForIdleSync();
                 }else if(scene.equals("quality-editing"))runOnMainSync(this::testQualityEditing);
-                else if(scene.equals("lyrics-small")){runOnMainSync(this::testSmallLyrics);waitForIdleSync();runOnMainSync(this::testLyricFollow);waitForIdleSync();runOnMainSync(this::verifyLyricFollow);}
+                else if(scene.equals("lyrics-small")){runOnMainSync(this::testSmallLyrics);waitForIdleSync();runOnMainSync(this::testLyricFollow);waitForLyricFollow();runOnMainSync(this::verifyLyricFollow);}
                 else if(scene.equals("lyrics-plain"))runOnMainSync(this::testPlainLyrics);
                 else if(scene.equals("font-range"))runOnMainSync(this::testFontRange);
                 else if(scene.equals("line-spacing"))runLineSpacingScene();
@@ -164,7 +164,7 @@ public final class OverlayV11UiTest extends Instrumentation {
         require(second.getTop()==first.getBottom(),"small lyric rows are adjacent without fixed vertical gaps");
         for(Object item:words){TextView line=(TextView)item;require(!line.getIncludeFontPadding()&&line.getPaddingTop()==0&&line.getPaddingBottom()==0,"lyric rows have no fixed font or vertical padding");require(line.getHeight()==line.getLayout().getHeight(),"each lyric row takes only its natural wrapped text height");}
         float sp=getTargetContext().getResources().getDisplayMetrics().scaledDensity;
-        require(Math.abs(second.getTextSize()-10*sp)<.5f,"inactive small lyrics render at ten sp");TextView active=(TextView)words.get((Integer)field(overlay,"activeLyric"));require(Math.abs(active.getTextSize()-12*sp)<.5f,"current lyric is exactly two sp larger");
+        require(Math.abs(second.getTextSize()*second.getScaleX()-10*sp)<.5f,"inactive small lyrics render at ten sp");TextView active=(TextView)words.get((Integer)field(overlay,"activeLyric"));require(Math.abs(active.getTextSize()*active.getScaleX()-12*sp)<.5f,"current lyric is visually two sp larger without relayout");
     }
     private void testLyricFollow(){
         ScrollView lyrics=(ScrollView)field(overlay,"lyricScroll");gesture(lyrics,dp(40),MotionEvent.ACTION_DOWN);gesture(lyrics,dp(40),MotionEvent.ACTION_CANCEL);lyrics.scrollTo(0,0);
@@ -172,6 +172,19 @@ public final class OverlayV11UiTest extends Instrumentation {
     }
     private void verifyLyricFollow(){
         require(!(Boolean)field(overlay,"manualLyrics"),"return action restores automatic following");require(((View)field(overlay,"lyricReturn")).getVisibility()==View.GONE,"return control hides after following resumes");require(((ScrollView)field(overlay,"lyricScroll")).getScrollY()>0,"current lyric remains centered after shrinking its row spacing");
+    }
+    private void waitForLyricFollow(){
+        long deadline=SystemClock.uptimeMillis()+1500;boolean[] centered={false};int[] positions={0,0};
+        do{
+            runOnMainSync(()->{
+                ScrollView viewport=(ScrollView)field(overlay,"lyricScroll");TextView active=(TextView)((List<?>)field(overlay,"lyricTexts")).get((Integer)field(overlay,"activeLyric"));
+                positions[0]=viewport.getScrollY();positions[1]=Math.max(0,active.getTop()+active.getHeight()/2-viewport.getHeight()/2);
+                centered[0]=Math.abs(positions[0]-positions[1])<=1&&!(Boolean)field(overlay,"manualLyrics");
+            });
+            if(centered[0])break;SystemClock.sleep(20);
+        }while(SystemClock.uptimeMillis()<deadline);
+        report.append("TRACE return actual=").append(positions[0]).append(" target=").append(positions[1]).append('\n');
+        require(centered[0],"return reaches the current sentence after the pending pre-draw layout");
     }
     private void testPlainLyrics(){
         TextView text=(TextView)((ViewGroup)field(overlay,"lyricRows")).getChildAt(0);require(text.getText().toString().contains("让音乐留在手边")&&text.getText().toString().contains("Keep the music close"),"plain bilingual text preserves both languages");require(text.getLineCount()>=4&&!text.getIncludeFontPadding()&&text.getHeight()==text.getLayout().getHeight(),"plain lyrics use the same natural one-times text height");
@@ -229,7 +242,7 @@ public final class OverlayV11UiTest extends Instrumentation {
         List<?> words=(List<?>)field(overlay,"lyricTexts");TextView one=(TextView)words.get(1),two=(TextView)words.get(2);android.text.Layout layout=one.getLayout();int last=layout.getLineCount()-1,natural=layout.getLineBottom(last)-layout.getLineTop(last),step=two.getTop()-one.getTop();
         require(one.getHeight()==layout.getHeight()&&one.getHeight()>=natural,"row keeps its natural complete glyph height at "+expected+" times spacing");int delta=step-one.getHeight();require(Math.abs(delta-natural*(expected-1f))<=1,"even single-line rows advance by the selected proportional gap");if(compact)require(delta<0,"compact spacing overlaps row steps without reducing glyph bounds");else require(delta>0,"roomier spacing separates lyric rows");
         for(Object item:words){TextView text=(TextView)item;require(Math.abs(text.getLineSpacingMultiplier()-expected)<.01f,"long and bilingual text use the same live spacing multiplier");require(text.getPaddingTop()==0&&text.getPaddingBottom()==0&&!text.getIncludeFontPadding(),"spacing never adds fixed row or font padding");}
-        TextView active=(TextView)words.get((Integer)field(overlay,"activeLyric"));float sp=getTargetContext().getResources().getDisplayMetrics().scaledDensity;require(Math.abs(active.getTextSize()-(((Integer)field(overlay,"lyricFontSize"))+2)*sp)<.5f,"current lyric remains two sp larger at every spacing");
+        TextView active=(TextView)words.get((Integer)field(overlay,"activeLyric"));float sp=getTargetContext().getResources().getDisplayMetrics().scaledDensity;require(Math.abs(active.getTextSize()*active.getScaleX()-(((Integer)field(overlay,"lyricFontSize"))+2)*sp)<.5f,"current lyric remains visually two sp larger at every spacing");
         TextView first=(TextView)words.get(0);if((Integer)field(overlay,"lyricMode")!=1)require(first.getLineCount()>2,"long Chinese original stays wrapped at the chosen spacing");
     }
     private void preparePlainSpacing(int mode){

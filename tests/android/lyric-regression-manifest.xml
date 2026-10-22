@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.floatmusic.lyricfixture">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="36" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <application android:label="FloatMusic lyric regression" android:debuggable="true" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name="org.floatmusic.player.LyricWindowRegressionTest$Backdrop" android:exported="false" />
+    </application>
+    <instrumentation android:name="org.floatmusic.player.LyricWindowRegressionTest" android:targetPackage="org.floatmusic.lyricfixture" />
+</manifest>

@@ -18,7 +18,11 @@
 #include <QSettings>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainter>
 #include <cmath>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 #include "playercontroller.h"
 #include "playlistapi_fixture.h"
 
@@ -68,6 +72,235 @@ static bool revealInScrollable(QQuickItem *item) {
 class PlayerTests : public QObject {
     Q_OBJECT
 private slots:
+    void v14LanguageMessages() {
+        UiLanguage language;
+        language.setCode("en");
+        QCOMPARE(language.text(QStringLiteral("找到 12 首，可直接点击播放。")), QString("Found 12 tracks. Click to play."));
+        QCOMPARE(language.text(QStringLiteral("已加入 3 首，跳过 2 首重复或不可用歌曲。")), QString("Added 3 tracks; skipped 2 duplicate or unavailable tracks."));
+        QCOMPARE(language.text(QStringLiteral("1:05 后暂停")), QString("Pause in 1:05"));
+        QCOMPARE(language.text(QStringLiteral("播放在线歌曲后显示歌词。")), QString("Play an online track to load lyrics."));
+        QCOMPARE(language.text(QStringLiteral("播放 / 暂停：快捷键已用于“上一首”")), QString::fromUtf8("Play / pause: Shortcut already assigned to “Previous”"));
+        QCOMPARE(language.text(QStringLiteral("服务未提供总数，无法确认是否读取完整。\n歌单共 50 首，已读取 20 首；当前内容不是完整歌单。")), QString("No total count provided. Completeness could not be verified.\nLoaded 20 of 50 tracks. This playlist is incomplete."));
+        QCOMPARE(language.text(QStringLiteral("我的自定义名称 %1")), QStringLiteral("我的自定义名称 %1"));
+        language.setCode("zh_CN");
+    }
+    void v14DesktopScrollingAndPersistence() {
+        const auto previousName = QCoreApplication::applicationName();
+        const auto restoreName = qScopeGuard([previousName] { QCoreApplication::setApplicationName(previousName); });
+        QCoreApplication::setApplicationName("ui-v14-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        PlayerController controller; QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        auto *lyrics = window->findChild<QQuickWindow *>("desktopLyricsWindow"); QVERIFY(lyrics);
+        auto *view = lyrics->findChild<QQuickItem *>("desktopLyricLines"); QVERIFY(view);
+        QVariantList timeline;
+        const QStringList words{QStringLiteral("让音乐留在手边"), QStringLiteral("陪你走过每个清晨"), QStringLiteral("微光在旋律中缓缓流动"), QStringLiteral("这一刻，听见自己的节奏"), QStringLiteral("把喜欢的声音留在身边")};
+        for (int i = 0; i < 60; ++i) timeline.append(QVariantMap{{"time", i * 4000}, {"original", words[i % words.size()]}});
+        lyrics->setProperty("timeline", timeline);
+        lyrics->setProperty("activeIndex", 10);
+        QVERIFY(QMetaObject::invokeMethod(window, "toggleDesktopLyrics"));
+        QVERIFY(QTest::qWaitForWindowExposed(lyrics));
+        QTRY_COMPARE(view->property("count").toInt(), 60);
+        QTRY_VERIFY(!view->property("followingAnimation").toBool());
+        const auto screenshots = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        if (!screenshots.isEmpty()) QDir().mkpath(screenshots);
+        auto *rows = window->findChild<QObject *>("desktopLyricRowSelector"); QVERIFY(rows);
+        for (int count : {1, 3, 5, 7, 9}) {
+            QVERIFY(QMetaObject::invokeMethod(rows, "activated", Q_ARG(int, (count - 1) / 2)));
+            QTest::qWait(420);
+            QCOMPARE(lyrics->height(), qRound(count * lyrics->property("rowHeight").toDouble()));
+            auto *current = findVisualItem(view, "desktopLyricText-10"); QVERIFY(current);
+            QCOMPARE(current->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
+            auto *currentRow = findVisualItem(view, "desktopLyricRow-10"); QVERIFY(currentRow);
+            const auto currentY = currentRow->mapToScene(QPointF()).y();
+            QVERIFY2(qAbs(currentY - (count / 2) * lyrics->property("rowHeight").toDouble()) < 1.5, qPrintable(QString("Current line at %1 for %2 visible rows").arg(currentY).arg(count)));
+            const auto frame = lyrics->grabWindow();
+            QCOMPARE(frame.pixelColor(0, 0).alpha(), 0);
+            if (!screenshots.isEmpty()) QVERIFY(frame.save(screenshots + "/v14-desktop-lyrics-" + QString::number(count) + ".png"));
+        }
+        const auto start = view->property("contentY").toDouble();
+        auto *current = findVisualItem(view, "desktopLyricText-10"); QVERIFY(current);
+        for (int distance = 1; distance <= 4; ++distance) {
+            auto *nearLine = findVisualItem(view, "desktopLyricText-" + QString::number(10 - distance)); QVERIFY(nearLine);
+            auto *previousLine = findVisualItem(view, "desktopLyricText-" + QString::number(11 - distance)); QVERIFY(previousLine);
+            auto *opposite = findVisualItem(view, "desktopLyricText-" + QString::number(10 + distance)); QVERIFY(opposite);
+            QVERIFY(previousLine->opacity() > nearLine->opacity());
+            QVERIFY(previousLine->scale() > nearLine->scale());
+            QVERIFY(qAbs(nearLine->opacity() - opposite->opacity()) < .01);
+        }
+        auto *next = findVisualItem(view, "desktopLyricText-11"); QVERIFY(next);
+        QVERIFY(current->scale() > next->scale() + .08);
+        auto *desktopTheme = window->findChild<QObject *>("desktopLyricThemeSelector"); QVERIFY(desktopTheme);
+        const bool originalMainTheme = window->property("darkMode").toBool();
+        for (int mode : {1, 2}) {
+            QVERIFY(QMetaObject::invokeMethod(desktopTheme, "activated", Q_ARG(int, mode)));
+            QTRY_COMPARE(lyrics->property("darkStyle").toBool(), mode == 2);
+            QTest::qWait(220);
+            QVERIFY(current->property("color").value<QColor>() != next->property("color").value<QColor>());
+            QCOMPARE(window->property("darkMode").toBool(), originalMainTheme);
+            if (!screenshots.isEmpty()) {
+                const auto transparent = lyrics->grabWindow();
+                QVERIFY(transparent.save(screenshots + (mode == 1 ? "/v14-desktop-lyrics-light.png" : "/v14-desktop-lyrics-dark.png")));
+                QImage backdrop(transparent.size(), QImage::Format_ARGB32_Premultiplied);
+                backdrop.fill(mode == 1 ? QColor("#F3F4F9") : QColor("#131728"));
+                { QPainter painter(&backdrop); painter.drawImage(QPoint(), transparent); }
+                QVERIFY(backdrop.save(screenshots + (mode == 1 ? "/v14-desktop-lyrics-light-background.png" : "/v14-desktop-lyrics-dark-background.png")));
+            }
+        }
+        lyrics->setProperty("activeIndex", 11);
+        QTRY_VERIFY(view->property("followingAnimation").toBool());
+        QTest::qWait(70);
+        const auto middle = view->property("contentY").toDouble();
+        QVERIFY(middle > start + .5);
+        QVERIFY(middle < start + lyrics->property("rowHeight").toDouble() - .5);
+        QTRY_VERIFY(!view->property("followingAnimation").toBool());
+        for (int count : {1, 3, 5, 7, 9}) {
+            QVERIFY(QMetaObject::invokeMethod(rows, "activated", Q_ARG(int, (count - 1) / 2)));
+            for (int edge : {0, 59}) {
+                lyrics->setProperty("activeIndex", edge);
+                QTest::qWait(420);
+                auto *line = findVisualItem(view, "desktopLyricRow-" + QString::number(edge)); QVERIFY(line);
+                const auto y = line->mapToScene(QPointF()).y();
+                QVERIFY2(qAbs(y - (count / 2) * lyrics->property("rowHeight").toDouble()) < 1.5,
+                    qPrintable(QString("Boundary lyric %1 at %2 for %3 rows").arg(edge).arg(y).arg(count)));
+            }
+        }
+        lyrics->setProperty("activeIndex", 40);
+        QTRY_VERIFY(view->property("followingAnimation").toBool());
+        QTRY_VERIFY(!view->property("followingAnimation").toBool());
+        QVERIFY(findVisualItem(view, "desktopLyricText-40"));
+        view->setProperty("manualBrowsing", true);
+        const auto browsed = view->property("contentY").toDouble();
+        lyrics->setProperty("activeIndex", 41); QTest::qWait(100);
+        QCOMPARE(view->property("contentY").toDouble(), browsed);
+        QVERIFY(QMetaObject::invokeMethod(view, "returnToCurrent"));
+        QTRY_VERIFY(!view->property("followingAnimation").toBool());
+        lyrics->setProperty("motionEnabled", false);
+        lyrics->setProperty("activeIndex", 20); QTest::qWait(30);
+        QVERIFY(!view->property("followingAnimation").toBool());
+        QVERIFY(findVisualItem(view, "desktopLyricText-20"));
+        auto *dragText = findVisualItem(view, "desktopLyricText-20"); QVERIFY(dragText);
+        const QPoint textPoint = dragText->mapToScene(QPointF(dragText->width()/2, dragText->height()/2)).toPoint();
+        QTRY_VERIFY(lyrics->mask().contains(textPoint));
+        QVERIFY(!lyrics->mask().contains(QPoint(3,3)));
+        const auto previousPosition = lyrics->position();
+        QTest::mousePress(lyrics, Qt::LeftButton, Qt::NoModifier, QPoint(3,3));
+        QTest::mouseMove(lyrics, QPoint(50,20), 30);
+        QTest::mouseRelease(lyrics, Qt::LeftButton, Qt::NoModifier, QPoint(3,3));
+        QCOMPARE(lyrics->position(), previousPosition);
+        QTest::mousePress(lyrics, Qt::LeftButton, Qt::NoModifier, textPoint);
+        QTest::mouseMove(lyrics, textPoint + QPoint(40,20), 30);
+        QTest::mouseRelease(lyrics, Qt::LeftButton, Qt::NoModifier, textPoint);
+        QVERIFY(lyrics->position() != previousPosition);
+#ifdef Q_OS_WIN
+        if (QGuiApplication::platformName() == "windows") {
+            lyrics->raise(); QTest::qWait(80);
+            const auto nativeFrame = lyrics->grabWindow();
+            const auto ratio = lyrics->devicePixelRatio();
+            QPoint ink(-1,-1);
+            const int top = qMax(0, qRound((textPoint.y() - 20) * ratio));
+            const int bottom = qMin(nativeFrame.height(), qRound((textPoint.y() + 20) * ratio));
+            for (int y = top; y < bottom && ink.x() < 0; ++y)
+                for (int x = 0; x < nativeFrame.width(); ++x)
+                    if (nativeFrame.pixelColor(x,y).alpha() > 180) { ink = QPoint(x,y); break; }
+            QVERIFY(ink.x() >= 0);
+            const auto handle = reinterpret_cast<HWND>(lyrics->winId());
+            RECT bounds; QVERIFY(GetWindowRect(handle, &bounds));
+            const POINT nativeInk{bounds.left + ink.x(), bounds.top + ink.y()};
+            const POINT nativeBlank{bounds.left + qRound(3 * ratio), bounds.top + qRound(3 * ratio)};
+            QCOMPARE(WindowFromPoint(nativeInk), handle);
+            QVERIFY2(WindowFromPoint(nativeBlank) != handle, "Windows must route blank-space input to the window underneath");
+        }
+#endif
+        auto *contextMenu = lyrics->findChild<QObject *>("desktopLyricContextMenu"); QVERIFY(contextMenu);
+        QTest::mouseClick(lyrics, Qt::RightButton, Qt::NoModifier, textPoint);
+        QTRY_VERIFY(contextMenu->property("opened").toBool());
+        QVERIFY(QMetaObject::invokeMethod(contextMenu, "close"));
+        QTRY_VERIFY(!contextMenu->property("opened").toBool());
+        const int normalHeight = lyrics->height();
+        const QRect realArea = controller.desktopWorkArea(lyrics->x() + 32, lyrics->y() + 32);
+        // Simulate an obsolete screen-area cache. The actual monitor timer must
+        // restore it without requiring the user to move the lyric window.
+        lyrics->setProperty("availableArea", QRect(realArea.topLeft(), QSize(320, 300)));
+        QTRY_VERIFY(lyrics->height() <= 300);
+        QVERIFY(lyrics->property("fittedTextSize").toInt() <= lyrics->property("textSize").toInt());
+        QTRY_COMPARE_WITH_TIMEOUT(lyrics->property("availableArea").toRectF(), QRectF(realArea), 4000);
+        QTRY_COMPARE(lyrics->height(), normalHeight);
+        const auto savedPosition = lyrics->position();
+        window->hide(); QVERIFY(lyrics->isVisible());
+        QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "en")));
+        QTRY_COMPARE(rows->property("currentIndex").toInt(), 4);
+        window->setProperty("section", "more"); window->setProperty("detail", "settings"); window->show();
+        QTest::qWait(100);
+        auto *theme = window->findChild<QObject *>("themeSelector"); QVERIFY(theme);
+        for (int mode : {1, 2}) {
+            QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, mode)));
+            auto *scroll = window->findChild<QQuickItem *>("settingsScroll"); QVERIFY(scroll);
+            auto *viewport = qobject_cast<QQuickItem *>(scroll->property("contentItem").value<QObject *>());
+            if (viewport) viewport->setProperty("contentY", 0);
+            QTest::qWait(100);
+            if (!screenshots.isEmpty()) QVERIFY(window->grabWindow().save(screenshots + (mode == 1 ? "/v14-settings-en-light.png" : "/v14-settings-en-dark.png")));
+        }
+        QPointer<QQuickWindow> closed(window); window->deleteLater(); QTRY_VERIFY(closed.isNull());
+        QQmlApplicationEngine reopened; reopened.rootContext()->setContextProperty("player", &controller);
+        reopened.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(reopened.rootObjects().size(), 1);
+        auto *restored = reopened.rootObjects().first()->findChild<QQuickWindow *>("desktopLyricsWindow"); QVERIFY(restored);
+        QTRY_VERIFY(restored->isVisible());
+        QTRY_COMPARE(restored->position(), savedPosition);
+        QCOMPARE(restored->property("lineCount").toInt(), 9);
+        QVERIFY(restored->property("darkStyle").toBool());
+        QTRY_COMPARE(reopened.rootObjects().first()->findChild<QObject *>("desktopLyricRowSelector")->property("currentIndex").toInt(), 4);
+        QCOMPARE(warnings.size(), 0);
+    }
+    void v14LanguageAndDesktopLyrics() {
+        const auto previousName = QCoreApplication::applicationName();
+        const auto restoreName = qScopeGuard([previousName] { QCoreApplication::setApplicationName(previousName); });
+        QCoreApplication::setApplicationName("ui-v14-language-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        QSettings().remove("interface/language");
+        PlayerController controller;
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        QCOMPARE(window->property("languageCode").toString(), QString("zh_CN"));
+        QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "en")));
+        QTRY_COMPARE(window->property("languageCode").toString(), QString("en"));
+        QVERIFY(window->title().contains("FloatMusic 1.4"));
+        auto *language = window->findChild<QObject *>("languageSelector"); QVERIFY(language);
+        QCOMPARE(language->property("currentIndex").toInt(), 1);
+        auto *shortcuts = qobject_cast<GlobalShortcuts *>(controller.shortcuts()); QVERIFY(shortcuts);
+        window->setProperty("section", "more"); window->setProperty("detail", "settings"); window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        QVERIFY(!shortcuts->setBinding("togglePlay", "Ctrl+Alt+Left"));
+        // Repeater delegates belong to the visual tree, not the QObject tree.
+        QTRY_VERIFY(findVisualItem(window->contentItem(), "shortcutError_togglePlay"));
+        QTRY_COMPARE(findVisualItem(window->contentItem(), "shortcutError_togglePlay")->property("text").toString(), QString::fromUtf8("Shortcut already assigned to “Previous”"));
+        QCOMPARE(window->findChild<QObject *>("shortcutSettingsMessage")->property("text").toString(), QString::fromUtf8("Play / pause: Shortcut already assigned to “Previous”"));
+        QVERIFY(shortcuts->setBinding("togglePlay", "Ctrl+Alt+Space"));
+        PlayerController restored;
+        QCOMPARE(restored.property("uiLanguage").value<QObject *>()->property("code").toString(), QString("en"));
+        auto *lyrics = window->findChild<QQuickWindow *>("desktopLyricsWindow"); QVERIFY(lyrics);
+        QCOMPARE(lyrics->color().alpha(), 0);
+        QVERIFY(lyrics->flags().testFlag(Qt::FramelessWindowHint));
+        QVERIFY(lyrics->flags().testFlag(Qt::WindowStaysOnTopHint));
+        QVERIFY(!lyrics->transientParent());
+        auto *rows = window->findChild<QObject *>("desktopLyricRowSelector"); QVERIFY(rows);
+        for (int count : {1, 3, 5}) {
+            QVERIFY(QMetaObject::invokeMethod(rows, "activated", Q_ARG(int, (count - 1) / 2)));
+            QTRY_COMPARE(lyrics->property("lineCount").toInt(), count);
+        }
+        QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "zh_CN")));
+        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.4")));
+        QVERIFY(QMetaObject::invokeMethod(rows, "activated", Q_ARG(int, 1)));
+        QCOMPARE(warnings.size(), 0);
+    }
     void initTestCase() {
         QCoreApplication::setOrganizationName("FloatMusicTests");
         QStandardPaths::setTestModeEnabled(true);
@@ -991,6 +1224,7 @@ private slots:
     void androidWelcomeLayout() {
         // Android now has a dedicated QML welcome page; the overlay is native Java.
         PlayerController controller;
+        controller.uiLanguage()->setProperty("code", "zh_CN");
         QQmlApplicationEngine engine;
         QSignalSpy warnings(&engine, &QQmlEngine::warnings);
         engine.rootContext()->setContextProperty("player", &controller);
@@ -1005,9 +1239,14 @@ private slots:
         }
         QVERIFY(flickable); QVERIFY(exit);
         const auto artifacts = qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        auto *language = window->findChild<QObject *>("androidLanguageSelector"); QVERIFY(language);
+        for (const auto &code : {QString("zh_CN"), QString("en")}) {
+        controller.uiLanguage()->setProperty("code", code);
+        QTRY_COMPARE(window->property("languageCode").toString(), code);
+        QTRY_COMPARE(language->property("currentIndex").toInt(), code == "en" ? 1 : 0);
         for (int mode : {1, 2}) {
             window->setProperty("themeMode", mode);
-            for (const auto size : {QSize(360,780), QSize(780,360), QSize(320,568)}) {
+            for (const auto size : {QSize(360,780), QSize(780,360), QSize(320,480)}) {
                 window->resize(size); window->show();
                 QVERIFY(QTest::qWaitForWindowExposed(window));
                 flickable->setProperty("contentY", 0.0);
@@ -1015,8 +1254,16 @@ private slots:
                 QVERIFY(window->isVisible()); // Launch must not hide the activity page.
                 if (!artifacts.isEmpty()) {
                     QDir().mkpath(artifacts);
-                    QVERIFY(window->grabWindow().save(artifacts + QString("/android-welcome-%1-%2x%3.png")
-                        .arg(mode == 1 ? "light" : "dark").arg(size.width()).arg(size.height())));
+                    QVERIFY(window->grabWindow().save(artifacts + QString("/android-welcome-%1-%2-%3x%4.png")
+                        .arg(code, mode == 1 ? "light" : "dark").arg(size.width()).arg(size.height())));
+                }
+                if (code == "en" && size == QSize(320,480)) {
+                    auto *popup = language->property("popup").value<QObject *>(); QVERIFY(popup);
+                    popup->setProperty("visible", true); QTest::qWait(80);
+                    QVERIFY(popup->property("visible").toBool());
+                    QVERIFY(popup->property("width").toDouble() <= window->width());
+                    if (!artifacts.isEmpty()) QVERIFY(window->grabWindow().save(artifacts + QString("/android-language-popup-%1.png").arg(mode)));
+                    popup->setProperty("visible", false);
                 }
                 const auto end = qMax(0.0, flickable->property("contentHeight").toDouble() - flickable->height());
                 flickable->setProperty("contentY", end); QTest::qWait(80);
@@ -1024,9 +1271,10 @@ private slots:
                 QVERIFY(bottom.x() <= window->width());
                 QVERIFY(bottom.y() <= window->height() && bottom.y() > 0);
                 if (!artifacts.isEmpty() && size == QSize(780,360))
-                    QVERIFY(window->grabWindow().save(artifacts + QString("/android-welcome-%1-landscape-bottom.png")
-                        .arg(mode == 1 ? "light" : "dark")));
+                    QVERIFY(window->grabWindow().save(artifacts + QString("/android-welcome-%1-%2-landscape-bottom.png")
+                        .arg(code, mode == 1 ? "light" : "dark")));
             }
+        }
         }
         QCOMPARE(warnings.size(), 0);
     }
