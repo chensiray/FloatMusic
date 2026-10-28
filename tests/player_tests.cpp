@@ -61,6 +61,9 @@ static QQuickItem *findVisualItem(QQuickItem *root, const QString &name) {
     return nullptr;
 }
 static bool revealInScrollable(QQuickItem *item) {
+    for(auto *group=item->parentItem();group;group=group->parentItem())if(group->property("settingsKey").isValid()){
+        item->window()->setProperty("settingsPage",group->property("settingsKey"));QTest::qWait(40);break;
+    }
     QQuickItem *viewport = item->parentItem();
     while (viewport && !viewport->property("contentY").isValid()) viewport = viewport->parentItem();
     if (!viewport) return false;
@@ -72,6 +75,93 @@ static bool revealInScrollable(QQuickItem *item) {
 class PlayerTests : public QObject {
     Q_OBJECT
 private slots:
+    void v15FloatingOpacityAndPosition() {
+        const auto previousName=QCoreApplication::applicationName();
+        const auto restore=qScopeGuard([previousName]{QCoreApplication::setApplicationName(previousName);});
+        QCoreApplication::setApplicationName("ui-v15-"+QUuid::createUuid().toString(QUuid::WithoutBraces));
+        {
+            PlayerController controller; QQmlApplicationEngine engine;
+            QSignalSpy warnings(&engine,&QQmlEngine::warnings);
+            engine.rootContext()->setContextProperty("player",&controller);
+            engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+            QCOMPARE(engine.rootObjects().size(),1);
+            auto *window=qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+            auto *lyrics=window->findChild<QQuickWindow *>("desktopLyricsWindow"); QVERIFY(lyrics);
+            auto *high=window->findChild<QObject *>("desktopLyricHighlightOpacity"); QVERIFY(high);
+            auto *edge=window->findChild<QObject *>("desktopLyricEdgeOpacity"); QVERIFY(edge);
+            auto *rows=window->findChild<QObject *>("desktopLyricRowSelector"); QVERIFY(rows);
+            QVariantList timeline;for(int i=0;i<30;i++)timeline.append(QVariantMap{{"time",i*4000},{"original",QString("Lyric %1").arg(i)}});
+            lyrics->setProperty("timeline",timeline);lyrics->setProperty("activeIndex",10);
+            QVERIFY(QMetaObject::invokeMethod(window,"toggleDesktopLyrics"));
+            QVERIFY(QTest::qWaitForWindowExposed(lyrics));
+            auto fade=[lyrics](double distance){QVariant value;const bool ok=QMetaObject::invokeMethod(lyrics,"fadeAt",Q_RETURN_ARG(QVariant,value),Q_ARG(QVariant,distance));return ok?value.toDouble():-1.;};
+            high->setProperty("value",80);QVERIFY(QMetaObject::invokeMethod(high,"moved"));
+            edge->setProperty("value",20);QVERIFY(QMetaObject::invokeMethod(edge,"moved"));
+            for(int count:{1,3,5,7,9}){
+                QVERIFY(QMetaObject::invokeMethod(rows,"activated",Q_ARG(int,(count-1)/2)));
+                QVERIFY(qAbs(fade(0)-.8)<.001);
+                if(count>1)QVERIFY(qAbs(fade(count/2)-.2)<.001);
+                QCOMPARE(edge->property("enabled").toBool(),count>1);
+                QVERIFY(qAbs(fade(count/2+1))<.001);
+            }
+            QVERIFY(QMetaObject::invokeMethod(rows,"activated",Q_ARG(int,2)));
+            QVERIFY(qAbs(fade(1)-.5)<.001);
+            auto *view=lyrics->findChild<QQuickItem *>("desktopLyricLines"); QVERIFY(view);
+            QTRY_VERIFY(!view->property("followingAnimation").toBool());
+            lyrics->setProperty("activeIndex",11);QTRY_VERIFY(view->property("followingAnimation").toBool());
+            const double before=view->property("contentY").toDouble();
+            high->setProperty("value",60);QVERIFY(QMetaObject::invokeMethod(high,"moved"));
+            QVERIFY(view->property("followingAnimation").toBool());
+            QVERIFY(qAbs(view->property("contentY").toDouble()-before)<1);
+            QTRY_VERIFY(!view->property("followingAnimation").toBool());
+            edge->setProperty("value",0);QVERIFY(QMetaObject::invokeMethod(edge,"moved"));
+            auto *outer=findVisualItem(view,"desktopLyricText-9");QVERIFY(outer);
+            QTRY_VERIFY(outer->opacity()<.001);
+            const auto invisiblePoint=outer->mapToScene(QPointF(outer->width()/2,outer->height()/2)).toPoint();
+            QTest::qWait(60);QVERIFY(!lyrics->mask().contains(invisiblePoint));
+            auto *active=findVisualItem(view,"desktopLyricText-11");QVERIFY(active);
+            QTRY_VERIFY(qAbs(active->opacity()-.6)<.01);
+            QVERIFY(QMetaObject::invokeMethod(lyrics,"lockRequested"));
+            QTRY_VERIFY(lyrics->property("locked").toBool());
+            const QPoint initial=lyrics->position(),point=active->mapToScene(QPointF(active->width()/2,active->height()/2)).toPoint();
+            QTest::mousePress(lyrics,Qt::LeftButton,Qt::NoModifier,point);QTest::mouseMove(lyrics,point+QPoint(40,20),30);QTest::mouseRelease(lyrics,Qt::LeftButton,Qt::NoModifier,point);
+            QCOMPARE(lyrics->position(),initial);
+            lyrics->setPosition(10000,10000);QVERIFY(QMetaObject::invokeMethod(window,"centerDesktopLyrics"));
+            const auto area=lyrics->property("availableArea").toRectF();
+            QVERIFY(qAbs(lyrics->x()+lyrics->width()/2.-area.center().x())<2);
+            QVERIFY(qAbs(lyrics->y()+lyrics->height()/2.-area.center().y())<2);
+            const auto artifacts=qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+            window->setProperty("section","more");window->setProperty("detail","settings");window->show();
+            for(const QString &language:{QString("zh_CN"),QString("en")}){
+                QVERIFY(QMetaObject::invokeMethod(window,"setUiLanguage",Q_ARG(QVariant,language)));
+                auto *theme=window->findChild<QObject *>("themeSelector");QVERIFY(theme);
+                for(int mode:{1,2}){QVERIFY(QMetaObject::invokeMethod(theme,"activated",Q_ARG(int,mode)));QTest::qWait(100);QVERIFY(revealInScrollable(qobject_cast<QQuickItem *>(high)));QTest::qWait(180);if(!artifacts.isEmpty()){QDir().mkpath(artifacts);QVERIFY(window->grabWindow().save(artifacts+QString("/v15-settings-%1-%2.png").arg(language).arg(mode)));QVERIFY(lyrics->grabWindow().save(artifacts+QString("/v15-lyrics-%1-%2.png").arg(language).arg(mode)));}}
+            }
+            QCOMPARE(warnings.size(),0);
+        }
+        PlayerController reopened;QQmlApplicationEngine engine;engine.rootContext()->setContextProperty("player",&reopened);engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        auto *lyrics=engine.rootObjects().first()->findChild<QQuickWindow *>("desktopLyricsWindow");QVERIFY(lyrics);
+        QCOMPARE(lyrics->property("highlightOpacity").toInt(),60);QCOMPARE(lyrics->property("edgeOpacity").toInt(),0);QVERIFY(lyrics->property("locked").toBool());
+        reopened.uiLanguage()->setProperty("code","zh_CN");
+    }
+    void v14DesktopLyricsPreserveLiteralMarkup() {
+        PlayerController controller; QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        auto *lyrics = window->findChild<QQuickWindow *>("desktopLyricsWindow"); QVERIFY(lyrics);
+        const QString original = QStringLiteral("<b>Keep & hear</b>");
+        lyrics->setProperty("timeline", QVariantList{QVariantMap{{"time", 0}, {"original", original}}});
+        lyrics->setProperty("activeIndex", 0);
+        lyrics->setVisible(true);
+        QVERIFY(QTest::qWaitForWindowExposed(lyrics));
+        auto *view = lyrics->findChild<QQuickItem *>("desktopLyricLines"); QVERIFY(view);
+        QQuickItem *label = nullptr;
+        QTRY_VERIFY((label = findVisualItem(view, "desktopLyricText-0")));
+        QCOMPARE(label->property("text").toString(), original);
+        QCOMPARE(label->property("textFormat").toInt(), 0); // Text.PlainText
+    }
     void v14LanguageMessages() {
         UiLanguage language;
         language.setCode("en");
@@ -272,7 +362,7 @@ private slots:
         QCOMPARE(window->property("languageCode").toString(), QString("zh_CN"));
         QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "en")));
         QTRY_COMPARE(window->property("languageCode").toString(), QString("en"));
-        QVERIFY(window->title().contains("FloatMusic 1.4"));
+        QVERIFY(window->title().contains("FloatMusic 1.5"));
         auto *language = window->findChild<QObject *>("languageSelector"); QVERIFY(language);
         QCOMPARE(language->property("currentIndex").toInt(), 1);
         auto *shortcuts = qobject_cast<GlobalShortcuts *>(controller.shortcuts()); QVERIFY(shortcuts);
@@ -297,7 +387,7 @@ private slots:
             QTRY_COMPARE(lyrics->property("lineCount").toInt(), count);
         }
         QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "zh_CN")));
-        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.4")));
+        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.5")));
         QVERIFY(QMetaObject::invokeMethod(rows, "activated", Q_ARG(int, 1)));
         QCOMPARE(warnings.size(), 0);
     }
@@ -380,7 +470,7 @@ private slots:
         QVERIFY(controller.ready());
     }
     void exitTerminatesProcess() {
-        for (const auto &action : {"--close-child", "--exit-button-child"}) {
+        for (const auto &action : {"--close-child", "--exit-button-child", "--android-exit-button-child"}) {
             QProcess child;
             child.start(QCoreApplication::applicationFilePath(), {"-platform", "offscreen", action});
             QVERIFY(child.waitForStarted());
@@ -501,6 +591,7 @@ private slots:
             return artifacts.isEmpty() || window->grabWindow().save(artifacts + "/" + name + ".png");
         };
         QVERIFY(window->setProperty("section", "more")); QVERIFY(window->setProperty("detail", "settings"));
+        window->setProperty("settingsPage","lyrics");
         QTRY_VERIFY(mode->isVisible() && size->isVisible() && preview->isVisible());
         auto *theme = window->findChild<QObject *>("themeSelector"); QVERIFY(theme);
         QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, 1)));
@@ -849,6 +940,7 @@ private slots:
         while (viewport && !viewport->property("contentY").isValid()) viewport = viewport->parentItem();
         QVERIFY2(viewport, "The settings page must scroll to the online quality control");
         auto revealQuality = [&] {
+            window->setProperty("settingsPage","playback");QTest::qWait(40);
             const double top = viewport->property("contentY").toDouble()
                 + quality->mapToItem(viewport, QPointF()).y();
             const double end = qMax(0.0, viewport->property("contentHeight").toDouble() - viewport->height());
@@ -942,6 +1034,7 @@ private slots:
         };
         for (int mode : {1, 2}) {
             QVERIFY(QMetaObject::invokeMethod(theme, "activated", Q_ARG(int, mode)));
+            window->setProperty("settingsPage","service");QTest::qWait(40);
             const double top = viewport->property("contentY").toDouble() + selector->mapToItem(viewport, QPointF()).y();
             viewport->setProperty("contentY", qBound(0.0, top - 40.0,
                 qMax(0.0, viewport->property("contentHeight").toDouble() - viewport->height())));
@@ -1072,9 +1165,11 @@ private slots:
         QVERIFY(window->isVisible());
         window->setProperty("section", "more"); window->setProperty("detail", "settings");
         QTest::qWait(100);
+        window->setProperty("settingsPage","playback");
         QVERIFY(window->findChild<QQuickItem *>("outputSelector")->isVisible());
         QVERIFY(window->findChild<QObject *>("playlistView")->property("count").toInt() > 0);
         auto *size = window->findChild<QObject *>("windowScaleSlider"); QVERIFY(size);
+        window->setProperty("settingsPage","general");
         const int originalWidth = window->width();
         const double originalScale = window->property("contentScale").toDouble();
         size->setProperty("value", 120.0);
@@ -1283,17 +1378,18 @@ private slots:
 int main(int argc, char **argv) {
     QGuiApplication app(argc, argv);
     QCoreApplication::setOrganizationName("FloatMusicTests");
-    if (app.arguments().contains("--close-child") || app.arguments().contains("--exit-button-child")) {
+    if (app.arguments().contains("--close-child") || app.arguments().contains("--exit-button-child") || app.arguments().contains("--android-exit-button-child")) {
         QStandardPaths::setTestModeEnabled(true); QCoreApplication::setApplicationName("exit-child");
         QQuickStyle::setStyle("Basic");
         PlayerController player; QQmlApplicationEngine engine; engine.rootContext()->setContextProperty("player", &player);
-        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        const bool androidWelcome=app.arguments().contains("--android-exit-button-child");
+        engine.load(QUrl::fromLocalFile(androidWelcome ? QFileInfo(QStringLiteral(FLOATMUSIC_QML_FILE)).dir().filePath("AndroidMain.qml") : QStringLiteral(FLOATMUSIC_QML_FILE)));
         if(engine.rootObjects().isEmpty())return 8;
         auto *window=qobject_cast<QQuickWindow *>(engine.rootObjects().first());
         QTimer::singleShot(0,window,[window]{window->show();});
-        QTimer::singleShot(200,window,[window,&app]{
+        QTimer::singleShot(200,window,[window,&app,androidWelcome]{
             if(app.arguments().contains("--close-child"))window->close();
-            else {auto *button=window->findChild<QObject *>("exitButton");if(!button||!QMetaObject::invokeMethod(button,"clicked"))QCoreApplication::exit(7);}
+            else {auto *button=window->findChild<QObject *>(androidWelcome?"androidExitButton":"exitButton");if(!button||!QMetaObject::invokeMethod(button,"clicked"))QCoreApplication::exit(7);}
         });
         QTimer::singleShot(5000,&app,[]{QCoreApplication::exit(9);});
         return app.exec();

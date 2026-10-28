@@ -6,13 +6,15 @@
 
 **Keep music close at hand.** FloatMusic is a floating music player for Windows and Android. It rests as a draggable music-note icon; clicking it opens a player card so you can control playback, read lyrics, and change tracks while using other apps.
 
-Current version: **1.4 · Windows and Android preview**. Windows uses `1.4.0-preview`; Android uses `1.4.0-preview.3` (version code 22), retaining the accepted builds and signing identity. Source code and packages are available in the [1.4 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.4.0-preview).
+Current version: **1.5 · Windows and Android preview**. Both platforms use `1.5.0-preview.2` (Android version code 25), preserving the user-accepted packages and signing identity. Source code and packages are available in the [1.5 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.5.0-preview).
 
-Version 1.4 adds Chinese / English interface switching, independent transparent desktop or floating lyrics, and smooth scrolling in both lyric views. Independent lyrics show centered text with 1/3/5/7/9 lines, a larger highlighted current line, fading context, and light/dark themes. Drag the text to move it; blank areas pass clicks through. Android also improves transition timing, long bilingual lines, and returning to the current lyric. See the [Windows guide](docs/Windows-1.4-验收说明.md), [Android guide](docs/Android-1.4-验收说明.md), and [Android motion verification](docs/Android-1.4.0-preview.3-真机动效优化.md).
+Version 1.5 refines the floating experience: adjust highlighted and edge lyric opacity separately, lock the position, or recenter lyrics. Long-press player lyrics to copy the whole song, or a playlist description to copy its full text. Long descriptions expand and collapse; settings now open dedicated category pages. Android fixes include exiting from the welcome page and keeping the final lyric fully visible after manual scrolling. Playback, queue and performance fixes from the 1.4 code review are included. See the [floating-window notes](docs/1.5-验收与更新说明.md), [lyric and copy fixes](docs/1.5.0-preview.1-修复与验收.md), and [description and settings notes](docs/1.5.0-preview.2-简介与设置.md).
 
 The separate playback queue, listening history, and sleep timer remain available. Schedule a track next or append it to the queue; duplicate occurrences, drag reordering, removal, clearing, and restart restoration are supported. Windows provides editable global shortcuts, while Android media notifications support playback, progress, mode, and volume controls. Mixed playlists, independent quality preferences, and lyric size and spacing are unchanged.
 
 ## Main features
+
+- **Floating experience**: Independently adjust current and edge lyric opacity with gradual fading between them; lock or recenter the position. Long-press player lyrics to copy the whole song and descriptions to copy their full text. Expand long descriptions and browse categorized settings pages.
 
 - **Interface language**: Switch between Simplified Chinese and English instantly and save the choice. Song titles, artists, user playlists, and lyric content stay in their original language.
 - **Independent lyrics**: Transparent, centered text with 1/3/5/7/9 lines, adjustable size and light/dark themes. The current line is highlighted and larger; context fades and shrinks. Drag the text, with click-through blank areas; Windows also offers a context menu and position lock.
@@ -32,13 +34,13 @@ The separate playback queue, listening history, and sleep timer remain available
 
 ## Download and run
 
-This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.4 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.4.0-preview):
+This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.5 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.5.0-preview):
 
 | Platform | Download | How to use |
 |---|---|---|
-| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.4.0-preview/FloatMusic-1.4.0-preview-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
-| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.4.0-preview/FloatMusic-1.4.0-preview.3-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
-| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.4.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
+| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/FloatMusic-1.5.0-preview.2-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
+| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/FloatMusic-1.5.0-preview.2-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
+| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
 
 Other versions are listed under [Releases](https://github.com/chensiray/FloatMusic/releases). To compile the app yourself, see the [build guide](docs/DEVELOPMENT.md).
 
@@ -87,7 +89,7 @@ The volume button sits beside previous, play/pause, next, and playback mode. Cli
 
 The playlist and search toolbars scroll with their content, leaving more room for tracks when browsing downward. Scroll back to the top to select or manage playlists or search again. On Windows, `Ctrl+F` returns directly to the search field.
 
-Check one or more libraries above the search field on either platform; all are selected by default, and songs and playlists share the selection. Search again after changing libraries. Clearing all selections prompts you to choose at least one. Search results and current playback information show their source, and matching song names are not merged across platforms. Set the combined limit under **More → Settings → Search result count (更多 → 设置 → 搜索显示数量)**. Songs and playlists share this limit; changes apply to the next search and survive a restart.
+Check one or more libraries above the search field on either platform; all are selected by default, and songs and playlists share the selection. Search again after changing libraries. Clearing all selections prompts you to choose at least one. Search results and current playback information show their source, and matching song names are not merged across platforms. Set the combined limit under **More → Settings → Search result count (更多 → 设置 → 搜索与服务 → 搜索显示数量)**. Songs and playlists share this limit; changes apply to the next search and survive a restart.
 
 After importing a local file, click play. Previewing a search result does not automatically add it to a playlist. Select playback mode to the right of the next-track button. Sequential playback stops naturally at the playlist's end; repeat and shuffle modes continue changing tracks. Favorites and playlists stay on the device and are not synchronized to a NetEase account.
 
@@ -103,7 +105,7 @@ The sleep timer offers 15 / 30 / 60 minutes, a custom 1–180 minutes, and stopp
 
 ## Shortcuts and Android media notifications
 
-View or edit Windows combinations under More → Settings → Global shortcuts (更多 → 设置 → 全局快捷键). Disable shortcuts or restore defaults; conflicts retain the previous configuration. Defaults are `Ctrl+Alt+Space` for play/pause, `Ctrl+Alt+Left / Right` for previous/next, `Ctrl+Alt+Up / Down` for volume, and `Ctrl+Alt+M` to expand/collapse. These work while other apps are in front. Existing `Ctrl+F`, `Ctrl+O`, and `Esc` shortcuts remain local to the player window.
+View or edit Windows combinations under More → Settings → Shortcuts (更多 → 设置 → 快捷键). Disable shortcuts or restore defaults; conflicts retain the previous configuration. Defaults are `Ctrl+Alt+Space` for play/pause, `Ctrl+Alt+Left / Right` for previous/next, `Ctrl+Alt+Up / Down` for volume, and `Ctrl+Alt+M` to expand/collapse. These work while other apps are in front. Existing `Ctrl+F`, `Ctrl+O`, and `Esc` shortcuts remain local to the player window.
 
 Android media notifications display the track, artist, progress, and duration, with previous/next, play/pause, playback mode, and volume controls. Seek where the system provides a progress slider. Volume opens the floating card's vertical slider; close the notification panel to adjust it. The welcome-screen action returns to the overlay, and a file picker delays the popup until selection ends. The phone system determines order, collapsing, and lock-screen display. Notification and overlay permissions are still required.
 
@@ -155,7 +157,7 @@ QQ playlist search, details, and rankings use anonymous musicu APIs. Kuwo playli
 
 URL resolution, audio connection, and loading failures automatically trigger backups. A resolution attempt has an overall timeout; temporarily failing services cool down for 30 seconds, and GD requests also have local rate protection. Settings show the source, requested tier, and actual playback format. INJAHOW returned MP3 128 kbps in testing; backups do not guarantee lossless or Hi-Res audio. High-quality responses are checked for track identity and audio format. Kuwo also uses the expected duration to reject clearly incomplete short audio or short audio whose completeness cannot be confirmed. Services may still time out together, rate-limit requests, or lack tracks; retry, change quality, or try another song.
 
-If you have a compatible NetEase service, enter its address under **More → Settings → Music service (更多 → 设置 → 音乐服务)**. It only affects NetEase. Custom NetEase mode contacts only the selected service; switching back to built-in mode restores backup sources. Selected QQ and Kuwo libraries continue using their own built-in services. Windows API requests follow system proxy configuration; Android follows the device's network environment. Network conditions and experiment boundaries are in the [verification notes](VERIFICATION.md); historical backup parameters are in the [test report](docs/备用音源接入与实测-2026-10-01.md).
+If you have a compatible NetEase service, enter its address under **More → Settings → Search & services → Custom NetEase service (更多 → 设置 → 搜索与服务 → 自定义网易云服务)**. It only affects NetEase. Custom NetEase mode contacts only the selected service; switching back to built-in mode restores backup sources. Selected QQ and Kuwo libraries continue using their own built-in services. Windows API requests follow system proxy configuration; Android follows the device's network environment. Network conditions and experiment boundaries are in the [verification notes](VERIFICATION.md); historical backup parameters are in the [test report](docs/备用音源接入与实测-2026-10-01.md).
 
 The GD Studio API is provided by GD Studio. Its public terms restrict it to personal learning and noncommercial use, and source attribution is retained. FloatMusic does not download or distribute online songs.
 
@@ -165,7 +167,7 @@ Local imports save an audio copy in the app data directory. The original file is
 
 Playlists support bulk JSON import and drag reordering. Bulk audio-file import, local LRC import, and downloading online songs are not currently supported. Phone power-saving policies, screen sizes, and Bluetooth devices still need ongoing compatibility work.
 
-Version 1.4's build, interface checks, and device installation details, along with earlier online API samples, are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
+Version 1.5's build, interface checks, and device installation details, along with earlier online API samples, are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
 
 To report a problem, open an [Issue](https://github.com/chensiray/FloatMusic/issues) and include the app version, OS/device model, reproduction steps, and actual behavior.
 

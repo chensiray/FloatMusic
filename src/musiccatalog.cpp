@@ -463,9 +463,10 @@ struct MusicApi::CatalogFetch {
     QSet<QByteArray> pages;
     QStringList warnings;
     std::function<void(QVariantMap, QString)> done;
+    std::function<bool()> isCurrent;
 };
 void MusicApi::fetchCatalogPlaylist(const QString &s, const QString &kind, const QString &id,
-                                    std::function<void(QVariantMap, QString)> done) {
+                                    std::function<void(QVariantMap, QString)> done, std::function<bool()> isCurrent) {
     bool valid = false;
     const auto resource = id.toLongLong(&valid);
     if (!valid || resource <= 0) {
@@ -478,9 +479,11 @@ void MusicApi::fetchCatalogPlaylist(const QString &s, const QString &kind, const
     state->id = id;
     state->generation = m_sourceGeneration;
     state->done = std::move(done);
+    state->isCurrent = std::move(isCurrent);
     fetchCatalogPage(state);
 }
 void MusicApi::fetchCatalogPage(const std::shared_ptr<CatalogFetch> &state) {
+    if (state->isCurrent && !state->isCurrent()) return;
     if (state->generation != m_sourceGeneration) {
         state->done({}, QStringLiteral("API 来源已更改，请重新打开歌单。"));
         return;
@@ -504,6 +507,7 @@ void MusicApi::fetchCatalogPage(const std::shared_ptr<CatalogFetch> &state) {
         state->done(state->playlist, {});
     };
     const auto callback = [this, state, finish](QByteArray bytes, QString error) {
+        if (state->isCurrent && !state->isCurrent()) return;
         if (state->generation != m_sourceGeneration) {
             state->done({}, QStringLiteral("API 来源已更改，请重新打开歌单。"));
             return;

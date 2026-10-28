@@ -12,6 +12,20 @@ ApplicationWindow {
     function setUiLanguage(code) { player.uiLanguage.code = code }
     function toggleDesktopLyrics() { desktopPreferences.enabled = !desktopPreferences.enabled; desktopPreferences.sync() }
     function desktopRowCount(value) { return Math.max(1, Math.min(9, Math.floor(value / 2) * 2 + 1)) }
+    function setDesktopLyricOpacity(highlight, edge) {
+        desktopPreferences.highlightOpacity = Math.max(10, Math.min(100, Math.round(highlight)))
+        desktopPreferences.edgeOpacity = Math.max(0, Math.min(desktopPreferences.highlightOpacity, Math.round(edge)))
+        desktopPreferences.sync()
+    }
+    function centerDesktopLyrics() {
+        desktopLyrics.refreshArea()
+        var area = desktopLyrics.availableArea
+        desktopLyrics.x = Math.round(area.x + (area.width - desktopLyrics.width) / 2)
+        desktopLyrics.y = Math.round(area.y + (area.height - desktopLyrics.height) / 2)
+        root.fitWindow(desktopLyrics)
+        desktopPreferences.left = desktopLyrics.x; desktopPreferences.top = desktopLyrics.y
+        desktopPreferences.sync()
+    }
     readonly property var playlistLabels: player.playlists.map(function(p) {
         return { id: p.id, name: p.id === "favorites" ? root.t("收藏夹") : p.name }
     })
@@ -21,12 +35,16 @@ ApplicationWindow {
         property int rowCount: 3
         property int fontSize: 30
         property int themeMode: 0
+        property int highlightOpacity: 100
+        property int edgeOpacity: 35
+        property bool positionLocked: false
         property int left: -10000
         property int top: -10000
         Component.onCompleted: {
             rowCount = root.desktopRowCount(rowCount)
             themeMode = Math.max(0, Math.min(2, themeMode))
             fontSize = Math.max(18, Math.min(48, fontSize))
+            root.setDesktopLyricOpacity(highlightOpacity, edgeOpacity)
             sync()
         }
     }
@@ -38,6 +56,9 @@ ApplicationWindow {
         activeIndex: player.currentLyricIndex
         lineCount: root.desktopRowCount(desktopPreferences.rowCount)
         textSize: Math.max(18, Math.min(48, desktopPreferences.fontSize))
+        highlightOpacity: Math.max(10, Math.min(100, desktopPreferences.highlightOpacity))
+        edgeOpacity: Math.max(0, Math.min(highlightOpacity, desktopPreferences.edgeOpacity))
+        locked: desktopPreferences.positionLocked
         motionEnabled: appearance.animationsEnabled
         themeMode: desktopPreferences.themeMode
         darkStyle: themeMode === 2 || (themeMode === 0 && root.darkMode)
@@ -53,9 +74,11 @@ ApplicationWindow {
         hideText: root.t("隐藏桌面歌词")
         settingsText: root.t("歌词设置")
         lockText: locked ? root.t("解锁位置") : root.t("锁定位置")
-        onLockRequested: locked = !locked
+        onLockRequested: { desktopPreferences.positionLocked = !desktopPreferences.positionLocked; desktopPreferences.sync() }
+        recenterText: root.t("居中歌词")
+        onRecenterRequested: root.centerDesktopLyrics()
         onHideRequested: { desktopPreferences.enabled = false; desktopPreferences.sync() }
-        onSettingsRequested: { root.activateWindow(); root.openDetail("settings"); Qt.callLater(function() { settingsScroll.contentItem.contentY = 0 }) }
+        onSettingsRequested: { root.activateWindow(); root.openDetail("settings"); root.openSettingsPage("floating") }
         onMoved: function(left, top) {
             root.fitWindow(desktopLyrics)
             desktopPreferences.left = Math.round(desktopLyrics.x)
@@ -78,6 +101,26 @@ ApplicationWindow {
     }
     property string section: ""
     property string detail: ""
+    property string settingsPage: ""
+    readonly property var settingsPages: [
+        { key: "general", title: "通用与外观", note: "语言、主题、窗口与动效", glyph: "spark" },
+        { key: "playback", title: "播放与音频", note: "各曲库音质与输出设备", glyph: "volume" },
+        { key: "lyrics", title: "播放器歌词", note: "显示方式、字号与行距", glyph: "lyrics" },
+        { key: "floating", title: "桌面歌词", note: "行数、主题、可见度与位置", glyph: "lyrics" },
+        { key: "shortcuts", title: "快捷键", note: "全局按键与默认设置", glyph: "keyboard" },
+        { key: "service", title: "搜索与服务", note: "结果数量与自定义服务", glyph: "search" },
+        { key: "about", title: "关于浮音", note: "版本与操作提示", glyph: "info" }
+    ]
+    readonly property string settingsTitle: {
+        for (var i = 0; i < settingsPages.length; ++i)
+            if (settingsPages[i].key === settingsPage) return root.t(settingsPages[i].title)
+        return root.t("设置")
+    }
+    function openSettingsPage(page) {
+        settingsPage = page
+        Qt.callLater(function() { settingsScroll.contentItem.contentY = 0 })
+    }
+    onDetailChanged: if (detail !== "settings") settingsPage = ""
     property bool selectingTracks: false
     property var selectedTrackIds: []
     property string searchKind: "songs"
@@ -148,7 +191,7 @@ ApplicationWindow {
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: root.t("浮音 1.4.0-preview · 桌面预览")
+    title: root.t("浮音 1.5.0-preview.2 · 桌面预览")
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -191,6 +234,7 @@ ApplicationWindow {
     function toggleSection(name) { section = section === name ? "" : name; detail = ""; showingOnlinePlaylist = false }
     function openDetail(name) {
         showingOnlinePlaylist = false
+        if (name === "settings") openSettingsPage("")
         if (name === "favorites") { player.selectPlaylist("favorites"); section = "playlist"; detail = ""; return }
         section = "more"; detail = name
         if (name === "rankings" && !player.rankingsLoading && player.rankings.length === 0 && !root.t(player.rankingsMessage).length)
@@ -362,7 +406,30 @@ ApplicationWindow {
         }
     }
     function clock(ms) { var s = Math.floor(ms / 1000); return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60 }
-    function lyricText(text) { return text.replace(/\[(?:\d+:\d+(?:[.:]\d+)?|(?:ar|ti|al|by|offset):[^\]]*)\]/g, "").trim() }
+    function lyricText(text) { return text.replace(/\[(?:\d+:\d+(?:[.:]\d+)?|(?:ar|ti|al|by|offset):[^\]]*)\]/gi, "").trim() }
+    function lyricsForCopy() {
+        var lines = []
+        if (player.lyricLines.length > 0) {
+            for (var i = 0; i < player.lyricLines.length; ++i) {
+                var row = player.lyricLines[i]
+                var original = lyricText(row.original || "")
+                var translated = lyricText(row.translation || "")
+                if (lyricDisplayMode !== 1 && original.length) lines.push(original)
+                if (lyricDisplayMode !== 0 && translated.length) lines.push(translated)
+            }
+            return lines.join("\n")
+        }
+        var source = lyricText(player.lyrics)
+        var translation = lyricText(player.translation)
+        if (lyricDisplayMode === 0) return source
+        if (lyricDisplayMode === 1) return translation
+        return [source, translation].filter(function(text) { return text.length > 0 }).join("\n\n")
+    }
+    function copyText(text) {
+        if (!player.copyText(text || "")) return false
+        copyFeedbackTimer.restart()
+        return true
+    }
     function chooseMusic() { picker.open() }
     function quitApp() { quitting = true; player.quit() }
     Component.onCompleted: {
@@ -382,7 +449,7 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+F"; enabled: root.visible && !root.sheetOpen; onActivated: {root.showingOnlinePlaylist=false;root.openDetail("search");Qt.callLater(function(){(root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning();keywords.forceActiveFocus()})} }
     Shortcut { sequence: "Ctrl+O"; enabled: root.visible && !root.sheetOpen; onActivated: root.chooseMusic() }
     readonly property bool sheetOpen: playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened || queueMenu.opened || historyMenu.opened || playbackRemoval.opened || shortcutCapture.opened
-    Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.closeOnlinePlaylist();else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
+    Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.closeOnlinePlaylist();else if(root.detail === "settings" && root.settingsPage)root.openSettingsPage("");else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
     component Glyph: Canvas {
         id: glyph
         property string kind: "music"
@@ -538,6 +605,9 @@ ApplicationWindow {
         id: pressRow
         hoverEnabled: true
         property bool emphasized: false
+        property bool descriptionHeld: false
+        onPressed: descriptionHeld = false
+        onReleased: Qt.callLater(function() { pressRow.descriptionHeld = false })
         readonly property real visualScale: appearance.animationsEnabled && down ? 0.97 : 1
         padding: 10
         background: Rectangle {
@@ -545,6 +615,36 @@ ApplicationWindow {
             border.width: pressRow.activeFocus ? 2 : 0; border.color: root.accent
             scale: pressRow.visualScale
             Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: pressRow.down ? 80 : 150; easing.type: Easing.OutCubic } }
+        }
+    }
+    component ExpandableDescription: ColumnLayout {
+        id: description
+        property string fullText: ""
+        property string contextKey: ""
+        property bool expanded: false
+        property bool browsing: false
+        property string textName: ""
+        property string toggleName: ""
+        onFullTextChanged: expanded = false
+        onContextKeyChanged: expanded = false
+        Layout.fillWidth: true; spacing: 2
+        Hint {
+            id: descriptionCopy; objectName: description.textName
+            text: description.fullText || root.t("暂无简介")
+            maximumLineCount: description.expanded ? 2147483647 : 3
+            elide: Text.ElideRight
+            TapHandler {
+                gesturePolicy: TapHandler.DragThreshold
+                onLongPressed: if (!description.browsing) root.copyText(description.fullText)
+            }
+        }
+        Action {
+            objectName: description.toggleName
+            visible: description.fullText.length > 0 && (description.expanded || descriptionCopy.truncated)
+            text: description.expanded ? root.t("收起简介") : root.t("展开简介")
+            glyph: description.expanded ? "up" : "down"; quiet: true
+            Layout.alignment: Qt.AlignLeft; implicitHeight: 36
+            onClicked: description.expanded = !description.expanded
         }
     }
     component Field: TextField {
@@ -988,6 +1088,10 @@ ApplicationWindow {
                                         anchors.fill: parent; acceptedButtons: Qt.NoButton
                                         onWheel: function(wheel) { lyricView.manualBrowsing = true; wheel.accepted = false }
                                     }
+                                    TapHandler {
+                                        gesturePolicy: TapHandler.DragThreshold
+                                        onLongPressed: if (!lyricView.dragging && !lyricView.flicking) root.copyText(root.lyricsForCopy())
+                                    }
                                     delegate: Item {
                                         id: lyricRow
                                         required property var modelData
@@ -1057,6 +1161,10 @@ ApplicationWindow {
                                         Component.onCompleted: applyLineSpacing()
                                         onTextChanged: applyLineSpacing()
                                         onFontChanged: applyLineSpacing()
+                                        TapHandler {
+                                            gesturePolicy: TapHandler.DragThreshold
+                                            onLongPressed: root.copyText(root.lyricsForCopy())
+                                        }
                                         Connections {
                                             target: root
                                             function onLyricLineSpacingChanged() { plainLyrics.applyLineSpacing() }
@@ -1093,16 +1201,42 @@ ApplicationWindow {
                                 }
                                 Button {
                                     id: descriptionButton
-                                    Layout.fillWidth: true; implicitHeight: 30; padding: 0
+                                    property bool copiedWhileHeld: false
+                                    property bool expanded: false
+                                    property string contextKey: player.activePlaylist + "\n" + (root.activeList.description || "")
+                                    onContextKeyChanged: expanded = false
+                                    Layout.fillWidth: true; implicitHeight: Math.max(30, contentItem.implicitHeight); padding: 0
                                     Accessible.name: root.t("歌单简介，") + (root.activeList.description || root.t("点击添加简介"))
                                     contentItem: RowLayout {
                                         scale: appearance.animationsEnabled && descriptionButton.down ? 0.97 : 1
                                         Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: descriptionButton.down ? 80 : 150; easing.type: Easing.OutCubic } }
-                                        Copy { text: player.tracks.length + root.t(" 首"); color: root.accent; font.pixelSize: 12 }
-                                        Copy { text: root.activeList.description || root.t("点击添加歌单简介"); Layout.fillWidth: true; Layout.minimumWidth: 0; color: root.muted; font.pixelSize: 12 }
+                                        Copy { text: player.tracks.length + root.t(" 首"); color: root.accent; font.pixelSize: 12; Layout.alignment: Qt.AlignTop }
+                                        Copy { id: localDescriptionCopy; objectName: "localPlaylistDescription"; text: root.activeList.description || root.t("点击添加歌单简介"); Layout.fillWidth: true; Layout.minimumWidth: 0; color: root.muted; font.pixelSize: 12; wrapMode: Text.Wrap; maximumLineCount: descriptionButton.expanded ? 2147483647 : 2; elide: Text.ElideRight }
                                     }
                                     background: Rectangle { radius: 6; color: parent.hovered ? root.selection : "transparent"; border.color: root.accent; border.width: parent.activeFocus ? 2 : 0 }
-                                    onClicked: { descriptionSheet.sourceId = player.activePlaylist; descriptionText.text = root.activeList.description || ""; descriptionSheet.open() }
+                                    onPressed: copiedWhileHeld = false
+                                    onReleased: Qt.callLater(function() { descriptionButton.copiedWhileHeld = false })
+                                    onClicked: {
+                                        if (copiedWhileHeld) return
+                                        descriptionSheet.sourceId = player.activePlaylist
+                                        descriptionText.text = root.activeList.description || ""
+                                        descriptionSheet.open()
+                                    }
+                                    TapHandler {
+                                        gesturePolicy: TapHandler.DragThreshold
+                                        onLongPressed: {
+                                            descriptionButton.copiedWhileHeld = true
+                                            root.copyText(root.activeList.description || "")
+                                        }
+                                    }
+                                }
+                                Action {
+                                    objectName: "localDescriptionToggle"; quiet: true
+                                    visible: !!root.activeList.description && (descriptionButton.expanded || localDescriptionCopy.truncated)
+                                    text: descriptionButton.expanded ? root.t("收起简介") : root.t("展开简介")
+                                    glyph: descriptionButton.expanded ? "up" : "down"; implicitHeight: 36
+                                    Layout.alignment: Qt.AlignLeft
+                                    onClicked: descriptionButton.expanded = !descriptionButton.expanded
                                 }
                                 RowLayout {
                                     visible: !root.selectingTracks; Layout.fillWidth: true; spacing: 6
@@ -1239,9 +1373,9 @@ ApplicationWindow {
                             spacing: 10
                             RowLayout {
                                 visible: root.detail === "settings" && !root.showingOnlinePlaylist; Layout.fillWidth: true
-                                Action { glyph: "back"; text: root.t("更多"); quiet: true; onClicked: root.detail="" }
+                                Action { objectName: "settingsBack"; glyph: "back"; text: root.settingsPage ? root.t("设置") : root.t("更多"); quiet: true; onClicked: { if (root.settingsPage) root.openSettingsPage(""); else root.detail = "" } }
                                 Item { Layout.fillWidth: true }
-                                Copy { text: root.detail==="search" ? root.t("搜索音乐") : root.detail==="favorites" ? root.t("我的收藏") : root.t("设置"); font.weight: Font.DemiBold }
+                                Copy { text: root.settingsTitle; font.weight: Font.DemiBold }
                             }
                             StackLayout {
                                 Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 0
@@ -1332,9 +1466,18 @@ ApplicationWindow {
                                                     Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: onlineResult.down ? 80 : 150; easing.type: Easing.OutCubic } }
                                                     Copy { text: onlineResult.modelData.name; Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold; wrapMode: Text.Wrap; maximumLineCount: 2 }
                                                     Copy { objectName: "playlistResultMetadata"; text: root.onlineSourceName(onlineResult.modelData) + " · " + onlineResult.modelData.trackCount + root.t(" 首") + (onlineResult.modelData.creator ? " · " + onlineResult.modelData.creator : ""); Layout.fillWidth: true; Layout.minimumWidth: 0; wrapMode: Text.Wrap; maximumLineCount: 2; color: root.muted; font.pixelSize: 12 }
-                                                    Copy { text: onlineResult.modelData.description || root.t("暂无简介"); Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+                                                    Copy {
+                                                        text: onlineResult.modelData.description || root.t("暂无简介"); Layout.fillWidth: true; color: root.muted; font.pixelSize: 12
+                                                        TapHandler {
+                                                            gesturePolicy: TapHandler.DragThreshold
+                                                            onLongPressed: {
+                                                                onlineResult.descriptionHeld = true
+                                                                if (!playlistResults.dragging && !playlistResults.flicking) root.copyText(onlineResult.modelData.description || "")
+                                                            }
+                                                        }
+                                                    }
                                                 }
-                                                onClicked: root.openOnlinePlaylist(modelData.id, "search")
+                                                onClicked: if (!descriptionHeld) root.openOnlinePlaylist(modelData.id, "search")
                                             }
                                             footer: Item {
                                                 width: playlistResults.width; height: playlistResults.count === 0 ? 80 : 0
@@ -1349,7 +1492,30 @@ ApplicationWindow {
                                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                     ColumnLayout {
                                         width: settingsScroll.availableWidth; spacing: 8
-                                        SettingsHeading { label: root.t("语言与桌面歌词"); glyph: "lyrics"; Layout.topMargin: 0 }
+                                        ColumnLayout {
+                                            objectName: "settingsIndex"; visible: root.settingsPage === ""; Layout.fillWidth: true; spacing: 4
+                                            Repeater {
+                                                model: root.settingsPages
+                                                delegate: PressRow {
+                                                    required property var modelData
+                                                    objectName: "settingsCategory_" + modelData.key
+                                                    Layout.fillWidth: true; implicitHeight: Math.max(64, contentItem.implicitHeight + 20)
+                                                    Accessible.name: root.t(modelData.title) + ", " + root.t(modelData.note)
+                                                    contentItem: RowLayout {
+                                                        spacing: 12
+                                                        Glyph { kind: modelData.glyph; tint: root.accent; Layout.preferredWidth: 20; Layout.preferredHeight: 20 }
+                                                        ColumnLayout {
+                                                            Layout.fillWidth: true; spacing: 3
+                                                            Copy { text: root.t(modelData.title); font.weight: Font.DemiBold; Layout.fillWidth: true }
+                                                            Hint { text: root.t(modelData.note); font.pixelSize: 12; Layout.fillWidth: true }
+                                                        }
+                                                        Glyph { kind: "forward"; tint: root.muted; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
+                                                    }
+                                                    onClicked: root.openSettingsPage(modelData.key)
+                                                }
+                                            }
+                                        }
+                                        ColumnLayout { property string settingsKey: "general"; visible: root.settingsPage === "general"; Layout.fillWidth: true; spacing: 8
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 10
                                             Copy { text: root.t("界面语言"); Layout.preferredWidth: 90; font.pixelSize: 13 }
@@ -1359,6 +1525,8 @@ ApplicationWindow {
                                                 onActivated: function(index) { root.setUiLanguage(index === 1 ? "en" : "zh_CN") }
                                             }
                                         }
+                                        }
+                                        ColumnLayout { property string settingsKey: "floating"; visible: root.settingsPage === "floating"; Layout.fillWidth: true; spacing: 8
                                         RowLayout {
                                             Layout.fillWidth: true
                                             Copy { text: root.t("桌面歌词"); Layout.fillWidth: true; font.pixelSize: 13 }
@@ -1399,7 +1567,38 @@ ApplicationWindow {
                                             onMoved: { desktopPreferences.fontSize = Math.round(value); desktopPreferences.sync() }
                                             Binding { target: desktopTextSize; property: "value"; value: desktopLyrics.textSize; when: !desktopTextSize.pressed }
                                         }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Copy { text: root.t("高亮歌词可见度"); Layout.fillWidth: true; font.pixelSize: 13 }
+                                            Copy { text: desktopLyrics.highlightOpacity + "%"; color: root.muted; font.pixelSize: 12 }
+                                        }
+                                        TrackSlider {
+                                            id: desktopHighlightOpacity; objectName: "desktopLyricHighlightOpacity"; Layout.fillWidth: true; implicitHeight: 44
+                                            from: 10; to: 100; stepSize: 1; Accessible.name: root.t("高亮歌词可见度")
+                                            onMoved: root.setDesktopLyricOpacity(value, desktopPreferences.edgeOpacity)
+                                            Binding { target: desktopHighlightOpacity; property: "value"; value: desktopLyrics.highlightOpacity; when: !desktopHighlightOpacity.pressed }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Copy { text: root.t("边缘歌词可见度"); Layout.fillWidth: true; font.pixelSize: 13 }
+                                            Copy { text: desktopLyrics.edgeOpacity + "%"; color: root.muted; font.pixelSize: 12 }
+                                        }
+                                        TrackSlider {
+                                            id: desktopEdgeOpacity; objectName: "desktopLyricEdgeOpacity"; Layout.fillWidth: true; implicitHeight: 44
+                                            from: 0; to: desktopLyrics.highlightOpacity; stepSize: 1; enabled: desktopLyrics.lineCount > 1; Accessible.name: root.t("边缘歌词可见度")
+                                            onMoved: root.setDesktopLyricOpacity(desktopPreferences.highlightOpacity, value)
+                                            Binding { target: desktopEdgeOpacity; property: "value"; value: desktopLyrics.edgeOpacity; when: !desktopEdgeOpacity.pressed }
+                                        }
+                                        Hint { text: root.t("100% 最清晰，0% 完全透明；中间各行逐级渐变，单行时仅使用高亮可见度。") }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Copy { text: root.t("锁定歌词位置"); Layout.fillWidth: true; font.pixelSize: 13 }
+                                            Switch { objectName: "desktopLyricPositionLock"; checked: desktopPreferences.positionLocked; Accessible.name: root.t("锁定歌词位置"); onToggled: { desktopPreferences.positionLocked = checked; desktopPreferences.sync() } }
+                                            Action { objectName: "desktopLyricRecenter"; text: root.t("居中歌词"); implicitHeight: 44; onClicked: root.centerDesktopLyrics() }
+                                        }
                                         Hint { text: root.t("拖动歌词文字移动，文字外点击穿透。右键可切换主题、锁定位置或隐藏；空间不足时自动缩小文字。") }
+                                        }
+                                        ColumnLayout { property string settingsKey: "playback"; visible: root.settingsPage === "playback"; Layout.fillWidth: true; spacing: 8
                                         SettingsHeading { label: root.t("播放音质"); glyph: "volume"; Layout.topMargin: 0 }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 10
@@ -1433,7 +1632,8 @@ ApplicationWindow {
                                             }
                                             Action { glyph: "refresh"; quiet: true; Accessible.name: root.t("刷新输出设备"); ToolTip.text: Accessible.name; onClicked: player.refreshOutputs() }
                                         }
-                                        SettingsHeading { label: root.t("歌词"); glyph: "lyrics" }
+                                        }
+                                        ColumnLayout { property string settingsKey: "lyrics"; visible: root.settingsPage === "lyrics"; Layout.fillWidth: true; spacing: 8
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 10
                                             Copy { text: root.t("显示方式"); Layout.preferredWidth: root.languageCode === "en" ? 106 : 70; font.pixelSize: 13 }
@@ -1470,6 +1670,8 @@ ApplicationWindow {
                                             lineHeight: root.lyricLineSpacing; lineHeightMode: Text.ProportionalHeight
                                             font.pixelSize: root.lyricFontSize + 2; font.weight: Font.DemiBold; color: root.accent; wrapMode: Text.Wrap
                                         }
+                                        }
+                                        ColumnLayout { property string settingsKey: "general"; visible: root.settingsPage === "general"; Layout.fillWidth: true; spacing: 8
                                         SettingsHeading { label: root.t("外观"); glyph: "spark" }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 10
@@ -1524,7 +1726,8 @@ ApplicationWindow {
                                             Hint { text: root.t("透明度只影响背景。") }
                                             Action { objectName: "resetAppearanceButton"; text: root.t("重置外观"); quiet: true; Accessible.name: root.t("恢复窗口大小、背景和位置"); onClicked: root.resetAppearance() }
                                         }
-                                        SettingsHeading { label: root.t("全局快捷键"); glyph: "keyboard" }
+                                        }
+                                        ColumnLayout { property string settingsKey: "shortcuts"; visible: root.settingsPage === "shortcuts"; Layout.fillWidth: true; spacing: 8
                                         Hint { text: player.shortcuts.nativeEnabled ? root.t("其他程序在前台时也可使用。点击组合键录入新设置。") : root.t("当前环境不启用全局按键；仍可保存快捷键设置。") }
                                         Repeater {
                                             model: player.shortcuts.bindings
@@ -1563,7 +1766,8 @@ ApplicationWindow {
                                         }
                                         Hint { objectName: "shortcutSettingsMessage"; visible: player.shortcuts.message.length > 0; text: root.t(player.shortcuts.message); color: root.danger }
                                         Action { objectName: "resetShortcutDefaults"; text: root.t("恢复全部默认快捷键"); quiet: true; Layout.fillWidth: true; onClicked: player.shortcuts.resetDefaults() }
-                                        SettingsHeading { label: root.t("搜索与服务"); glyph: "search" }
+                                        }
+                                        ColumnLayout { property string settingsKey: "service"; visible: root.settingsPage === "service"; Layout.fillWidth: true; spacing: 8
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 8
                                             Copy { text: root.t("结果数量"); Layout.fillWidth: true; font.pixelSize: 13 }
@@ -1598,8 +1802,11 @@ ApplicationWindow {
                                             }
                                             Hint { text: root.t(player.searchMessage); visible: text.length > 0 }
                                         }
-                                        SettingsHeading { label: root.t("浮音 1.4.0-preview"); glyph: "info" }
+                                        }
+                                        ColumnLayout { property string settingsKey: "about"; visible: root.settingsPage === "about"; Layout.fillWidth: true; spacing: 8
+                                        SettingsHeading { label: root.t("浮音 1.5.0-preview.2"); glyph: "info"; Layout.topMargin: 0 }
                                         Hint { text: root.t("Windows 桌面预览 · 拖动顶部移动窗口\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起") }
+                                        }
                                     }
                                 }
                                 Item {
@@ -1670,11 +1877,20 @@ ApplicationWindow {
                                                     Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
                                                     Copy { text: rankingResult.modelData.name; Layout.fillWidth: true; Layout.minimumWidth: 0; font.pixelSize: 14; font.weight: Font.DemiBold; wrapMode: Text.Wrap; maximumLineCount: 2 }
                                                     Copy { objectName: "rankingResultMetadata"; text: root.onlineSourceName(rankingResult.modelData) + (rankingResult.modelData.updateFrequency ? " · " + rankingResult.modelData.updateFrequency : "") + (rankingResult.modelData.trackCount >= 0 ? " · " + rankingResult.modelData.trackCount + root.t(" 首") : ""); Layout.fillWidth: true; Layout.minimumWidth: 0; wrapMode: Text.Wrap; maximumLineCount: 2; color: rankingResult.emphasized ? root.accent : root.muted; font.pixelSize: 12 }
-                                                    Copy { text: rankingResult.modelData.description || rankingResult.modelData.creator || root.t("点击查看榜单歌曲"); Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+                                                    Copy {
+                                                        text: rankingResult.modelData.description || rankingResult.modelData.creator || root.t("点击查看榜单歌曲"); Layout.fillWidth: true; color: root.muted; font.pixelSize: 12
+                                                        TapHandler {
+                                                            gesturePolicy: TapHandler.DragThreshold
+                                                            onLongPressed: {
+                                                                rankingResult.descriptionHeld = true
+                                                                if (!rankingResults.dragging && !rankingResults.flicking) root.copyText(rankingResult.modelData.description || "")
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                                 Glyph { kind: "forward"; tint: root.muted; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
                                             }
-                                            onClicked: root.openOnlinePlaylist(modelData.id, "rankings")
+                                            onClicked: if (!descriptionHeld) root.openOnlinePlaylist(modelData.id, "rankings")
                                         }
                                         footer: ColumnLayout {
                                             width: rankingResults.width - 12; spacing: 10
@@ -1703,7 +1919,11 @@ ApplicationWindow {
                                             }
                                             Copy { objectName: "onlinePlaylistMetadata"; text: root.onlineSourceName(player.onlinePlaylist) + (player.onlinePlaylist.kind === "ranking" || root.onlinePlaylistSource === "rankings" ? root.t(" · 榜单") : root.t(" · 歌单")) + " · " + (player.onlinePlaylist.trackCount || 0) + root.t(" 首") + (onlineTracks.count !== (player.onlinePlaylist.trackCount || 0) ? root.t(" · 已读取 ") + onlineTracks.count + root.t(" 首") : ""); Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.accent; font.pixelSize: 12 }
                                             Hint { objectName: "onlinePlaylistCreator"; text: (player.onlinePlaylist.creator || "") + (player.onlinePlaylist.updateFrequency ? (player.onlinePlaylist.creator ? " · " : "") + player.onlinePlaylist.updateFrequency : ""); visible: text.length > 0 }
-                                            Hint { text: player.onlinePlaylist.description || root.t("暂无简介"); maximumLineCount: 5; elide: Text.ElideRight }
+                                            ExpandableDescription {
+                                                fullText: player.onlinePlaylist.description || ""; contextKey: player.onlinePlaylist.id || ""
+                                                browsing: onlineTracks.dragging || onlineTracks.flicking
+                                                textName: "onlinePlaylistDescription"; toggleName: "onlineDescriptionToggle"
+                                            }
                                             Hint { text: root.t(player.onlinePlaylist.warning || ""); visible: text.length > 0; color: root.danger }
                                             Hint { text: player.onlinePlaylistLoading ? root.t("正在读取歌单与歌曲…") : root.t(player.libraryMessage); visible: text.length > 0 }
                                             Hint { text: root.t(player.playbackMessage); visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
@@ -2198,6 +2418,15 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent; radius: 20 * root.contentScale; color: "transparent"
         border.color: drop.containsDrag ? root.accent : root.line; border.width: drop.containsDrag ? 2 : 1
+    }
+    Timer { id: copyFeedbackTimer; interval: 1400 }
+    Rectangle {
+        objectName: "copyFeedback"
+        z: 2000; visible: copyFeedbackTimer.running
+        anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 22
+        width: Math.min(parent.width - 32, copyFeedbackLabel.implicitWidth + 28); height: copyFeedbackLabel.implicitHeight + 16
+        radius: 9; color: root.ink
+        Text { id: copyFeedbackLabel; anchors.centerIn: parent; text: root.t("已复制"); textFormat: Text.PlainText; font: root.font; color: root.surface }
     }
     MouseArea {
         anchors.right: parent.right; anchors.bottom: parent.bottom

@@ -51,6 +51,9 @@ static QVariantMap shortcutRow(QObject *shortcuts, const QString &action) {
 
 static void reveal(QQuickItem *item) {
     if (!item) return;
+    for(auto *group=item->parentItem();group;group=group->parentItem())if(group->property("settingsKey").isValid()){
+        item->window()->setProperty("settingsPage",group->property("settingsKey"));QTest::qWait(40);break;
+    }
     QTest::qWait(30); // Rebuilt model rows need a layout frame before their scroll position is known.
     for (auto *ancestor = item->parentItem(); ancestor; ancestor = ancestor->parentItem()) {
         if (!ancestor->property("contentY").isValid()) continue;

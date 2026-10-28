@@ -39,13 +39,27 @@ public final class LyricWindowRegressionTest extends Instrumentation {
     }
     @Override public void onStart(){
         screenshotDirectory=new File(getTargetContext().getExternalFilesDir(null),"run-"+SystemClock.uptimeMillis());screenshotDirectory.mkdirs();
-        String[] cases=selectedCases.isEmpty()?new String[]{"floating-no-motion-identity","floating-animated-identity","floating-horizontal-anchor","floating-ui-refresh","floating-stable-raster","floating-stable-surfaces","floating-nine-line-surfaces","floating-idle-stops","floating-touch-through","floating-cross-app-touch","floating-frame-pacing","floating-nine-frame-pacing","player-frame-pacing","player-long-frame-pacing","player-idle-layout","player-animated-follow","player-neighbor-follow","player-manual-return","player-no-motion-return","player-accessible-browse","player-no-motion-follow"}:selectedCases.split(",");int passed=0;
+        String[] cases=selectedCases.isEmpty()?new String[]{"player-bottom-visible","player-description-fold","player-settings-navigation","floating-empty-touch-through","floating-opacity-settings","floating-lock-recenter","floating-settings-ui","floating-drag-cache","floating-cache-invalidation","player-rebuild-no-lyrics","floating-no-motion-identity","floating-animated-identity","floating-horizontal-anchor","floating-ui-refresh","floating-stable-raster","floating-stable-surfaces","floating-nine-line-surfaces","floating-idle-stops","floating-touch-through","floating-cross-app-touch","floating-frame-pacing","floating-nine-frame-pacing","player-frame-pacing","player-long-frame-pacing","player-idle-layout","player-animated-follow","player-neighbor-follow","player-manual-return","player-no-motion-return","player-accessible-browse","player-no-motion-follow","player-copy-all","player-copy-description","player-copy-drag","player-copy-ranking"}:selectedCases.split(",");int passed=0;
         for(String scene:cases){
             Bundle progress=new Bundle();progress.putString("currentCase",scene);sendStatus(0,progress);
             try{
                 boolean motion=!scene.equals("floating-no-motion-identity")&&!scene.equals("floating-horizontal-anchor")&&!scene.startsWith("player-no-motion-");
                 runOnMainSync(()->prepare(motion,scene.equals("floating-horizontal-anchor")?.20f:.5f));SystemClock.sleep(500);
-                if(scene.equals("player-idle-layout"))testPlayerIdle();
+                if(scene.equals("player-description-fold"))testDescriptionFold();
+                else if(scene.equals("player-settings-navigation"))testSettingsNavigation();
+                else if(scene.equals("player-copy-ranking"))testCopyRanking();
+                else if(scene.equals("player-copy-drag"))testCopyDrag();
+                else if(scene.equals("player-copy-all"))testCopyAllLyrics();
+                else if(scene.equals("player-copy-description"))testCopyDescription();
+                else if(scene.equals("player-bottom-visible"))testPlayerBottom();
+                else if(scene.equals("floating-empty-touch-through"))testEmptyTouchThrough();
+                else if(scene.equals("floating-settings-ui"))testFloatingSettingsUi();
+                else if(scene.equals("floating-opacity-settings"))testOpacitySettings();
+                else if(scene.equals("floating-lock-recenter"))testLockRecenter();
+                else if(scene.equals("player-rebuild-no-lyrics"))testPlayerRebuild();
+                else if(scene.equals("floating-drag-cache"))testDragCache();
+                else if(scene.equals("floating-cache-invalidation"))testCacheInvalidation();
+                else if(scene.equals("player-idle-layout"))testPlayerIdle();
                 else if(scene.equals("player-accessible-browse"))testAccessibleBrowse();
                 else if(scene.endsWith("frame-pacing")){
                     if(scene.contains("nine")){runOnMainSync(()->context.getSharedPreferences("window",0).edit().putInt("desktopLyricsRows",9).apply());SystemClock.sleep(300);}
@@ -127,6 +141,126 @@ public final class LyricWindowRegressionTest extends Instrumentation {
         int[] draws={0};runOnMainSync(()->((View)get(floating,"drawing")).getViewTreeObserver().addOnDrawListener(()->draws[0]++));
         for(int i=0;i<4;i++){SystemClock.sleep(100);runOnMainSync(()->next(3000));}
         require(draws[0]==0,"position ticks between lyric lines do not wake the drawing surface");
+    }
+    private void testOpacitySettings(){
+        runOnMainSync(()->{
+            context.getSharedPreferences("window",0).edit().putInt("desktopLyricsRows",5).putInt("desktopLyricsHighlightOpacity",80).putInt("desktopLyricsEdgeOpacity",20).apply();
+            next(10000);
+        });SystemClock.sleep(400);
+        runOnMainSync(()->{
+            require(Math.abs(((Number)get(visible().get("Line 10"),"opacity")).floatValue()-.8f)<.001f,"current row uses saved opacity");
+            require(Math.abs(((Number)get(visible().get("Line 9"),"opacity")).floatValue()-.5f)<.001f,"middle row interpolates both endpoints");
+            View outer=visible().get("Line 8");require(outer!=null,"edge row exists");require(Math.abs(((Number)get(outer,"opacity")).floatValue()-.2f)<.001f,"outer row uses saved edge opacity");
+            View layer=(View)get(floating,"drawing");Bitmap bitmap=Bitmap.createBitmap(layer.getWidth(),layer.getHeight(),Bitmap.Config.ARGB_8888);layer.draw(new android.graphics.Canvas(bitmap));
+            android.graphics.Rect bounds=glyphBounds(outer);android.view.WindowManager.LayoutParams p=(android.view.WindowManager.LayoutParams)get(floating,"drawingParams");int maximum=0;
+            for(int y=Math.max(0,bounds.top-p.y);y<Math.min(bitmap.getHeight(),bounds.bottom-p.y);y++)for(int x=Math.max(0,bounds.left-p.x);x<Math.min(bitmap.getWidth(),bounds.right-p.x);x++)maximum=Math.max(maximum,android.graphics.Color.alpha(bitmap.getPixel(x,y)));
+            bitmap.recycle();require(maximum>=45&&maximum<=53,"edge opacity is applied to actual drawing pixels");
+            next(11000);
+        });SystemClock.sleep(60);
+        runOnMainSync(()->{
+            Object animator=get(floating,"scroll");require(animator!=null&&((android.animation.ValueAnimator)animator).isRunning(),"adjust opacity during actual animation");
+            float before=((Number)get(floating,"centerIndex")).floatValue();Object raster=get(visible().get("Line 10"),"normal");
+            context.getSharedPreferences("window",0).edit().putInt("desktopLyricsHighlightOpacity",60).apply();
+            require(get(floating,"scroll")==animator&&((android.animation.ValueAnimator)animator).isRunning(),"opacity change preserves the running animator");
+            require(Math.abs(((Number)get(floating,"centerIndex")).floatValue()-before)<.0001f,"opacity change does not snap the current position");
+            require(get(visible().get("Line 10"),"normal")==raster,"opacity change reuses the text raster");
+        });SystemClock.sleep(350);
+        runOnMainSync(()->{
+            context.getSharedPreferences("window",0).edit().putInt("desktopLyricsEdgeOpacity",0).apply();
+            View outer=(View)((Map<?,?>)get(floating,"windows")).get(9);require(outer!=null,"transparent edge keeps lyric identity");
+            android.graphics.Rect at=glyphBounds(outer);android.graphics.Region touch=(android.graphics.Region)get(get(floating,"drawing"),"touchRegion");android.view.WindowManager.LayoutParams p=(android.view.WindowManager.LayoutParams)get(floating,"drawingParams");
+            require(!touch.contains(Math.round(at.exactCenterX())-p.x,Math.round(at.exactCenterY())-p.y),"zero-opacity edge does not block taps");
+            floating.close();floating=new FloatingLyricsWindow(service);floating.update(state,ui);
+            require(Math.abs(((Number)get(visible().get("Line 11"),"opacity")).floatValue()-.6f)<.001f,"opacity persists when recreating the window");
+        });
+    }
+    private void testLockRecenter(){
+        runOnMainSync(()->context.getSharedPreferences("window",0).edit().putBoolean("desktopLyricsLocked",true).apply());
+        float[] center={0};runOnMainSync(()->center[0]=((Number)get(floating,"centerX")).floatValue());
+        runOnMainSync(()->{View target=(View)get(floating,"drawing");long down=SystemClock.uptimeMillis();for(int action:new int[]{0,2,1}){android.view.MotionEvent event=android.view.MotionEvent.obtain(down,down+action+1,action,200+(action==0?0:60),100,0);target.dispatchTouchEvent(event);event.recycle();}});
+        runOnMainSync(()->{
+            require(Math.abs(((Number)get(floating,"centerX")).floatValue()-center[0])<.001f,"locked lyrics resist dragging");
+            context.getSharedPreferences("window",0).edit().putFloat("desktopLyricsX",.1f).putFloat("desktopLyricsY",.1f).apply();
+            invoke(floating,"recenter");android.graphics.Rect area=(android.graphics.Rect)get(floating,"area");
+            require(Math.abs(((Number)get(floating,"centerX")).floatValue()-area.exactCenterX())<1,"recenter restores horizontal position");
+            require(Math.abs(context.getSharedPreferences("window",0).getFloat("desktopLyricsY",0)-.5f)<.001f,"center position is persisted");
+            require(context.getSharedPreferences("window",0).getBoolean("desktopLyricsLocked",false),"recenter preserves lock");
+        });
+    }
+    private void testFloatingSettingsUi(){
+        runOnMainSync(()->{overlay=new OverlayWindow(service);set(overlay,"ui",ui);set(overlay,"playback",state);overlay.openLyricSettings();});SystemClock.sleep(400);
+        for(String language:new String[]{"zh_CN","en"})for(int mode:new int[]{1,2}){
+            runOnMainSync(()->{UiStrings.setLanguage(context,language);context.getSharedPreferences("appearance",0).edit().putInt("mode",mode).apply();overlay.configurationChanged();});SystemClock.sleep(200);
+            runOnMainSync(()->{
+                View root=(View)get(overlay,"window");android.widget.SeekBar high=root.findViewWithTag("desktopLyricsHighlightOpacity"),edge=root.findViewWithTag("desktopLyricsEdgeOpacity");
+                require(high!=null&&edge!=null,"both opacity sliders exist in the actual settings");require(high.getHeight()>=40*context.getResources().getDisplayMetrics().density,"slider keeps a usable touch height");
+                high.setProgress(0);high.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,new android.view.KeyEvent(0,android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
+                int peak=context.getSharedPreferences("window",0).getInt("desktopLyricsHighlightOpacity",100);
+                require(peak>=10&&peak<100,"keyboard adjustment writes current-line opacity");require(edge.getProgress()<=peak&&edge.getMax()==peak,"edge control follows the current opacity limit");
+                require(context.getSharedPreferences("window",0).getInt("desktopLyricsEdgeOpacity",35)<=peak,"clamped edge is saved with the current opacity");
+                require(high.getContentDescription().toString().equals(UiStrings.text("高亮歌词可见度")),"visible controls follow the selected language");
+                ((ScrollView)get(overlay,"detailScroll")).scrollTo(0,Math.max(0,high.getTop()-Math.round(30*context.getResources().getDisplayMetrics().density)));
+            });SystemClock.sleep(160);capture("v15-native-settings-"+language+"-"+mode);
+            runOnMainSync(()->{View root=(View)get(overlay,"window");android.widget.SeekBar edge=root.findViewWithTag("desktopLyricsEdgeOpacity");((ScrollView)get(overlay,"detailScroll")).scrollTo(0,edge.getTop());});SystemClock.sleep(160);capture("v15-native-position-"+language+"-"+mode);
+        }
+    }
+    private void testEmptyTouchThrough(){
+        crossAppInput=true;final int[] taps={0};
+        android.content.BroadcastReceiver receiver=new android.content.BroadcastReceiver(){@Override public void onReceive(Context c,android.content.Intent intent){taps[0]++;}};
+        android.content.IntentFilter filter=new android.content.IntentFilter("org.floatmusic.lyricfixture.TAP");
+        if(android.os.Build.VERSION.SDK_INT>=33)getTargetContext().registerReceiver(receiver,filter,Context.RECEIVER_EXPORTED);else getTargetContext().registerReceiver(receiver,filter);
+        try{
+            getTargetContext().startActivity(new android.content.Intent().setComponent(new android.content.ComponentName("org.floatmusic.lyricbackdrop",Backdrop.class.getName())).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));SystemClock.sleep(300);
+            float[] point={0,0};runOnMainSync(()->{
+                context.getSharedPreferences("window",0).edit().putInt("desktopLyricsEdgeOpacity",0).apply();
+                try{JSONArray lines=new JSONArray(ui.getJSONArray("lyricLines").toString());lines.getJSONObject(3).put("original","");ui=new JSONObject(ui.toString()).put("lyricLines",lines);}catch(Exception e){throw new RuntimeException(e);}
+                floating.update(state,ui);require(visible().isEmpty(),"no text is visible in this timestamp slot");
+                android.view.WindowManager.LayoutParams p=(android.view.WindowManager.LayoutParams)get(floating,"drawingParams");point[0]=p.x+p.width/2f;point[1]=p.y+p.height/2f;
+            });SystemClock.sleep(200);touch(point[0],point[1],false);require(taps[0]==1,"an initially empty lyric surface passes clicks to another app");
+        }finally{crossAppInput=false;getTargetContext().unregisterReceiver(receiver);try{getUiAutomation().executeShellCommand("am force-stop org.floatmusic.lyricbackdrop").close();}catch(Exception ignored){}}
+    }
+    private void testDragCache(){
+        int[] rebuilt={0},moves={0};long[] elapsed={0};
+        runOnMainSync(()->{
+            context.getSharedPreferences("window",0).edit().putInt("desktopLyricsRows",9).apply();
+            try{JSONArray lines=new JSONArray();for(int i=0;i<36;i++)lines.put(new JSONObject().put("time",i*1000).put("original","Line "+i));ui=new JSONObject(ui.toString()).put("lyricLines",lines);}catch(Exception e){throw new RuntimeException(e);}
+            floating.update(state,ui);
+            Map<Object,Object> bitmaps=new LinkedHashMap<>();for(Object glyph:((Map<?,?>)get(floating,"windows")).values())bitmaps.put(glyph,get(glyph,"normal"));
+            View target=(View)get(floating,"drawing");long down=SystemClock.uptimeMillis();
+            android.view.MotionEvent event=android.view.MotionEvent.obtain(down,down,android.view.MotionEvent.ACTION_DOWN,200,100,0);target.dispatchTouchEvent(event);event.recycle();
+            long started=System.nanoTime();
+            for(int i=0;i<80;i++){
+                event=android.view.MotionEvent.obtain(down,down+i+1,android.view.MotionEvent.ACTION_MOVE,240+i%20,100,0);target.dispatchTouchEvent(event);event.recycle();moves[0]++;
+                for(Object glyph:bitmaps.keySet()){Object bitmap=get(glyph,"normal");if(bitmap!=bitmaps.get(glyph)){rebuilt[0]+=2;bitmaps.put(glyph,bitmap);}}
+            }
+            elapsed[0]=System.nanoTime()-started;
+            event=android.view.MotionEvent.obtain(down,down+81,android.view.MotionEvent.ACTION_UP,259,100,0);target.dispatchTouchEvent(event);event.recycle();
+        });
+        report.append("TRACE drag moves=").append(moves[0]).append(", bitmap allocations=").append(rebuilt[0]).append(", mainThreadMs=").append(elapsed[0]/1000000.0).append('\n');
+        require(rebuilt[0]==0,"moving short lyrics horizontally must reuse unchanged text bitmaps");
+    }
+    private void testCacheInvalidation(){
+        runOnMainSync(()->{
+            Object glyph=visible().get("Line 3");require(glyph!=null,"active glyph exists");
+            Bitmap original=(Bitmap)get(glyph,"normal");float font=((android.graphics.Paint)get(glyph,"paint")).getTextSize();float center=((Number)get(floating,"centerX")).floatValue();
+            android.graphics.Rect area=(android.graphics.Rect)get(floating,"area");set(floating,"centerX",area.left+32f);invoke(floating,"render");
+            require(get(glyph,"normal")!=original,"narrow anchor refits text");require(((android.graphics.Paint)get(glyph,"paint")).getTextSize()<font,"constrained text shrinks");
+            set(floating,"centerX",center);invoke(floating,"render");require(Math.abs(((android.graphics.Paint)get(glyph,"paint")).getTextSize()-font)<.01f,"expanding available width restores full text size");
+            Object normal=get(glyph,"normal");context.getSharedPreferences("window",0).edit().putInt("desktopLyricsTheme",2).apply();
+            require(get(glyph,"normal")!=normal,"theme changes invalidate raster colors");
+            normal=get(glyph,"normal");context.getSharedPreferences("window",0).edit().putInt("desktopLyricsFont",36).apply();require(get(glyph,"normal")!=normal,"font changes invalidate glyph size");
+        });
+    }
+    private void testPlayerRebuild(){
+        testPlayer(true,true);
+        runOnMainSync(()->{try{state=new JSONObject(state.toString()).put("position",16000);overlay.update(state);}catch(Exception e){throw new RuntimeException(e);}});SystemClock.sleep(55);
+        runOnMainSync(()->{
+            android.animation.ValueAnimator previous=(android.animation.ValueAnimator)get(overlay,"lyricFollow");require(previous!=null&&previous.isRunning(),"replace lyrics during a running scroll");
+            try{ui=new JSONObject().put("lyricTrack","replacement").put("lyricLines",new JSONArray()).put("lyrics","").put("translation","").put("lyricsMessage","暂无逐句歌词");state=new JSONObject(state.toString()).put("currentTrack","replacement").put("position",0);}catch(Exception e){throw new RuntimeException(e);}
+            overlay.update(state);overlay.refreshData(ui);
+            require(!previous.isRunning(),"rebuilding lyrics cancels the previous track's animator");require(get(overlay,"lyricFollow")==null,"no stale follow animator remains");
+        });
+        for(int i=0;i<8;i++){SystemClock.sleep(16);runOnMainSync(()->{require(((View)get(overlay,"lyricRows")).getTranslationY()==0,"new empty state has no stale subpixel offset");require(((ScrollView)get(overlay,"lyricScroll")).getScrollY()==0,"new empty state remains visible at the top");});}
     }
     /** Measures the same native views on a real display, including input-window work. */
     private void testFramePacing(boolean player,boolean longLines){
@@ -263,6 +397,118 @@ public final class LyricWindowRegressionTest extends Instrumentation {
         runOnMainSync(()->{require(((ScrollView)get(overlay,"lyricScroll")).getScrollY()==0,"manual browsing is not pulled back by playback ticks");View back=(View)get(overlay,"lyricReturn");require(back.getVisibility()==View.VISIBLE,"manual browsing offers return-to-current");back.performClick();});
         SystemClock.sleep(650);
         runOnMainSync(()->{require(((ScrollView)get(overlay,"lyricScroll")).getScrollY()>200,"return resumes follow at the current sentence");require(!(Boolean)get(overlay,"manualLyrics"),"return restores automatic follow");});
+    }
+    private void testPlayerBottom(){
+        for(int font:new int[]{16,18,30})for(float spacing:new float[]{.8f,1f,1.5f}){
+            runOnMainSync(()->{
+                if(floating!=null){floating.close();floating=null;}if(overlay!=null)overlay.close();
+                context.getSharedPreferences("window",0).edit().putInt("lyricMode",font==16?0:2).putInt("lyricFontSize",font).putFloat("lyricLineSpacing",spacing).apply();
+                try{JSONArray lines=new JSONArray();for(int i=0;i<48;i++)lines.put(new JSONObject().put("time",i*1000).put("original",i==47?"最后一句完整显示":"向前走，第 "+i+" 句").put("translation",font==16?"":i==47?"The final lyric, including gyp and its descending strokes, stays fully visible.":"Keep moving · "+i));ui=new JSONObject(ui.toString()).put("lyricLines",lines);}catch(Exception e){throw new RuntimeException(e);}
+                overlay=new OverlayWindow(service);set(overlay,"ui",ui);set(overlay,"playback",state);overlay.show();invoke(overlay,"expand");invoke(overlay,"toggle",new Class<?>[]{String.class},"lyrics");
+            });SystemClock.sleep(450);
+            swipePlayerLyrics(true);swipePlayerLyrics(false);swipePlayerLyrics(true);
+            runOnMainSync(()->{ScrollView viewport=(ScrollView)get(overlay,"lyricScroll");viewport.fling(10000);});SystemClock.sleep(1200);
+            runOnMainSync(()->{
+                java.util.List<?> texts=(java.util.List<?>)get(overlay,"lyricTexts");android.widget.TextView last=(android.widget.TextView)texts.get(texts.size()-1);ScrollView viewport=(ScrollView)get(overlay,"lyricScroll");View rows=(View)get(overlay,"lyricRows");
+                android.graphics.Rect clip=new android.graphics.Rect();boolean shown=last.getGlobalVisibleRect(clip);android.text.Layout layout=last.getLayout();int textBottom=last.getPaddingTop()+layout.getLineBottom(layout.getLineCount()-1);int[] at=new int[2];last.getLocationInWindow(at);float actualBottom=at[1]+textBottom*last.getScaleY()*((Number)get(overlay,"scale")).floatValue();
+                report.append("TRACE bottom font=").append(font).append(", spacing=").append(spacing).append(", scroll=").append(viewport.getScrollY()).append(", viewport=").append(viewport.getHeight()).append(", column=").append(rows.getHeight()).append(", padding=").append(rows.getPaddingBottom()).append(", last=").append(last.getTop()).append("..").append(last.getBottom()).append(", visible=").append(clip).append(", textBottom=").append(textBottom).append(", location=").append(java.util.Arrays.toString(at)).append(", scale=").append(last.getScaleY()).append("*").append(get(overlay,"scale")).append(", actualBottom=").append(actualBottom).append(", shift=").append(rows.getTranslationY()).append('\n');
+                require(shown&&clip.bottom+2>=actualBottom,"last lyric glyphs remain fully visible after manually browsing to the bottom");
+                require((Boolean)get(overlay,"manualLyrics"),"dragging lyric text starts manual browsing even when text handles long presses");
+                Bitmap overflow=Bitmap.createBitmap(last.getWidth(),last.getHeight()+Math.round(last.getTextSize()*2),Bitmap.Config.ARGB_8888);layout.draw(new android.graphics.Canvas(overflow));int extraInk=0;
+                for(int y=last.getHeight()-last.getPaddingTop();y<overflow.getHeight();y++)for(int x=0;x<overflow.getWidth();x++)if(android.graphics.Color.alpha(overflow.getPixel(x,y))>16)extraInk++;
+                overflow.recycle();report.append("TRACE glyph pixels beyond last row=").append(extraInk).append('\n');require(extraInk==0,"last TextView reserves enough height for its actual font glyphs");
+            });capture("bottom-font"+font+"-spacing"+spacing);
+        }
+    }
+    private void swipePlayerLyrics(boolean up){
+        float[] bounds=new float[3];runOnMainSync(()->{ScrollView viewport=(ScrollView)get(overlay,"lyricScroll");View root=(View)get(overlay,"window");int[] origin=new int[2],position=new int[2];root.getLocationOnScreen(origin);viewport.getLocationOnScreen(position);float scale=((Number)get(overlay,"scale")).floatValue();bounds[0]=origin[0]+root.getWidth()/2f;bounds[1]=Math.max(origin[1]+20,position[1]+20);bounds[2]=Math.min(origin[1]+root.getHeight()-24,position[1]+viewport.getHeight()*scale-20);require(bounds[2]>bounds[1],"lyric viewport has a visible drag region");});
+        long down=SystemClock.uptimeMillis();float start=up?bounds[2]:bounds[1],finish=up?bounds[1]:bounds[2];
+        for(int i=0;i<=11;i++){int action=i==0?0:i==11?1:2;android.view.MotionEvent event=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,bounds[0],start+(finish-start)*Math.min(10,i)/10,0);sendPointerSync(event);event.recycle();SystemClock.sleep(12);}SystemClock.sleep(80);
+    }
+    private void showCopyPlayer(int mode,boolean empty){
+        runOnMainSync(()->{
+            if(floating!=null){floating.close();floating=null;}if(overlay!=null)overlay.close();
+            context.getSharedPreferences("window",0).edit().putInt("lyricMode",mode).apply();
+            try{JSONArray lines=new JSONArray();if(!empty){lines.put(new JSONObject().put("time",0).put("original","第一句 <b>原文</b> 🌙").put("translation","First line"));lines.put(new JSONObject().put("time",1000).put("original","第二句").put("translation",""));lines.put(new JSONObject().put("time",2000).put("original","结尾 gyp").put("translation","Last line"));}ui=new JSONObject(ui.toString()).put("lyricLines",lines).put("lyrics","").put("translation","");}catch(Exception e){throw new RuntimeException(e);}
+            overlay=new OverlayWindow(service);set(overlay,"ui",ui);set(overlay,"playback",state);overlay.show();invoke(overlay,"expand");invoke(overlay,"toggle",new Class<?>[]{String.class},"lyrics");
+        });SystemClock.sleep(400);
+    }
+    private void longPress(View target){
+        float[] at={0,0};runOnMainSync(()->{android.graphics.Rect bounds=new android.graphics.Rect();require(target.getGlobalVisibleRect(bounds),"long-press target is visible");int[] origin=new int[2];((View)get(overlay,"window")).getLocationOnScreen(origin);at[0]=origin[0]+bounds.exactCenterX();at[1]=origin[1]+bounds.exactCenterY();});
+        long down=SystemClock.uptimeMillis();android.view.MotionEvent event=android.view.MotionEvent.obtain(down,down,0,at[0],at[1],0);sendPointerSync(event);event.recycle();SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout()+160);
+        event=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),1,at[0],at[1],0);sendPointerSync(event);event.recycle();SystemClock.sleep(120);
+    }
+    private android.content.ClipboardManager clipboard(){return (android.content.ClipboardManager)getTargetContext().getSystemService(Context.CLIPBOARD_SERVICE);}
+    private String copied(){android.content.ClipData data=clipboard().getPrimaryClip();return data==null?"":String.valueOf(data.getItemAt(0).getText());}
+    private void testCopyAllLyrics(){
+        getTargetContext().startActivity(new android.content.Intent().setComponent(new android.content.ComponentName(getTargetContext(),Backdrop.class)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));SystemClock.sleep(200);
+        String[] expected={"第一句 <b>原文</b> 🌙\n第二句\n结尾 gyp","First line\nLast line","第一句 <b>原文</b> 🌙\nFirst line\n第二句\n结尾 gyp\nLast line"};
+        for(int mode=0;mode<3;mode++){
+            showCopyPlayer(mode,false);View[] target={null};runOnMainSync(()->{clipboard().setPrimaryClip(android.content.ClipData.newPlainText("test","keep clipboard"));target[0]=(View)((java.util.List<?>)get(overlay,"lyricTexts")).get(2);});
+            longPress(target[0]);String actual=copied();require(expected[mode].equals(actual),"long-pressing any line copies the complete current-mode song: "+actual);
+        }
+        showCopyPlayer(0,true);runOnMainSync(()->clipboard().setPrimaryClip(android.content.ClipData.newPlainText("test","keep clipboard")));
+        View[] placeholder={null};runOnMainSync(()->placeholder[0]=((android.view.ViewGroup)get(overlay,"lyricRows")).getChildAt(0));longPress(placeholder[0]);require(copied().equals("keep clipboard"),"empty lyric placeholder never overwrites the clipboard");
+    }
+    private void testCopyDescription(){
+        getTargetContext().startActivity(new android.content.Intent().setComponent(new android.content.ComponentName(getTargetContext(),Backdrop.class)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));SystemClock.sleep(200);
+        String description="收藏夹 <b>原样</b> 🌙\n"+new String(new char[40]).replace("\0","长简介原文保持完整，")+"\n最后一个字。";
+        runOnMainSync(()->{
+            if(floating!=null){floating.close();floating=null;}
+            try{ui=new JSONObject(ui.toString()).put("activePlaylist","favorites").put("playlists",new JSONArray().put(new JSONObject().put("id","favorites").put("name","收藏夹").put("description",description))).put("tracks",new JSONArray());}catch(Exception e){throw new RuntimeException(e);}
+            overlay=new OverlayWindow(service);set(overlay,"ui",ui);set(overlay,"playback",state);overlay.show();invoke(overlay,"expand");invoke(overlay,"toggle",new Class<?>[]{String.class},"playlist");clipboard().setPrimaryClip(android.content.ClipData.newPlainText("test","keep clipboard"));
+        });SystemClock.sleep(350);View[] target={null};runOnMainSync(()->target[0]=(View)get(overlay,"playlistDescription"));longPress(target[0]);require(copied().equals(description),"long press copies the complete untruncated description");
+        runOnMainSync(()->{try{ui.getJSONArray("playlists").getJSONObject(0).put("description","");}catch(Exception e){throw new RuntimeException(e);}invoke(overlay,"updatePlaylistHeader");clipboard().setPrimaryClip(android.content.ClipData.newPlainText("test","keep clipboard"));});longPress(target[0]);require(copied().equals("keep clipboard"),"placeholder description never overwrites the clipboard");
+    }
+    private void testCopyDrag(){
+        getTargetContext().startActivity(new android.content.Intent().setComponent(new android.content.ComponentName(getTargetContext(),Backdrop.class)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));SystemClock.sleep(200);showCopyPlayer(0,false);
+        float[] start={0};runOnMainSync(()->{clipboard().setPrimaryClip(android.content.ClipData.newPlainText("test","keep clipboard"));ScrollView viewport=(ScrollView)get(overlay,"lyricScroll");View line=(View)((java.util.List<?>)get(overlay,"lyricTexts")).get(1);start[0]=line.getTop()-viewport.getScrollY()+line.getHeight()/2f;});
+        long down=SystemClock.uptimeMillis();for(int i=0;i<=11;i++){final int step=i;runOnMainSync(()->{int action=step==0?0:step==11?1:2;android.view.MotionEvent event=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,30,start[0]-Math.min(10,step)*7,0);((ScrollView)get(overlay,"lyricScroll")).dispatchTouchEvent(event);event.recycle();});SystemClock.sleep(12);}SystemClock.sleep(650);
+        require(copied().equals("keep clipboard"),"scrolling across lyric text does not trigger copying");runOnMainSync(()->require((Boolean)get(overlay,"manualLyrics"),"starting a drag on copyable lyric text enters manual browsing"));
+    }
+    private void testCopyRanking(){
+        getTargetContext().startActivity(new android.content.Intent().setComponent(new android.content.ComponentName(getTargetContext(),Backdrop.class)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));SystemClock.sleep(200);
+        // Earlier clipboard cases also show a system-owned preview over the
+        // lower card. It must expire before the first gesture in this case.
+        SystemClock.sleep(7000);
+        String description="榜单完整简介 <b>原样</b> 🌙\n第二行说明。";
+        View[] target={null};runOnMainSync(()->{
+            if(floating!=null){floating.close();floating=null;}
+            try{ui=new JSONObject(ui.toString()).put("rankings",new JSONArray().put(new JSONObject().put("id","netease:fixture").put("name","测试榜单").put("description",description)));}catch(Exception e){throw new RuntimeException(e);}
+            overlay=new OverlayWindow(service);set(overlay,"ui",ui);set(overlay,"playback",state);overlay.show();invoke(overlay,"expand");invoke(overlay,"toggle",new Class<?>[]{String.class},"more");invoke(overlay,"selectDetail",new Class<?>[]{String.class},"rankings");
+            target[0]=findText((View)get(overlay,"window"),description);require(target[0]!=null,"ranking description exists");
+        });SystemClock.sleep(350);runOnMainSync(()->((ScrollView)get(overlay,"detailScroll")).fullScroll(View.FOCUS_DOWN));SystemClock.sleep(400);longPress(target[0]);require(copied().equals(description),"ranking long press copies its complete description");
+        runOnMainSync(()->{require("rankings".equals(get(overlay,"detail")),"long press does not navigate away from rankings");require("".equals(get(overlay,"requestedOnlineId")),"long press does not request online content");});
+        // Android 13's clipboard preview is a separate system window. Let it
+        // disappear before injecting another app-targeted pointer gesture.
+        SystemClock.sleep(7000);
+        float[] at={0,0};runOnMainSync(()->{android.graphics.Rect bounds=new android.graphics.Rect();require(target[0].getGlobalVisibleRect(bounds),"short-tap target stays visible");int[] origin=new int[2];((View)get(overlay,"window")).getLocationOnScreen(origin);at[0]=origin[0]+bounds.exactCenterX();at[1]=origin[1]+bounds.exactCenterY();});
+        long down=SystemClock.uptimeMillis();android.view.MotionEvent event=android.view.MotionEvent.obtain(down,down,0,at[0],at[1],0);sendPointerSync(event);event.recycle();SystemClock.sleep(40);event=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),1,at[0],at[1],0);sendPointerSync(event);event.recycle();SystemClock.sleep(150);
+        runOnMainSync(()->require("netease:fixture".equals(get(overlay,"requestedOnlineId")),"short tapping a copyable ranking description still opens its card"));
+    }
+    private void testDescriptionFold(){
+        String description=new String(new char[12]).replace("\0","完整简介，保留换行。\n")+"最后一段。";
+        runOnMainSync(()->{
+            floating.close();floating=null;
+            try{ui.put("activePlaylist","favorites").put("playlists",new JSONArray().put(new JSONObject().put("id","favorites").put("name","收藏夹").put("description",description))).put("tracks",new JSONArray());}catch(Exception e){throw new RuntimeException(e);}
+            overlay=new OverlayWindow(service);set(overlay,"ui",ui);set(overlay,"playback",state);overlay.show();invoke(overlay,"expand");invoke(overlay,"toggle",new Class<?>[]{String.class},"playlist");
+        });SystemClock.sleep(350);runOnMainSync(()->{View fold=((View)get(overlay,"window")).findViewWithTag("descriptionToggle");require(fold.getHeight()>=40*context.getResources().getDisplayMetrics().density,"the expansion button has an actual touchable layout height");});capture("description-collapsed");
+        runOnMainSync(()->{View block=((View)get(overlay,"window")).findViewWithTag("localDescription");android.widget.TextView words=(android.widget.TextView)get(overlay,"playlistDescription");View fold=block.findViewWithTag("descriptionToggle");require(fold.getVisibility()==View.VISIBLE,"long description offers an expansion button");require(words.getMaxLines()==2,"local description starts collapsed");fold.performClick();});SystemClock.sleep(180);capture("description-expanded");
+        runOnMainSync(()->{android.widget.TextView words=(android.widget.TextView)get(overlay,"playlistDescription");require(words.getMaxLines()==Integer.MAX_VALUE,"expanded description permits all lines");require(description.contentEquals(words.getText()),"expansion preserves the complete original");invoke(overlay,"updatePlaylistHeader");require(words.getMaxLines()==Integer.MAX_VALUE,"unrelated header refresh preserves expansion");((View)get(overlay,"window")).findViewWithTag("descriptionToggle").performClick();require(words.getMaxLines()==2,"collapse restores its line budget");try{ui.getJSONArray("playlists").getJSONObject(0).put("description","短简介");}catch(Exception e){throw new RuntimeException(e);}invoke(overlay,"updatePlaylistHeader");});SystemClock.sleep(180);
+        runOnMainSync(()->{require(((View)get(overlay,"window")).findViewWithTag("descriptionToggle").getVisibility()==View.GONE,"short content does not show an expansion button");try{ui.put("onlinePlaylist",new JSONObject().put("id","fixture").put("name","在线歌单").put("description",description).put("tracks",new JSONArray()));}catch(Exception e){throw new RuntimeException(e);}set(overlay,"requestedOnlineId","fixture");set(overlay,"section","more");invoke(overlay,"selectDetail",new Class<?>[]{String.class},"online");});SystemClock.sleep(180);
+        runOnMainSync(()->{View block=((View)get(overlay,"window")).findViewWithTag("onlineDescription");require(block!=null,"online details use the same disclosure control");View fold=block.findViewWithTag("descriptionToggle");require(fold.getVisibility()==View.VISIBLE,"long online description can expand");fold.performClick();fold.performClick();});
+    }
+    private void testSettingsNavigation(){
+        runOnMainSync(()->{floating.close();floating=null;overlay=new OverlayWindow(service);set(overlay,"ui",ui);set(overlay,"playback",state);overlay.show();invoke(overlay,"expand");invoke(overlay,"toggle",new Class<?>[]{String.class},"more");invoke(overlay,"selectDetail",new Class<?>[]{String.class},"settings");});SystemClock.sleep(180);
+        for(String page:new String[]{"general","playback","lyrics","floating","service","about"}){
+            runOnMainSync(()->{View root=(View)get(overlay,"window");View entry=root.findViewWithTag("settingsCategory_"+page);require(entry!=null,"settings entry exists: "+page);entry.performClick();require(page.equals(get(overlay,"settingsPage")),"entry opens its category: "+page);require(root.findViewWithTag("settingsCategory_general")==null,"subpage hides the category index");root.findViewWithTag("settingsBack").performClick();require("".equals(get(overlay,"settingsPage")),"back returns to settings index");});
+        }
+        for(String language:new String[]{"zh_CN","en"})for(int mode:new int[]{1,2}){runOnMainSync(()->{UiStrings.setLanguage(context,language);context.getSharedPreferences("appearance",0).edit().putInt("mode",mode).apply();overlay.configurationChanged();});SystemClock.sleep(200);capture("settings-index-"+language+"-"+mode);}
+        runOnMainSync(()->{overlay.openLyricSettings();require("floating".equals(get(overlay,"settingsPage")),"lyric context opens its dedicated subpage");require(((View)get(overlay,"window")).findViewWithTag("desktopLyricsHighlightOpacity")!=null,"lyric controls remain accessible");});capture("settings-floating-page");
+    }
+    private static View findText(View view,String text){
+        if(view instanceof android.widget.TextView&&text.contentEquals(((android.widget.TextView)view).getText()))return view;
+        if(view instanceof android.view.ViewGroup){android.view.ViewGroup group=(android.view.ViewGroup)view;for(int i=0;i<group.getChildCount();i++){View match=findText(group.getChildAt(i),text);if(match!=null)return match;}}return null;
     }
     private Map<String,View> visible(){
         Object pool=get(floating,"windows");Collection<?> values=pool instanceof Map?((Map<?,?>)pool).values():(Collection<?>)pool;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(FloatMusic VERSION 1.4.0 LANGUAGES CXX)
+project(FloatMusic VERSION 1.5.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Concurrent Network)
@@ -31,8 +31,8 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
         QT_ANDROID_MIN_SDK_VERSION 28
         QT_ANDROID_TARGET_SDK_VERSION 36
-        QT_ANDROID_VERSION_CODE 22
-        QT_ANDROID_VERSION_NAME "1.4.0-preview.3"
+        QT_ANDROID_VERSION_CODE 25
+        QT_ANDROID_VERSION_NAME "1.5.0-preview.2"
         QT_ANDROID_APP_NAME "浮音 · 功能验证")
 endif()
 option(FLOATMUSIC_TESTS "Build desktop tests" OFF)
@@ -63,6 +63,14 @@ if(FLOATMUSIC_TESTS AND NOT ANDROID)
     set_target_properties(v12_ui_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     add_test(NAME v12_desktop_ui COMMAND v12_ui_tests -platform offscreen -o v12-ui-tests.txt,txt)
     set_tests_properties(v12_desktop_ui PROPERTIES ENVIRONMENT "QT_QUICK_BACKEND=software" TIMEOUT 120)
+    qt_add_executable(copy_ui_tests tests/copy_ui_tests.cpp ${PLAYER_SOURCES})
+    target_include_directories(copy_ui_tests PRIVATE src)
+    target_compile_definitions(copy_ui_tests PRIVATE FLOATMUSIC_QML_FILE="${CMAKE_CURRENT_SOURCE_DIR}/qml/Main.qml")
+    target_link_libraries(copy_ui_tests PRIVATE Qt6::Test Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Concurrent Qt6::Network)
+    set_target_properties(copy_ui_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    qt_add_resources(copy_ui_tests "copy_ui_tests_icons" PREFIX "/icons" BASE "assets/icons" FILES ${FLOATMUSIC_ICON_FILES})
+    add_test(NAME desktop_copy_ui COMMAND copy_ui_tests -platform offscreen -o copy-ui-tests.txt,txt)
+    set_tests_properties(desktop_copy_ui PROPERTIES ENVIRONMENT "QT_QUICK_BACKEND=software" TIMEOUT 180)
     qt_add_executable(policy_tests tests/policy_tests.cpp src/audiofilepolicy.cpp src/audiofilepolicy.h)
     target_include_directories(policy_tests PRIVATE src)
     target_link_libraries(policy_tests PRIVATE Qt6::Test)

@@ -135,9 +135,10 @@ public class PlaybackService extends Service {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(noisy, filter, Context.RECEIVER_NOT_EXPORTED); else registerReceiver(noisy, filter);
         audio.registerAudioDeviceCallback(deviceCallback, handler);
         handler.post(ticker);
+        PlayerBridge.serviceStarted();
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null) dispatch(intent.getAction(), intent.getStringExtra("value"));
+        if (!destroyed && intent != null) dispatch(intent.getAction(), intent.getStringExtra("value"));
         return START_NOT_STICKY;
     }
     @Override public IBinder onBind(Intent intent) { return null; }
@@ -276,6 +277,7 @@ public class PlaybackService extends Service {
         } catch(Exception ignored){}
     }
     void saveBeforeExit(){saveSession(true);}
+    void stopBeforeExit(){releasePlayback();stopSelf();}
     private void abandonFocus() { if (audio != null && focus != null) audio.abandonAudioFocusRequest(focus); hasFocus = false; resumeOnFocus = false; }
     private void play() {
         if(checkSleepDeadline())return;
@@ -750,15 +752,17 @@ public class PlaybackService extends Service {
         if(overlay!=null)overlay.configurationChanged();
         if(floatingLyrics!=null)floatingLyrics.configurationChanged();
     }
-    @Override public void onDestroy() {
+    private void releasePlayback() {
+        if(destroyed)return;
         saveSession(true);
-        destroyed=true; audio.unregisterAudioDeviceCallback(deviceCallback); generation++; audioResolver.cancel(); importer.shutdownNow(); handler.removeCallbacks(ticker);
+        destroyed=true; if(audio!=null)audio.unregisterAudioDeviceCallback(deviceCallback); generation++; audioResolver.cancel(); importer.shutdownNow(); handler.removeCallbacks(ticker);
         if(overlay!=null){overlay.close();overlay=null;}
         if(floatingLyrics!=null){floatingLyrics.close();floatingLyrics=null;}
         if(player != null) { player.release(); player=null; }
         cancelPending(); abandonFocus();
         if(session != null) session.release(); try { unregisterReceiver(noisy); } catch(Exception ignored) {}
-        stopForeground(STOP_FOREGROUND_REMOVE); instance=null; PlayerBridge.idle(""); super.onDestroy();
+        stopForeground(STOP_FOREGROUND_REMOVE); if(instance==this)instance=null; PlayerBridge.idle("");
     }
+    @Override public void onDestroy() {releasePlayback();super.onDestroy();}
 }
 

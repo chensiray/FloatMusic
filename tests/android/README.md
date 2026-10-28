@@ -1,5 +1,7 @@
 # Android 音源解析器本地测试
 
+`1.5.0-preview.2` 的默认歌词窗口回归增加至35项：新增 `player-description-fold`（长简介展开收起、按钮实际高度、短简介、在线详情）与 `player-settings-navigation`（六类设置、返回、独立歌词直达及中英文浅深色）。复制场景必须置于触摸检查末尾，避免系统剪贴板预览拦截后续手势。
+
 1.4 新增无需手机的回归入口 `./tests/android/run-v14-contract-tests.ps1`：编译真实原生源码，检查语言目录、歌词行数/渐隐/时间轴/小屏排布及原有队列、睡眠定时、通知策略。脚本使用已有 JSON 测试库，不下载依赖、不连接设备；悬浮歌词触摸与生命周期的真机验收项见 [Android 1.4 验收说明](../../docs/Android-1.4-验收说明.md)。
 
 歌词跳动及播放器切句跟随的原生回归：`./tests/android/run-lyric-regression.ps1 -DeviceSerial emulator-5580`。默认只接受已启动且有硬件加速的本地模拟器；用户授权真机测试后，必须显式传手机序列号与 `-AllowPhysicalDevice`。它将实际生产 Java 与隔离 Instrumentation 打包，不启动 Qt 或播放音频，并在测试包自己的目录保存截图。检查窗口身份、开关动效、横向锚点、无关刷新、相邻句跟随与手动返回，详见[歌词修复说明](../../docs/Android-1.4.0-preview.1-歌词修复.md)。
@@ -7,6 +9,14 @@
 `preview.2` 将原生回归扩展为 13 项：增加文字栅格稳定、三行／九行零可见表面重排、硬件合成、静止停止重绘及实际文字拖动／行间透传。支持 `-AdbPort` 使用独立调试服务。主机软件图形后端若崩溃，可用模拟器 `-gpu host -feature -Vulkan` 后端复验，见[滚动优化说明](../../docs/Android-1.4.0-preview.2-滚动优化.md)。
 
 `preview.3` 扩展为 21 项，新增两处真实动画帧间隔、九行、160 行长双语文本、静止刷新、跨 UID 点击透传、关闭动效后的手动返回，以及无障碍与键盘浏览。`-Cases 'floating-frame-pacing,player-frame-pacing'` 可选择场景。帧间隔预算按 60Hz 两帧加采样误差（35ms）检查 p95，并记录屏幕帧回调，以区别掉帧与整数像素停顿。整列高度检查排除视口居中留白，关注文字内容是否因高亮重新排版。测试额外安装 `org.floatmusic.lyricbackdrop` 作为无个人内容的独立背景，系统输入只注入合成歌词区域；完成后可移除它和 `org.floatmusic.lyricfixture`。详情见[真机动效优化说明](../../docs/Android-1.4.0-preview.3-真机动效优化.md)。
+
+1.4 发布后审查将默认场景扩展到 24 项：`floating-drag-cache` 在九行短句下连续横向移动 80 次，统计文字位图重建与主线程处理时间；`floating-cache-invalidation` 检查屏幕边缘缩小、返回后恢复字号，以及主题和字号变化；`player-rebuild-no-lyrics` 在滚动中换成无逐句歌词的新曲，检查旧动画停止、新提示保持可见。拖动耗时用于同环境比较，不作为设备通用速度承诺。`OverlayV12ContractTest` 同时覆盖英文搜索反馈和音质说明的最终值翻译。
+
+1.5 将原生窗口回归扩展到 28 项：新增 `floating-opacity-settings`（真实像素透明度、动画中调节、重建保存、0%边缘透传）、`floating-lock-recenter`、`floating-settings-ui`（真实滑杆键盘操作与中英文浅深色截图）、`floating-empty-touch-through`（首次无任何可见文字时的跨应用透传）。默认仅使用隔离模拟器；不会覆盖安装正式浮音。
+
+`1.5.0-preview.1` 将默认场景扩展到 33 项：`player-bottom-visible` 在 16/18/30 字号与 0.8/1/1.5 行距下实际上下拖动、惯性到底，检查末句字形与父窗口裁切；`player-copy-all`、`player-copy-description`、`player-copy-drag`、`player-copy-ranking` 检查真实长按、整首歌词、完整简介、空内容保护、拖动不误复制与榜单简介短击打开。复制用例放在末尾，并等待 Android 系统剪贴板预览消失后再对底部卡片注入下一次手势，避免命中系统窗口。纯文本复制同时由 `OverlayV12ContractTest` 检查大小写元数据、Unicode、缺失译文与换歌隔离。
+
+开启页退出另运行 `run-exit-regression.ps1 -DeviceSerial emulator-5580`，8 项覆盖无服务、主／工作线程、重复退出、刚请求启动服务、实际播放、暂停保存后重开、只有服务以及普通返回。实际 Android Activity／任务、MediaPlayer、服务、通知与悬浮窗均真实运行；QtActivity 的原生加载超类用测试 Activity 替换，故不能把此 fixture 当作完整 ARM64 APK 的真机验收。边界见 [exit-fixture/README.md](exit-fixture/README.md)。桌面 `player_tests::exitTerminatesProcess` 还直接加载 AndroidMain.qml 的真实退出按钮，验证主动退出不再被关闭事件否决。
 
 在桌面 JDK 21 运行 APK 使用的 `AudioResolver.java` 与 `PlaybackService` 实际调用的 `TrackState.java`，由本地 HTTP 服务提供固定响应，不连接真实音源、读取用户配置或操作手机。
 

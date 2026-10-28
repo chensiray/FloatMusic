@@ -115,6 +115,8 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
     private boolean dark(){int mode=Math.max(0,Math.min(2,prefs.getInt("desktopLyricsTheme",0)));return mode==2||mode==0&&PlayerBridge.isDark(service);}
     private void render(){
         if(closed)return;
+        int highlightOpacity=FloatingLyricRules.highlightOpacity(prefs.getInt("desktopLyricsHighlightOpacity",100));
+        int edgeOpacity=FloatingLyricRules.edgeOpacity(prefs.getInt("desktopLyricsEdgeOpacity",35),highlightOpacity);
         int needed=lyrics.isEmpty()?1:count+2;
         try{
             int first=(int)Math.floor(centerIndex)-count/2-1;
@@ -143,11 +145,13 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
                 label.measuredTextHeight=Math.max(1,Math.round(label.normal.getHeight()*label.visualScale));
                 label.rowCenter=empty?count*step/2f:(distance+count/2f)*step;
                 label.distance=distance;
+                label.opacity=FloatingLyricRules.opacity(distance,count,highlightOpacity,edgeOpacity);
+                if(label.opacity<.001f)label.setVisibility(View.GONE);
             }
             updateDrawingLayer();
             long now=SystemClock.uptimeMillis();boolean syncInputs=regionInput||dragging||scroll==null||!scroll.isRunning()||now-lastInputSync>=32;
             for(Glyph label:windows.values()){
-                if(label.getVisibility()!=View.VISIBLE)continue;
+                if(label.getVisibility()!=View.VISIBLE){if(label.attached)detach(label);continue;}
                 int width=label.measuredTextWidth,height=label.measuredTextHeight;
                 int originalTop=Math.round(topY+label.rowCenter-height/2f);
                 int clippedTop=Math.max(Math.round(topY),originalTop),clippedBottom=Math.min(Math.round(topY+count*step),originalTop+height);
@@ -157,7 +161,7 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
                     int x=Math.round(centerX-width/2f),heightNow=clippedBottom-clippedTop;
                     boolean moved=label.params.width!=width||label.params.height!=heightNow||label.params.x!=x||label.params.y!=clippedTop;
                     label.params.width=width;label.params.height=heightNow;label.params.x=x;label.params.y=clippedTop;
-                    if(regionInput)label.layout(0,0,width,heightNow);
+                    if(regionInput||label.opacity<.03f){if(label.attached)detach(label);label.layout(0,0,width,heightNow);}
                     else if(!label.attached){manager.addView(label,label.params);label.attached=true;}
                     else if(moved)manager.updateViewLayout(label,label.params);
                 }
@@ -185,23 +189,24 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
     private final class DrawingLayer extends View {
         final Paint composite=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
         final Region touchRegion=new Region(),appliedRegion=new Region();
+        boolean touchRegionApplied;
         DrawingLayer(){super(service);setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);if(regionInput)bindDrag(this);}
         void updateTouchableRegion(){
             if(Build.VERSION.SDK_INT<33||getRootSurfaceControl()==null)return;
             touchRegion.setEmpty();
-            for(Glyph label:windows.values())if(label.getVisibility()==View.VISIBLE){
+            for(Glyph label:windows.values())if(label.getVisibility()==View.VISIBLE&&label.opacity>=.03f){
                 WindowManager.LayoutParams p=label.params;
                 touchRegion.op(p.x-drawingParams.x,p.y-drawingParams.y,p.x-drawingParams.x+p.width,p.y-drawingParams.y+p.height,Region.Op.UNION);
             }
-            if(!touchRegion.equals(appliedRegion)){getRootSurfaceControl().setTouchableRegion(touchRegion);appliedRegion.set(touchRegion);}
+            if(!touchRegionApplied||!touchRegion.equals(appliedRegion)){getRootSurfaceControl().setTouchableRegion(touchRegion);appliedRegion.set(touchRegion);touchRegionApplied=true;}
         }
-        @Override protected void onAttachedToWindow(){super.onAttachedToWindow();if(regionInput)updateTouchableRegion();}
+        @Override protected void onAttachedToWindow(){super.onAttachedToWindow();touchRegionApplied=false;if(regionInput)updateTouchableRegion();}
         @Override protected void onDraw(Canvas canvas){
             for(Glyph label:windows.values()){
                 if(label.getVisibility()!=View.VISIBLE||label.normal==null)continue;
                 int save=canvas.save();canvas.translate(centerX-area.left,label.rowCenter);canvas.scale(label.visualScale,label.visualScale);
                 float x=-label.normal.getWidth()/2f,y=-label.normal.getHeight()/2f;
-                int alpha=Math.round(255*FloatingLyricRules.opacity(label.distance));
+                int alpha=Math.round(255*label.opacity);
                 if(label.focus<=0||label.focus>=1){composite.setAlpha(alpha);canvas.drawBitmap(label.focus>=1?label.highlight:label.normal,x,y,composite);}
                 else{
                     int layer=canvas.saveLayerAlpha(x,y,-x,-y,alpha);
@@ -217,7 +222,12 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
     void close(){closed=true;cancelAnimation();prefs.unregisterOnSharedPreferenceChangeListener(this);remove();}
     private void detach(Glyph label){if(label.attached)try{manager.removeViewImmediate(label);}catch(IllegalArgumentException ignored){}finally{label.attached=false;}}
     private void remove(){for(Glyph label:windows.values())detach(label);windows.clear();if(drawing!=null){try{manager.removeViewImmediate(drawing);}catch(IllegalArgumentException ignored){}drawing=null;drawingParams=null;}}
-    @Override public void onSharedPreferenceChanged(SharedPreferences ignored,String key){if(key!=null&&(key.startsWith("desktopLyrics")||key.equals("animationsEnabled"))&&!dragging)configurationChanged();}
+    @Override public void onSharedPreferenceChanged(SharedPreferences ignored,String key){
+        if(key==null)return;
+        if(key.equals("desktopLyricsHighlightOpacity")||key.equals("desktopLyricsEdgeOpacity")||key.equals("desktopLyricsLocked")){if(drawing!=null)render();return;}
+        if((key.startsWith("desktopLyrics")||key.equals("animationsEnabled"))&&!dragging)configurationChanged();
+    }
+    void recenter(){prefs.edit().putFloat("desktopLyricsX",.5f).putFloat("desktopLyricsY",.5f).apply();positioned=false;update(state,ui);}
     private void savePosition(){
         float x=(centerX-area.left)/Math.max(1,area.width());float y=(topY-area.top-dp(8))/Math.max(1,area.height()-dp(16)-count*step);
         prefs.edit().putFloat("desktopLyricsX",Math.max(0,Math.min(1,x))).putFloat("desktopLyricsY",Math.max(0,Math.min(1,y))).apply();
@@ -227,12 +237,13 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
         target.setOnLongClickListener(view->{if(!moved[0])service.openFloatingLyricSettings();return true;});
         target.setOnTouchListener((view,event)->{
             switch(event.getActionMasked()){
-                case MotionEvent.ACTION_DOWN:down[0]=event.getRawX();down[1]=event.getRawY();down[2]=centerX;down[3]=topY;moved[0]=false;dragging=true;cancelAnimation();break;
+                case MotionEvent.ACTION_DOWN:down[0]=event.getRawX();down[1]=event.getRawY();down[2]=centerX;down[3]=topY;moved[0]=false;dragging=!prefs.getBoolean("desktopLyricsLocked",false);if(dragging)cancelAnimation();break;
                 case MotionEvent.ACTION_MOVE:
+                    if(prefs.getBoolean("desktopLyricsLocked",false))break;
                     if(Math.hypot(event.getRawX()-down[0],event.getRawY()-down[1])>ViewConfiguration.get(service).getScaledTouchSlop()){moved[0]=true;view.cancelLongPress();}
                     if(moved[0]){centerX=down[2]+event.getRawX()-down[0];topY=down[3]+event.getRawY()-down[1];render();}break;
                 case MotionEvent.ACTION_UP:case MotionEvent.ACTION_CANCEL:
-                    if(moved[0])savePosition();dragging=false;settleCurrent();break;
+                    if(dragging){if(moved[0])savePosition();dragging=false;settleCurrent();}break;
             }
             return false;
         });target.setClickable(true);
@@ -240,8 +251,8 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
     private final class Glyph extends View {
         final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.SUBPIXEL_TEXT_FLAG);
         final WindowManager.LayoutParams params;
-        String words="";int fill,outline,measuredTextWidth=1,measuredTextHeight=1,crop;float baseline,rowCenter,distance;
-        Bitmap normal,highlight;float visualScale=1,focus,cachedSize=-1;int cachedLimit=-1;boolean cachedNight;
+        String words="";int fill,outline,measuredTextWidth=1,measuredTextHeight=1,crop;float baseline,rowCenter,distance,opacity=1;
+        Bitmap normal,highlight;float visualScale=1,focus,cachedSize=-1,naturalWidth;int cachedLimit=-1;boolean cachedNight;
         boolean attached;
         Glyph(){
             super(service);params=new WindowManager.LayoutParams(1,1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -253,10 +264,18 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
             // Adapt the line to the user's anchor; an incoming long line must
             // not push the entire lyric group horizontally towards the centre.
             int limit=Math.max(1,(int)(2*Math.min(centerX-area.left-dp(8),area.right-dp(8)-centerX))-dp(6));
-            if(normal!=null&&words.equals(value)&&cachedSize==size&&cachedLimit==limit&&cachedNight==night)return;
-            words=value;cachedSize=size;cachedLimit=limit;cachedNight=night;paint.setTextSize(Math.max(1,size*1.12f));
-            paint.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));float normalWidth=paint.measureText(words);
-            paint.setTypeface(Typeface.create("sans-serif",Typeface.BOLD));float width=Math.max(normalWidth,paint.measureText(words));
+            boolean changed=normal==null||!words.equals(value)||cachedSize!=size;
+            if(changed){
+                paint.setTextSize(Math.max(1,size*1.12f));
+                paint.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));float normalWidth=paint.measureText(value);
+                paint.setTypeface(Typeface.create("sans-serif",Typeface.BOLD));naturalWidth=Math.max(normalWidth,paint.measureText(value));
+            }
+            // Free space beyond the natural text width cannot change the raster.
+            // Reuse it during drags, but refit when an edge actually constrains it.
+            int fittedLimit=Math.min(limit,Math.max(1,(int)Math.ceil(naturalWidth)));
+            if(!changed&&cachedLimit==fittedLimit&&cachedNight==night)return;
+            words=value;cachedSize=size;cachedLimit=fittedLimit;cachedNight=night;paint.setTextSize(Math.max(1,size*1.12f));
+            float width=naturalWidth;
             if(width>limit)paint.setTextSize(paint.getTextSize()*limit/width);
             int padding=dp(3),bitmapWidth=Math.max(1,(int)Math.ceil(Math.min(width,limit))+padding*2);
             Paint.FontMetrics metrics=paint.getFontMetrics();int bitmapHeight=Math.max(1,(int)Math.ceil(metrics.descent-metrics.ascent)+padding*2);baseline=padding-metrics.ascent;

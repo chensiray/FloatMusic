@@ -527,7 +527,7 @@ void PlayerController::restoreSession() {
         }
     }
     m_requestedQueueEntry = m_loadedQueueEntry;
-    m_historyPending = true;
+    m_historyPending = true; m_loadedHistoryPending = true;
     m_loadedTrack = m_requestedTrack = track;
     m_currentTrack = track.value("id").toString(); m_title = track.value("name").toString();
     m_online = onlineSource(source);
@@ -646,6 +646,9 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
                 sync(); return;
             }
         }
+        const bool sameOccurrence = track.value("id") == m_loadedTrack.value("id")
+            && m_requestedQueueEntry == m_loadedQueueEntry;
+        const bool needsHistory = m_historyPending || (sameOccurrence && m_loadedHistoryPending);
         const qint64 resume = resumePosition >= 0 ? resumePosition : preservePosition ? m_position : -1;
         m_mediaTimeout.stop(); m_resolving = true;
         m_player.stop(); m_player.setSource({}); m_resolving = false;
@@ -654,6 +657,7 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
         m_online = onlineSource(track.value("source").toString());
         m_loadedTrack = track; m_requestedQuality = quality; m_loadedQuality = audio.quality;
         m_loadedQueueEntry = m_requestedQueueEntry;
+        m_loadedHistoryPending = needsHistory;
         m_loadedSourceId = audio.sourceId; m_loadedSourceName = audio.sourceName; m_loadedBitrate = audio.bitrate;
         m_loadedFormat = audio.format; m_loadedSampleRate = audio.sampleRate;
         m_loadedBitsPerSample = audio.bitsPerSample; m_qualityNotice = audio.notice;
@@ -757,10 +761,15 @@ void PlayerController::importFile(const QUrl &url) {
     androidCommand("import", url.toString());
 #else
     if (m_busy) { m_error = QStringLiteral("正在导入，请稍候。"); emit changed(); return; }
+    const int ticket = ++m_loadGeneration;
     m_busy = true; m_importing = true; m_error.clear(); emit changed();
     auto *watcher = new QFutureWatcher<ImportResult>(this);
-    connect(watcher, &QFutureWatcher<ImportResult>::finished, this, [this, watcher] {
+    connect(watcher, &QFutureWatcher<ImportResult>::finished, this, [this, watcher, ticket] {
         const auto result = watcher->result(); watcher->deleteLater();
+        if (ticket != m_loadGeneration) {
+            if (!result.path.isEmpty()) QFile::remove(result.path);
+            return;
+        }
         m_importing = false;
         if (!result.error.isEmpty()) { m_busy = false; m_error = result.error; emit changed(); return; }
         const QVariantMap track{{"id", "local:" + QFileInfo(result.path).baseName()}, {"source", "local"}, {"name", result.name}, {"artist", QStringLiteral("本地文件")}, {"path", result.path}};
@@ -820,8 +829,9 @@ void PlayerController::setDarkTheme(bool dark) { androidCommand("theme", dark ? 
 void PlayerController::quit() {
 #ifdef Q_OS_ANDROID
     QJniObject::callStaticMethod<void>("org/floatmusic/player/PlayerBridge", "prepareExit", "()V");
-#endif
+#else
     saveSession(); m_shuttingDown = true; ++m_loadGeneration; ++m_lyricsGeneration; m_mediaTimeout.stop(); androidCommand("stop"); m_player.stop(); QCoreApplication::quit();
+#endif
 }
 void PlayerController::rejectDrop() { m_error = QStringLiteral("请一次拖入一首本地音频。"); emit changed(); }
 void PlayerController::sync() {

@@ -129,7 +129,10 @@ public class PlayerActivity extends QtActivity {
     }
     void send(String command, String value) {
         Intent intent = new Intent(this, PlaybackService.class).setAction(command).putExtra("value", value);
-        startForegroundService(intent);
+        boolean starting=PlaybackService.instance==null;
+        if(starting)PlayerBridge.serviceStarting=true;
+        try { startForegroundService(intent); }
+        catch(RuntimeException error){if(starting)PlayerBridge.serviceStarting=false;throw error;}
     }
     public void enableOverlay() {
         if (waitingOverlay) return;

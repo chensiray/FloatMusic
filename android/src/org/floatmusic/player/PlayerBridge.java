@@ -12,6 +12,8 @@ public final class PlayerBridge {
     static final Handler main = new Handler(Looper.getMainLooper());
     static boolean foreground = false, picking = false;
     static boolean qtReady = false;
+    static boolean serviceStarting = false;
+    private static boolean exitPending = false;
     private static final java.util.concurrent.ConcurrentLinkedQueue<String> events = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private static volatile String ui = "{}";
     static void event(String action, String value) {
@@ -37,15 +39,29 @@ public final class PlayerBridge {
         if(context==null)return;UiStrings.setLanguage(context,code);
         PlaybackService service=PlaybackService.instance;if(service!=null)service.languageChanged();
     });}
-    // Qt may stop immediately after its quit command. Persist on the player thread
-    // before returning to native shutdown, including exits from the welcome page.
+    // QtActivity.onDestroy terminates the process. Finish only after playback,
+    // overlays, notification and the saved session are settled on Android's main
+    // thread; a cold welcome page has no service but still owns an Activity/task.
     public static void prepareExit() {
-        Runnable save=()->{PlaybackService service=PlaybackService.instance;if(service!=null)service.saveBeforeExit();};
-        if(Looper.myLooper()==Looper.getMainLooper()){save.run();return;}
+        Runnable exit=()->{
+            PlaybackService service=PlaybackService.instance;
+            // Android requires a requested foreground service to reach
+            // startForeground even if Exit was tapped before onCreate ran.
+            if(service==null&&serviceStarting){exitPending=true;return;}
+            exitPending=false;
+            if(service!=null)service.stopBeforeExit();
+            PlayerActivity current=activity.get();
+            if(current!=null&&!current.isFinishing())current.finishAndRemoveTask();
+        };
+        if(Looper.myLooper()==Looper.getMainLooper()){exit.run();return;}
         java.util.concurrent.CountDownLatch completed=new java.util.concurrent.CountDownLatch(1);
-        main.post(()->{try{save.run();}finally{completed.countDown();}});
+        main.post(()->{try{exit.run();}finally{completed.countDown();}});
         try { completed.await(2,java.util.concurrent.TimeUnit.SECONDS); }
         catch(InterruptedException e){Thread.currentThread().interrupt();}
+    }
+    static void serviceStarted() {
+        serviceStarting=false;
+        if(exitPending)prepareExit();
     }
     public static int themeMode() {
         android.content.Context context = activity.get();

@@ -48,6 +48,45 @@ public final class OverlayV12ContractTest {
         String history=(String)call("historySubtitle",new Class<?>[]{JSONObject.class},qq.put("playedAtMs",1704067200000L));
         require(history.contains("QQ音乐")&&history.contains("01-01 08:00"),"history exposes source and actual-play wall-clock time");
         System.out.println("PASS history source and played time captions");
+        localizedDynamicStatus();
+        allLyricsCopyContent();
+    }
+    private static void allLyricsCopyContent() throws Exception {
+        JSONObject playback=new JSONObject().put("currentTrack","fixture");
+        JSONObject ui=new JSONObject().put("lyricTrack","fixture").put("lyricLines",new JSONArray()
+            .put(new JSONObject().put("original","收藏夹 <b>原文</b> 🌙").put("translation","First"))
+            .put(new JSONObject().put("original","第二句").put("translation","")));
+        Class<?>[] signature={JSONObject.class,JSONObject.class,int.class};
+        expect("收藏夹 <b>原文</b> 🌙\n第二句",call("lyricCopyText",signature,playback,ui,0),"copy contains the complete original song");
+        expect("First",call("lyricCopyText",signature,playback,ui,1),"missing translations do not copy a system placeholder");
+        expect("收藏夹 <b>原文</b> 🌙\nFirst\n第二句",call("lyricCopyText",signature,playback,ui,2),"bilingual copy preserves user text and order");
+        ui.put("lyricLines",new JSONArray()).put("lyrics","[AR:艺术家]\n[00:01.00]原文\n[00:02.00]结尾").put("translation","[00:01.00]Translation");
+        expect("原文\n结尾\n\nTranslation",call("lyricCopyText",signature,playback,ui,2),"plain copy removes timestamps and metadata");
+        playback.put("currentTrack","next");expect("",call("lyricCopyText",signature,playback,ui,2),"stale lyrics from the previous song are not copied");
+        System.out.println("PASS whole-song clipboard content, display modes, missing translations and stale-track protection");
+    }
+    private static void localizedDynamicStatus() throws Exception {
+        java.lang.reflect.Field language=UiStrings.class.getDeclaredField("code");language.setAccessible(true);
+        Object previous=language.get(null);
+        try {
+            language.set(null,"en");
+            JSONObject search=new JSONObject().put("searchMessage","找到 23 首，可直接点击播放。")
+                .put("playlistSearchMessage","找到 7 个歌单");
+            expect("Found 23 tracks. Click to play.",call("searchStatus",new Class<?>[]{JSONObject.class,boolean.class},search,true),"completed song searches translate the selected status");
+            expect("Found 7 playlists",call("searchStatus",new Class<?>[]{JSONObject.class,boolean.class},search,false),"completed playlist searches translate the selected status");
+            search.put("searchMessage","没有找到歌曲。");
+            expect("No tracks found.",call("searchStatus",new Class<?>[]{JSONObject.class,boolean.class},search,true),"empty search feedback is translated");
+            search.put("searching",true);
+            expect("Searching…",call("searchStatus",new Class<?>[]{JSONObject.class,boolean.class},search,true),"loading status takes priority over the previous result");
+            JSONObject playback=new JSONObject().put("qualityInfo","QQ音乐 · 请求：标准\n实际：FLAC 16-bit 44.1kHz");
+            JSONObject ui=new JSONObject().put("qualityInfo","音质选项用于在线歌曲；本地文件保持原格式。");
+            expect("QQ Music · Requested: Standard\nActual: FLAC 16-bit 44.1kHz",call("qualityStatus",new Class<?>[]{JSONObject.class,JSONObject.class},playback,ui),"published quality information is translated after snapshot selection");
+            expect("Quality settings apply to online tracks. Local files keep their original format.",call("qualityStatus",new Class<?>[]{JSONObject.class,JSONObject.class},new JSONObject(),ui),"fallback quality information is translated");
+            language.set(null,"zh_CN");search.put("searching",false);
+            expect("没有找到歌曲。",call("searchStatus",new Class<?>[]{JSONObject.class,boolean.class},search,true),"switching back immediately restores Chinese dynamic feedback");
+            expect(playback.getString("qualityInfo"),call("qualityStatus",new Class<?>[]{JSONObject.class,JSONObject.class},playback,ui),"Chinese quality information stays unchanged");
+        } finally { language.set(null,previous); }
+        System.out.println("PASS native dynamic search and quality feedback follows the active language");
     }
     private static JSONObject entry(String occurrence,String identity) throws Exception {
         return new JSONObject().put("queueId",occurrence).put("id",identity).put("source",identity.substring(0,identity.indexOf(':')))

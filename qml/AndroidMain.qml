@@ -11,6 +11,7 @@ ApplicationWindow {
     font.pixelSize: 14
     property int themeMode: player.androidThemeMode()
     property bool animationsEnabled: player.androidAnimationsEnabled()
+    property bool quitting: false
     readonly property string languageCode: player.uiLanguage.code
     function t(source) { var dependency=languageCode; return player.uiLanguage.text(source) }
     readonly property bool dark: themeMode === 2 || (themeMode === 0 && Qt.styleHints.colorScheme === Qt.Dark)
@@ -37,7 +38,7 @@ ApplicationWindow {
             if (exitButton) exitButton.feedbackScale = 1
         }
     }
-    onClosing: function(event) { event.accepted = false }
+    onClosing: function(event) { event.accepted = quitting }
     Connections {
         target: Qt.application
         function onStateChanged() {
@@ -73,7 +74,7 @@ ApplicationWindow {
                     Layout.bottomMargin: 24
                     Label { text: welcomeWindow.t("浮音"); font.pixelSize: 20; font.bold: true; color: welcomeWindow.ink }
                     Item { Layout.fillWidth: true }
-                    Label { text: "FloatMusic 1.4"; font.pixelSize: 12; color: welcomeWindow.muted }
+                    Label { text: "FloatMusic 1.5"; font.pixelSize: 12; color: welcomeWindow.muted }
                 }
 
                 Item {
@@ -150,6 +151,7 @@ ApplicationWindow {
                     property real feedbackScale: 1
                     text: welcomeWindow.t("显示悬浮窗")
                     Accessible.name: text
+                    enabled: !welcomeWindow.quitting
                     onPressed: welcomeWindow.animatePress(showOverlay, overlayPress, true)
                     onReleased: welcomeWindow.animatePress(showOverlay, overlayPress, false)
                     onCanceled: { overlayPress.stop(); feedbackScale = 1 }
@@ -228,15 +230,17 @@ ApplicationWindow {
 
                 Button {
                     id: exitButton
+                    objectName: "androidExitButton"
                     Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 16
                     implicitWidth: 140; implicitHeight: 48
                     property real feedbackScale: 1
                     text: welcomeWindow.t("退出浮音")
                     Accessible.name: text
+                    enabled: !welcomeWindow.quitting
                     onPressed: welcomeWindow.animatePress(exitButton, exitPress, true)
                     onReleased: welcomeWindow.animatePress(exitButton, exitPress, false)
                     onCanceled: { exitPress.stop(); feedbackScale = 1 }
-                    onClicked: player.quit()
+                    onClicked: { welcomeWindow.quitting = true; player.quit() }
                     NumberAnimation { id: exitPress; target: exitButton; property: "feedbackScale"; easing.type: Easing.OutCubic }
                     contentItem: Label {
                         scale: exitButton.feedbackScale

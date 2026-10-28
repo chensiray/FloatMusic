@@ -11,10 +11,10 @@ int main(int argc, char *argv[]) {
     app.setOrganizationName("FloatMusic"); app.setApplicationName("FloatMusic");
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/floatmusic-app.png")));
 #ifdef Q_OS_ANDROID
-    app.setApplicationVersion("1.4.0-preview.3");
+    app.setApplicationVersion("1.5.0-preview.2");
     app.setQuitOnLastWindowClosed(false);
 #else
-    app.setApplicationVersion("1.4.0-preview");
+    app.setApplicationVersion("1.5.0-preview.2");
 #endif
 #ifndef Q_OS_ANDROID
     SingleInstance instance(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));

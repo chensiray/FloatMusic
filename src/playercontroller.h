@@ -168,6 +168,7 @@ public:
     Q_INVOKABLE QRect desktopWorkArea(int x, int y) const;
     Q_INVOKABLE void setDesktopLyricInputRegion(QObject *window, const QVariantList &rectangles);
     Q_INVOKABLE void applyLyricLineSpacing(QObject *textDocument, qreal factor);
+    Q_INVOKABLE bool copyText(const QString &text);
     Q_INVOKABLE void setQuality(const QString &quality);
     Q_INVOKABLE void setSourceQuality(const QString &source, const QString &quality);
     Q_INVOKABLE void playSearchResult(int index);
@@ -230,7 +231,7 @@ private:
     QString m_playbackMessage, m_loadedQueueEntry, m_requestedQueueEntry;
     QVariantList m_pendingQueueSnapshot;
     int m_pendingQueueIndex = -1;
-    bool m_historyPending = false;
+    bool m_historyPending = false, m_loadedHistoryPending = false;
     void loadTrack(const QVariantMap &track, bool autoplay, bool preservePosition = false, qint64 resumePosition = -1, bool continueSources = false);
     bool tryNextAudioSource();
     bool rejectUnexpectedDuration();

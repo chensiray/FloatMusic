@@ -4,6 +4,13 @@ package org.floatmusic.player;
 final class UiCatalog {
     static final java.util.Map<String,String> EN = new java.util.LinkedHashMap<>();
     static {
+        EN.put("已复制","Copied");
+        EN.put("复制失败，请重试。","Could not copy. Please try again.");
+        EN.put("高亮歌词可见度","Current line opacity");
+        EN.put("边缘歌词可见度","Edge line opacity");
+        EN.put("锁定歌词位置","Lock lyric position");
+        EN.put("居中歌词","Center lyrics");
+        EN.put("100% 最清晰，0% 完全透明；中间各行逐级渐变，单行时仅使用高亮可见度。","100% is clearest; 0% is transparent. Lines fade gradually between the two values. Single-line mode uses only current line opacity.");
         EN.put("7 行","7 lines");
         EN.put("9 行","9 lines");
         EN.put("歌词主题","Lyric theme");
@@ -127,7 +134,7 @@ final class UiCatalog {
         EN.put("当前歌曲，","Current track, ");
         EN.put("当前环境不启用全局按键；仍可保存快捷键设置。","Global shortcuts are unavailable here. Shortcut preferences can still be saved.");
         EN.put("录入","Record");
-        EN.put("快捷键","Shortcut");
+        EN.put("快捷键","Shortcuts");
         EN.put("快捷键，","Shortcut, ");
         EN.put("恢复","Reset");
         EN.put("恢复全部默认快捷键","Reset all shortcuts");
@@ -210,8 +217,8 @@ final class UiCatalog {
         EN.put("没有匹配的歌曲","No matching tracks");
         EN.put("浅色","Light");
         EN.put("浮音","FloatMusic");
-        EN.put("浮音 1.4.0-preview","FloatMusic 1.4.0-preview");
-        EN.put("浮音 1.4.0-preview · 桌面预览","FloatMusic 1.4.0-preview · Desktop preview");
+        EN.put("浮音 1.5.0-preview.2","FloatMusic 1.5.0-preview.2");
+        EN.put("浮音 1.5.0-preview.2 · 桌面预览","FloatMusic 1.5.0-preview.2 · Desktop preview");
         EN.put("浮音歌单","FloatMusic playlist");
         EN.put("浮音，点击展开，拖动移动","FloatMusic. Click to open, drag to move");
         EN.put("深色","Dark");
@@ -814,7 +821,7 @@ final class UiCatalog {
         EN.put("正在播放","Playing");
         EN.put("正在播放 · ","Playing · ");
         EN.put("正在播放 · 正在加载音频…","Playing · Loading audio…");
-        EN.put("浮音 1.4.0-preview · 悬浮播放","FloatMusic 1.4.0-preview · Floating player");
+        EN.put("浮音 1.5.0-preview.2 · 悬浮播放","FloatMusic 1.5.0-preview.2 · Floating player");
         EN.put("浮音，拖动此处移动窗口","FloatMusic. Drag here to move");
         EN.put("清空历史","Clear history");
         EN.put("清空待播放队列？当前歌曲会继续播放，结束后停止。","Clear the queue? The current track will finish, then playback will stop.");
@@ -927,5 +934,20 @@ final class UiCatalog {
         EN.put("：地址已失效或返回的不是音频",": The URL expired or did not return audio");
         EN.put("：请求",": Requested ");
         EN.put("；采样规格不能证明原始母带来源。",". Sample specifications do not establish master provenance.");
+        EN.put("通用与外观","General & appearance");
+        EN.put("语言、主题、窗口与动效","Language, theme, window & motion");
+        EN.put("各曲库音质与输出设备","Source quality & audio output");
+        EN.put("播放器歌词","Player lyrics");
+        EN.put("显示方式、字号与行距","Display, text size & line spacing");
+        EN.put("独立悬浮歌词","Floating lyrics");
+        EN.put("行数、主题、可见度与位置","Lines, theme, opacity & position");
+        EN.put("全局按键与默认设置","Global keys & defaults");
+        EN.put("结果数量与自定义服务","Result limit & custom service");
+        EN.put("关于浮音","About FloatMusic");
+        EN.put("版本与操作提示","Version & usage tips");
+        EN.put("展开简介","Show description");
+        EN.put("收起简介","Hide description");
+        EN.put("返回设置","Back to settings");
+        EN.put("播放与音频","Playback & audio");
     }
 }

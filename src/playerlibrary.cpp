@@ -8,6 +8,15 @@
 #include <QJsonObject>
 #include <QUuid>
 #include <QSettings>
+#include <QPointer>
+
+bool PlayerController::copyText(const QString &text) {
+    if (text.trimmed().isEmpty()) return false;
+    auto *clipboard = QGuiApplication::clipboard();
+    if (!clipboard) return false;
+    clipboard->setText(text);
+    return true;
+}
 
 void PlayerController::setLibraryMessage(const QString &message) {
     m_libraryMessage = message;
@@ -79,13 +88,14 @@ void PlayerController::libraryAction(const QString &action, const QVariantMap &a
         }
     } else if (action == "openOnline") {
         const int ticket = ++m_playlistGeneration;
+        const QPointer<PlayerController> owner(this);
         m_onlinePlaylist.clear(); m_onlinePlaylistLoading = true; setLibraryMessage({}); emit onlinePlaylistChanged();
         m_api.fetchPlaylist(args.value("id").toString(), [this, ticket](QVariantMap playlist, QString error) {
             if (ticket != m_playlistGeneration) return;
             m_onlinePlaylistLoading = false; m_onlinePlaylist = playlist;
             if (!error.isEmpty()) setLibraryMessage(error);
             emit onlinePlaylistChanged();
-        });
+        }, [owner, ticket] { return owner && ticket == owner->m_playlistGeneration; });
     } else if (action == "playOnline") {
         const auto list = m_onlinePlaylist.value("tracks").toList(); const int index = args.value("index", -1).toInt();
         if (!m_busy && index >= 0 && index < list.size()) playNowTrack(list[index].toMap());

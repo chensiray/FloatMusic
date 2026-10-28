@@ -371,6 +371,7 @@ struct MusicApi::PlaylistFetch {
     qsizetype offset = 0;
     qint64 expectedCount = 0;
     std::function<void(QVariantMap, QString)> done;
+    std::function<bool()> isCurrent;
 };
 struct MusicApi::TencentSongSearch {
     QString keywords;
@@ -660,15 +661,17 @@ void MusicApi::fetchNeteaseRankings(std::function<void(QVariantList, QString)> d
     });
 }
 
-void MusicApi::fetchPlaylist(const QString &id, std::function<void(QVariantMap, QString)> done) {
+void MusicApi::fetchPlaylist(const QString &id, std::function<void(QVariantMap, QString)> done,
+                             std::function<bool()> isCurrent) {
+    if (isCurrent && !isCurrent()) return;
     if (id.contains(':')) {
         const auto parts = id.split(':');
         if (parts.size() != 3 || !QStringList{"netease", "tencent", "kuwo"}.contains(parts[0])
             || !QStringList{"playlist", "ranking"}.contains(parts[1]) || !validId(parts[2])) {
             done({}, QStringLiteral("歌单 ID 无效。")); return;
         }
-        if (parts[0] == "netease") { fetchPlaylist(parts[2], std::move(done)); return; }
-        fetchCatalogPlaylist(parts[0], parts[1], parts[2], std::move(done)); return;
+        if (parts[0] == "netease") { fetchPlaylist(parts[2], std::move(done), std::move(isCurrent)); return; }
+        fetchCatalogPlaylist(parts[0], parts[1], parts[2], std::move(done), std::move(isCurrent)); return;
     }
     if (!validId(id)) { done({}, QStringLiteral("歌单 ID 无效。")); return; }
     const auto state = std::make_shared<PlaylistFetch>();
@@ -676,10 +679,12 @@ void MusicApi::fetchPlaylist(const QString &id, std::function<void(QVariantMap, 
     state->base = state->builtin ? m_endpoints.metadata : m_base;
     state->sourceGeneration = m_sourceGeneration;
     state->done = std::move(done);
+    state->isCurrent = std::move(isCurrent);
     // Keep every batch on the same API source even if settings change while loading.
     const QUrl url = withQuery(QUrl(state->base + (state->builtin ? "/api/v3/playlist/detail" : "/playlist/detail")),
                               {{"id", id}});
     get(url, QStringLiteral("读取歌单"), [this, state, id](QByteArray bytes, QString error) {
+        if (state->isCurrent && !state->isCurrent()) return;
         if (state->sourceGeneration != m_sourceGeneration) {
             state->done({}, QStringLiteral("API 来源已更改，请重新打开歌单。")); return;
         }
@@ -743,6 +748,7 @@ void MusicApi::fetchPlaylist(const QString &id, std::function<void(QVariantMap, 
 }
 
 void MusicApi::fetchPlaylistBatch(const std::shared_ptr<PlaylistFetch> &state) {
+    if (state->isCurrent && !state->isCurrent()) return;
     if (state->sourceGeneration != m_sourceGeneration) {
         state->done({}, QStringLiteral("API 来源已更改，请重新打开歌单。")); return;
     }
@@ -753,6 +759,7 @@ void MusicApi::fetchPlaylistBatch(const std::shared_ptr<PlaylistFetch> &state) {
     const QUrl url = withQuery(QUrl(state->base + (state->builtin ? "/api/v1/song/detail" : "/song/detail")),
                               {{"ids", state->builtin ? "[" + ids + "]" : ids}});
     get(url, QStringLiteral("补全歌单歌曲"), [this, state, batch](QByteArray bytes, QString error) {
+        if (state->isCurrent && !state->isCurrent()) return;
         if (state->sourceGeneration != m_sourceGeneration) {
             state->done({}, QStringLiteral("API 来源已更改，请重新打开歌单。")); return;
         }
@@ -776,6 +783,7 @@ void MusicApi::fetchPlaylistBatch(const std::shared_ptr<PlaylistFetch> &state) {
 }
 
 void MusicApi::finishPlaylist(const std::shared_ptr<PlaylistFetch> &state) {
+    if (state->isCurrent && !state->isCurrent()) return;
     QVariantList tracks;
     for (const auto &songId : state->orderedIds) {
         if (!state->knownTracks.contains(songId)) continue;
@@ -1013,6 +1021,9 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
                     }
                     address = data.value("url").toString();
                 } else if (source.format.startsWith("kuwo-") && doc.isObject() && doc.object().value("ok").toBool()) {
+                    if (doc.object().contains("id") && jsonId(doc.object().value("id")) != state->songId) {
+                        state->done({}, QStringLiteral("酷我返回的歌曲身份或类型不符，已拒绝该音频；请重试或尝试其他歌曲。")); return;
+                    }
                     const QUrl supplied(doc.object().value("url").toString(), QUrl::StrictMode);
                     const QUrl provider(m_endpoints.ourcraft);
                     const bool wrapped = validHttpUrl(supplied) && supplied.scheme() == provider.scheme() && supplied.host() == provider.host()

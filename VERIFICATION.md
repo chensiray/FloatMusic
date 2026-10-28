@@ -2,6 +2,15 @@
 
 这里说明各版本实际检查过的范围，帮助判断是否适合自己的设备。构建成功、自动测试和用户体验是不同证据，不能互相替代。
 
+## 1.5 发布检查 · 2026-10-28
+
+- 用户确认未发现问题并授权上传。发布标签 `v1.5.0-preview`，Windows 与 Android 均保留已验收的 `1.5.0-preview.2`，Android code25。发布时只更新文档与打包，没有修改产品源码或重编译验收包。
+- 最终双端源码快照核对一致：Android 87个文件、Windows 42个生产文件；Windows 1,490个运行文件全部逐项验证ZIP内容哈希，APK与验收包逐字节一致。
+- 完整离线CTest 14组、Windows原生界面19项、Android本地七组契约及5项针对性原生窗口回归通过；5项中包含九种字号／行距末句边界、中英文浅深色、简介展开收起与完整复制、设置分类往返。发布前再次运行完整离线CTest，记录 `artifacts/v1.5.2-2026-10-27/release-ctest.xml`。
+- 此前1.5还验证过原生歌词33项、Android退出8项和1.4审查后的播放／队列边界。详细范围见[1.5体验说明](docs/1.5-验收与更新说明.md)、[复制与末句修复](docs/1.5.0-preview.1-修复与验收.md)、[简介与设置说明](docs/1.5.0-preview.2-简介与设置.md)。本轮由代理执行的Android检查使用隔离模拟器，没有在发布阶段操作实体手机。
+- 沿用既有证书SHA256 `df368706c7d443cfc9a03955ea5ffdff707378e958b5e150fb3e06d8b3f1ec7c`，最低API28、目标API36、ARM64。APK SHA256：`455c1d8e9a6c164d29bfb34a92ad8a58173dc6c974495a036c0e359c05f2e1fc`；Windows ZIP SHA256：`d45a9257cd9d9b85ebd4159b8973534e7fd33df714667a220771b8a08a961e02`。
+- 发布资产为完整Windows ZIP、Android APK及SHA256SUMS；源码、ZIP与验收包的一致性记录在本地忽略目录 `artifacts/releases/v1.5.0-preview/`。
+
 ## 1.4 发布检查 · 2026-10-22（测试完成于 10 月 21 日）
 
 - 用户确认双端 1.4 验收无误并授权上传 GitHub。发布标签为 `v1.4.0-preview`；沿用 Windows `1.4.0-preview` 与 Android `1.4.0-preview.3`／code22，Android APK 与用户验收安装包逐字节一致。

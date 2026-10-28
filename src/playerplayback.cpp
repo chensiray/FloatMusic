@@ -125,7 +125,19 @@ void PlayerController::clearPlaybackQueue() {
 #ifdef Q_OS_ANDROID
     androidCommand("clearPlaybackQueue");
 #else
-    setPlaybackMessage(m_playbackStore.clearQueue() ? QStringLiteral("队列已清空，正在播放的歌曲继续") : m_playbackStore.error());
+    if (!m_playbackStore.clearQueue()) { setPlaybackMessage(m_playbackStore.error()); return; }
+    if (!m_pendingQueueSnapshot.isEmpty() || m_importing
+        || (!m_requestedQueueEntry.isEmpty() && m_requestedQueueEntry != m_loadedQueueEntry)) {
+        // A pending selection must not recreate the queue after this clear.
+        ++m_loadGeneration;
+        m_mediaTimeout.stop();
+        m_pendingQueueSnapshot.clear(); m_pendingQueueIndex = -1;
+        m_requestedTrack = m_loadedTrack; m_requestedQueueEntry = m_loadedQueueEntry;
+        m_historyPending = false; m_resolving = false; m_importing = false; m_busy = false; m_autoplay = false;
+        m_playIntent = m_player.playbackState() == QMediaPlayer::PlayingState;
+        sync();
+    }
+    setPlaybackMessage(QStringLiteral("队列已清空，正在播放的歌曲继续"));
 #endif
 }
 void PlayerController::playHistoryTrack(const QString &id) {
@@ -148,10 +160,12 @@ void PlayerController::clearPlaybackHistory() {
 }
 void PlayerController::recordStartedTrack() {
 #ifndef Q_OS_ANDROID
-    if (m_shuttingDown || !m_historyPending || !m_playing || m_busy || m_resolving || m_importing || m_sessionDeferred
-        || m_loadedTrack.isEmpty() || m_loadedTrack.value("id") != m_requestedTrack.value("id")
-        || m_loadedQueueEntry != m_requestedQueueEntry) return;
-    m_historyPending = false;
+    if (m_shuttingDown || !m_loadedHistoryPending || !m_playing || m_busy || m_resolving || m_importing || m_sessionDeferred
+        || m_loadedTrack.isEmpty()) return;
+    // Failed replacements do not consume the retained media's first playback.
+    m_loadedHistoryPending = false;
+    if (m_loadedTrack.value("id") == m_requestedTrack.value("id") && m_loadedQueueEntry == m_requestedQueueEntry)
+        m_historyPending = false;
     m_playbackStore.recordPlayed(m_loadedTrack);
 #endif
 }

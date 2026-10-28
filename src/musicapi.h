@@ -50,7 +50,9 @@ public:
     void searchPlaylists(const QString &query, const QStringList &sources, int limit);
     void fetchRankings(std::function<void(QVariantList, QString)> done);
     void fetchRankings(const QString &source, std::function<void(QVariantList, QString)> done);
-    void fetchPlaylist(const QString &id, std::function<void(QVariantMap, QString)> done);
+    // An optional browsing guard stops obsolete batches; canceled calls do not invoke done.
+    void fetchPlaylist(const QString &id, std::function<void(QVariantMap, QString)> done,
+                       std::function<bool()> isCurrent = {});
     void resolve(const QString &songId, std::function<void(QUrl, QString)> done);
     void resolve(const QString &songId, const QString &quality, std::function<void(QUrl, QString)> done);
     void resolveAudio(const QString &songId, const QString &quality, std::function<void(Audio, QString)> done,
@@ -78,7 +80,7 @@ private:
     void fetchTencentPlaylistSearchPage(const std::shared_ptr<TencentPlaylistSearch> &state);
     void fetchCatalogPage(const std::shared_ptr<CatalogFetch> &state);
     void fetchCatalogPlaylist(const QString &source, const QString &kind, const QString &id,
-                              std::function<void(QVariantMap, QString)> done);
+                              std::function<void(QVariantMap, QString)> done, std::function<bool()> isCurrent);
     void fetchNeteaseRankings(std::function<void(QVariantList, QString)> done);
     void tryAudioSource(const std::shared_ptr<AudioFetch> &state);
     void fetchMetingLyrics(const QString &source, const QString &songId, std::function<void(Lyrics, QString)> done);

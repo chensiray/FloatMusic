@@ -8,6 +8,8 @@ Window {
     property int activeIndex: -1
     property int lineCount: 3
     property int textSize: 30
+    property int highlightOpacity: 100
+    property int edgeOpacity: 35
     property bool motionEnabled: true
     property bool darkStyle: false
     property int themeMode: 0
@@ -25,11 +27,13 @@ Window {
     property string hideText: ""
     property string settingsText: ""
     property string lockText: ""
+    property string recenterText: ""
     property bool locked: false
     signal moved(real left, real top)
     signal hideRequested()
     signal settingsRequested()
     signal lockRequested()
+    signal recenterRequested()
     signal themeRequested(int mode)
     transientParent: null
     title: "FloatMusic · Desktop lyrics"
@@ -41,10 +45,12 @@ Window {
     onClosing: function(event) { event.accepted = false; hideRequested() }
     onWidthChanged: Qt.callLater(lines.followCurrent)
     function fadeAt(distance) {
-        var stops = [1.0, 0.72, 0.48, 0.29, 0.14, 0.04, 0.0]
-        var at = Math.min(stops.length - 1, Math.max(0, distance))
-        var lower = Math.floor(at), upper = Math.min(stops.length - 1, lower + 1)
-        return stops[lower] + (stops[upper] - stops[lower]) * (at - lower)
+        var peak = Math.max(10, Math.min(100, highlightOpacity)) / 100
+        var edge = Math.max(0, Math.min(peak, edgeOpacity / 100))
+        var outer = Math.floor(lineCount / 2), at = Math.abs(distance)
+        if (outer === 0) return peak * Math.max(0, 1 - at)
+        if (at <= outer) return peak + (edge - peak) * at / outer
+        return edge * Math.max(0, 1 - (at - outer))
     }
     function scheduleInputUpdate() { if (visible && !inputUpdate.running) inputUpdate.start() }
     function textRect(label) {
@@ -109,6 +115,7 @@ Window {
                 anchors.centerIn: parent
                 width: parent.width / 1.12 - 24; height: parent.height
                 text: String(parent.modelData.original || "♪").replace(/\n/g, " · ")
+                textFormat: Text.PlainText
                 font.family: "Microsoft YaHei UI"
                 font.pixelSize: window.fittedTextSize
                 font.weight: lyricRow.isCurrent ? Font.DemiBold : Font.Normal
@@ -137,6 +144,8 @@ Window {
         anchors.fill: parent; anchors.margins: 12
         visible: lines.count === 0
         text: window.emptyText
+        textFormat: Text.PlainText
+        opacity: window.fadeAt(0)
         font.family: "Microsoft YaHei UI"; font.pixelSize: window.fittedTextSize * 0.7
         wrapMode: Text.Wrap; fontSizeMode: Text.Fit; minimumPixelSize: 12
         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
@@ -144,6 +153,7 @@ Window {
         onContentWidthChanged: window.scheduleInputUpdate()
         onContentHeightChanged: window.scheduleInputUpdate()
         onVisibleChanged: window.scheduleInputUpdate()
+        onOpacityChanged: window.scheduleInputUpdate()
     }
     MouseArea {
         id: dragArea; objectName: "desktopLyricDragArea"
@@ -182,6 +192,7 @@ Window {
             MenuItem { text: window.darkText; checkable: true; checked: window.themeMode === 2; onTriggered: window.themeRequested(2) }
         }
         MenuItem { text: window.lockText; onTriggered: window.lockRequested() }
+        MenuItem { text: window.recenterText; onTriggered: window.recenterRequested() }
         MenuItem { text: window.settingsText; onTriggered: window.settingsRequested() }
         MenuItem { text: window.hideText; onTriggered: window.hideRequested() }
     }

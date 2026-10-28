@@ -41,7 +41,7 @@ if ($StageRoot -match '[^\x00-\x7F]') {
 
 $stageSource = Join-Path $StageRoot 'source'
 $buildDir = Join-Path $StageRoot 'build'
-if (-not $ArtifactRoot) { $ArtifactRoot = Join-Path $sourceRoot 'artifacts\v1.4-desktop-lyrics-2026-10-20' }
+if (-not $ArtifactRoot) { $ArtifactRoot = Join-Path $sourceRoot 'artifacts\v1.5-desktop-preview-2026-10-25' }
 $artifactRoot = [IO.Path]::GetFullPath($ArtifactRoot)
 $appDir = Join-Path $artifactRoot 'app'
 $runId = 'run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)

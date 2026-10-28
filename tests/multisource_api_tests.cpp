@@ -69,6 +69,7 @@ public:
     QHash<QString, int> audioStatuses;
     QHash<QString, qint64> audioSizes;
     int audioDelay = 0;
+    QJsonValue kuwoBackupId = QJsonValue::Undefined;
     MultiSourceFixture() {
         connect(this, &QTcpServer::newConnection, this, [this] {
             while (auto *socket = nextPendingConnection()) {
@@ -110,7 +111,11 @@ public:
                         if (type == "search") body = QJsonDocument(QJsonObject{{"ok", true}, {"songs", QJsonArray{
                             QJsonObject{{"id", "42"}, {"name", query.queryItemValue("id", QUrl::FullyDecoded)}, {"singer", "Kuwo singer"}, {"duration", "11"}}
                         }}}).toJson();
-                        else if (type == "url") body = QJsonDocument(QJsonObject{{"ok", !denyKuwo}, {"url", base() + "/proxy?url=" + QString::fromLatin1(QUrl::toPercentEncoding(base() + "/audio?token=origin%2Bvalue"))}}).toJson();
+                        else if (type == "url") {
+                            QJsonObject response{{"ok", !denyKuwo}, {"url", base() + "/proxy?url=" + QString::fromLatin1(QUrl::toPercentEncoding(base() + "/audio?token=origin%2Bvalue"))}};
+                            if (!kuwoBackupId.isUndefined()) response["id"] = kuwoBackupId;
+                            body = QJsonDocument(response).toJson();
+                        }
                         else if (type == "lrc") body = "[00:00.00]Kuwo original\n[00:01.50]Second line";
                     } else if (url.path() == "/meting") {
                         if (query.queryItemValue("type") == "lrc") body = "[00:00.00]Meting original";
@@ -509,6 +514,39 @@ private slots:
         QCOMPARE(audio.bitrate, 128); QCOMPARE(audio.quality, QString("standard")); QCOMPARE(audio.sourceId, QString("kuwo-mobi"));
         QVERIFY(!audio.notice.isEmpty()); QCOMPARE(QUrlQuery(fixture.requests[0]).queryItemValue("br"), QString("320kmp3"));
         QCOMPARE(QUrlQuery(fixture.requests[1]).queryItemValue("br"), QString("128kmp3"));
+    }
+    void kuwoBackupRejectsConflictingIdentity_data() {
+        QTest::addColumn<QJsonValue>("identity");
+        QTest::addColumn<bool>("accepted");
+        QTest::addColumn<bool>("proxy");
+        for (bool proxy : {false, true}) {
+            const QByteArray prefix = proxy ? "proxy-" : "origin-";
+            QTest::newRow((prefix + "omitted").constData()) << QJsonValue(QJsonValue::Undefined) << true << proxy;
+            QTest::newRow((prefix + "matching-string").constData()) << QJsonValue("42") << true << proxy;
+            QTest::newRow((prefix + "matching-number").constData()) << QJsonValue(42) << true << proxy;
+            QTest::newRow((prefix + "conflicting-string").constData()) << QJsonValue("43") << false << proxy;
+            QTest::newRow((prefix + "conflicting-number").constData()) << QJsonValue(43) << false << proxy;
+        }
+    }
+    void kuwoBackupRejectsConflictingIdentity() {
+        QFETCH(QJsonValue, identity); QFETCH(bool, accepted); QFETCH(bool, proxy);
+        MultiSourceFixture fixture; QVERIFY(fixture.listen(QHostAddress::LocalHost));
+        fixture.kuwoBackupId = identity;
+        fixture.audioBodies[proxy ? "/proxy" : "/audio"] = flacSample();
+        MusicApi api(fixture.endpoints()); QVERIFY(api.setBaseUrl(""));
+        bool done = false; MusicApi::Audio audio; QString error;
+        api.resolveAudio("kuwo", "42", "standard", [&](MusicApi::Audio value, QString failure) {
+            audio = value; error = failure; done = true;
+        }, proxy ? QStringList{"kuwo-origin"} : QStringList{}, 226);
+        QTRY_VERIFY(done);
+        if (accepted) {
+            QVERIFY2(error.isEmpty(), qPrintable(error));
+            QCOMPARE(audio.sourceId, proxy ? QString("kuwo-proxy") : QString("kuwo-origin"));
+        } else {
+            QVERIFY(!error.isEmpty()); QVERIFY(audio.url.isEmpty());
+            for (const auto &request : fixture.requests)
+                QVERIFY(request.path() != "/audio" && request.path() != "/proxy");
+        }
     }
     void kuwoPrefersOriginalCdnAndCanRetryProxy() {
         MultiSourceFixture fixture; QVERIFY(fixture.listen(QHostAddress::LocalHost));
