@@ -9,15 +9,38 @@ Window {
     property int lineCount: 3
     property int textSize: 30
     property int highlightOpacity: 100
-    property int edgeOpacity: 35
+    property int edgeOpacity: 55
     property bool motionEnabled: true
     property bool darkStyle: false
     property int themeMode: 0
     property int availableHeight: 10000
     readonly property int fittedTextSize: Math.max(10, Math.min(textSize, Math.floor(rowHeight / 1.75)))
-    readonly property color lyricInk: darkStyle ? "#F4F0FC" : "#293047"
-    readonly property color lyricHighlight: darkStyle ? "#CDAAFF" : "#703AFF"
-    readonly property color lyricOutline: darkStyle ? "#C40C1123" : "#B8FFFFFF"
+    readonly property color lyricInk: darkStyle ? "#FFFFFF" : "#171C2C"
+    readonly property color lyricHighlight: darkStyle ? "#E0CCFF" : "#5928C9"
+    readonly property color lyricOutline: darkStyle ? "#101322" : "#FFFFFF"
+    // Compact only the presentation: the player retains interlude timestamps.
+    readonly property var displayTimeline: {
+        var result = []
+        for (var i = 0; i < timeline.length; ++i) {
+            var row = timeline[i] || {}
+            var words = cleanWords(row.original) || cleanWords(row.translation)
+            if (words.length) result.push({ sourceIndex: i, text: words })
+        }
+        return result
+    }
+    readonly property int displayActiveIndex: {
+        var result = -1
+        for (var i = 0; i < displayTimeline.length; ++i) {
+            if (displayTimeline[i].sourceIndex > activeIndex) break
+            result = i
+        }
+        return result
+    }
+    function cleanWords(value) {
+        return String(value || "").split(/\r?\n/).map(function(part) {
+            return part.replace(/[\u200B\uFEFF]/g, "").trim()
+        }).filter(function(part) { return part.length > 0 }).join(" · ")
+    }
     property string themeText: ""
     property string followText: ""
     property string lightText: ""
@@ -49,7 +72,14 @@ Window {
         var edge = Math.max(0, Math.min(peak, edgeOpacity / 100))
         var outer = Math.floor(lineCount / 2), at = Math.abs(distance)
         if (outer === 0) return peak * Math.max(0, 1 - at)
-        if (at <= outer) return peak + (edge - peak) * at / outer
+        if (at <= outer) {
+            // A normalized exponential separates each context row while keeping
+            // both user-selected endpoints exact, including during scrolling.
+            var t = at / outer
+            var floor = Math.exp(-2)
+            var weight = (Math.exp(-2 * t) - floor) / (1 - floor)
+            return edge + (peak - edge) * weight
+        }
         return edge * Math.max(0, 1 - (at - outer))
     }
     function scheduleInputUpdate() { if (visible && !inputUpdate.running) inputUpdate.start() }
@@ -95,8 +125,8 @@ Window {
         id: lines; objectName: "desktopLyricLines"
         anchors.fill: parent
         interactive: false
-        model: window.timeline
-        currentIndex: Math.max(0, window.activeIndex)
+        model: window.displayTimeline
+        currentIndex: Math.max(0, window.displayActiveIndex)
         motionEnabled: window.motionEnabled
         header: Item { height: Math.floor(window.lineCount / 2) * window.rowHeight; width: 1 }
         footer: Item { height: Math.floor((window.lineCount - 1) / 2) * window.rowHeight; width: 1 }
@@ -106,7 +136,7 @@ Window {
             required property var modelData
             required property int index
             property alias label: words
-            readonly property bool isCurrent: index === window.activeIndex
+            readonly property bool isCurrent: index === window.displayActiveIndex
             readonly property real centerDistance: Math.abs(y + height / 2 - lines.contentY - lines.height / 2) / window.rowHeight
             width: lines.width; height: window.rowHeight
             Text {
@@ -114,17 +144,17 @@ Window {
                 objectName: "desktopLyricText-" + index
                 anchors.centerIn: parent
                 width: parent.width / 1.12 - 24; height: parent.height
-                text: String(parent.modelData.original || "♪").replace(/\n/g, " · ")
+                text: parent.modelData.text
                 textFormat: Text.PlainText
                 font.family: "Microsoft YaHei UI"
                 font.pixelSize: window.fittedTextSize
-                font.weight: lyricRow.isCurrent ? Font.DemiBold : Font.Normal
+                font.weight: lyricRow.isCurrent ? Font.Bold : Font.DemiBold
                 fontSizeMode: Text.HorizontalFit; minimumPixelSize: 10
                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                 color: lyricRow.isCurrent ? window.lyricHighlight : window.lyricInk
                 opacity: window.fadeAt(lyricRow.centerDistance)
                 property real currentBoost: lyricRow.isCurrent ? 1.12 : 1.0
-                scale: currentBoost * Math.max(0.76, 1.0 - lyricRow.centerDistance * 0.055)
+                scale: currentBoost * Math.max(0.94, 1.0 - lyricRow.centerDistance * 0.015)
                 style: Text.Outline; styleColor: window.lyricOutline
                 Behavior on currentBoost { enabled: window.motionEnabled; NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
                 Behavior on color { enabled: window.motionEnabled; ColorAnimation { duration: 180 } }

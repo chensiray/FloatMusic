@@ -39,13 +39,15 @@ public final class LyricWindowRegressionTest extends Instrumentation {
     }
     @Override public void onStart(){
         screenshotDirectory=new File(getTargetContext().getExternalFilesDir(null),"run-"+SystemClock.uptimeMillis());screenshotDirectory.mkdirs();
-        String[] cases=selectedCases.isEmpty()?new String[]{"player-bottom-visible","player-description-fold","player-settings-navigation","floating-empty-touch-through","floating-opacity-settings","floating-lock-recenter","floating-settings-ui","floating-drag-cache","floating-cache-invalidation","player-rebuild-no-lyrics","floating-no-motion-identity","floating-animated-identity","floating-horizontal-anchor","floating-ui-refresh","floating-stable-raster","floating-stable-surfaces","floating-nine-line-surfaces","floating-idle-stops","floating-touch-through","floating-cross-app-touch","floating-frame-pacing","floating-nine-frame-pacing","player-frame-pacing","player-long-frame-pacing","player-idle-layout","player-animated-follow","player-neighbor-follow","player-manual-return","player-no-motion-return","player-accessible-browse","player-no-motion-follow","player-copy-all","player-copy-description","player-copy-drag","player-copy-ranking"}:selectedCases.split(",");int passed=0;
+        String[] cases=selectedCases.isEmpty()?new String[]{"floating-blank-rows","floating-readability","player-bottom-visible","player-description-fold","player-settings-navigation","floating-empty-touch-through","floating-opacity-settings","floating-lock-recenter","floating-settings-ui","floating-drag-cache","floating-cache-invalidation","player-rebuild-no-lyrics","floating-no-motion-identity","floating-animated-identity","floating-horizontal-anchor","floating-ui-refresh","floating-stable-raster","floating-stable-surfaces","floating-nine-line-surfaces","floating-idle-stops","floating-touch-through","floating-cross-app-touch","floating-frame-pacing","floating-nine-frame-pacing","player-frame-pacing","player-long-frame-pacing","player-idle-layout","player-animated-follow","player-neighbor-follow","player-manual-return","player-no-motion-return","player-accessible-browse","player-no-motion-follow","player-copy-all","player-copy-description","player-copy-drag","player-copy-ranking"}:selectedCases.split(",");int passed=0;
         for(String scene:cases){
             Bundle progress=new Bundle();progress.putString("currentCase",scene);sendStatus(0,progress);
             try{
                 boolean motion=!scene.equals("floating-no-motion-identity")&&!scene.equals("floating-horizontal-anchor")&&!scene.startsWith("player-no-motion-");
                 runOnMainSync(()->prepare(motion,scene.equals("floating-horizontal-anchor")?.20f:.5f));SystemClock.sleep(500);
-                if(scene.equals("player-description-fold"))testDescriptionFold();
+                if(scene.equals("floating-readability"))testReadability();
+                else if(scene.equals("floating-blank-rows"))testBlankRows();
+                else if(scene.equals("player-description-fold"))testDescriptionFold();
                 else if(scene.equals("player-settings-navigation"))testSettingsNavigation();
                 else if(scene.equals("player-copy-ranking"))testCopyRanking();
                 else if(scene.equals("player-copy-drag"))testCopyDrag();
@@ -103,6 +105,44 @@ public final class LyricWindowRegressionTest extends Instrumentation {
         }catch(Exception error){throw new RuntimeException(error);}
     }
     private void next(int position){try{state=new JSONObject(state.toString()).put("position",position);floating.update(state,ui);}catch(Exception e){throw new RuntimeException(e);}}
+    private void testBlankRows(){
+        runOnMainSync(()->{
+            try{
+                JSONArray source=new JSONArray();
+                String[] words={"","第一句"," \t\u00a0\u200b\ufeff","第二句\n\n继续","","\n"};
+                for(int i=0;i<words.length;i++)source.put(new JSONObject().put("time",i*1000).put("original",words[i]).put("translation",i==4?"Translation only":""));
+                ui=new JSONObject(ui.toString()).put("lyricLines",source);next(3000);
+                require(((java.util.List<?>)get(floating,"lyrics")).size()==3,"blank timestamps must not occupy lyric rows");
+                require(((Number)get(floating,"current")).intValue()==1,"current index maps to compact display rows");
+                require(((java.util.List<?>)get(floating,"lyrics")).get(1).equals("第二句 · 继续"),"internal blank lines are removed");
+                next(2000);require(((Number)get(floating,"current")).intValue()==0,"blank interval holds preceding real line");
+                next(4000);require(((Number)get(floating,"current")).intValue()==2,"translation-only line retains its timestamp");
+                next(5000);require(((Number)get(floating,"current")).intValue()==2,"trailing blank cannot become active");
+                next(0);require(((Number)get(floating,"current")).intValue()==-1,"no early highlight before first timestamp");
+            }catch(Exception error){throw new RuntimeException(error);}
+        });
+    }
+    private void testReadability(){
+        android.content.Intent intent=new android.content.Intent().setComponent(new android.content.ComponentName(getTargetContext(),Backdrop.class)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+        Backdrop backdrop=(Backdrop)startActivitySync(intent);
+        try{
+            runOnMainSync(()->{
+                try{
+                    JSONArray lines=new JSONArray();String[] words={"让音乐留在手边","陪你走过每个清晨","微光在旋律中缓缓流动","这一刻，听见自己的节奏","把喜欢的声音留在身边"};
+                    for(int i=0;i<15;i++)lines.put(new JSONObject().put("time",i*1000).put("original",words[i%words.length]));
+                    ui=new JSONObject(ui.toString()).put("lyricLines",lines);
+                    context.getSharedPreferences("window",0).edit().putInt("desktopLyricsRows",5).putInt("desktopLyricsFont",30).putBoolean("animationsEnabled",false).apply();next(7000);
+                }catch(Exception error){throw new RuntimeException(error);}
+            });
+            for(int mode:new int[]{1,2})for(int background:new int[]{0xfffafafa,0xff121724,0xff717b8c}){
+                runOnMainSync(()->{
+                    View view=new View(backdrop);view.setBackgroundColor(background);backdrop.setContentView(view);
+                    context.getSharedPreferences("window",0).edit().putInt("desktopLyricsTheme",mode).apply();
+                    for(View glyph:visible().values())require((((Number)get(glyph,"outline")).intValue()>>>24)==255,"outline stays solid before row opacity");
+                });SystemClock.sleep(200);capture("readability-"+mode+"-"+Integer.toHexString(background));
+            }
+        }finally{runOnMainSync(backdrop::finish);}
+    }
     private void testFloating(String scene){
         Map<String,View> before=new LinkedHashMap<>();float[] anchor={0};
         runOnMainSync(()->{before.putAll(visible());anchor[0]=((Number)get(floating,"centerX")).floatValue();next(4000);});
@@ -149,7 +189,7 @@ public final class LyricWindowRegressionTest extends Instrumentation {
         });SystemClock.sleep(400);
         runOnMainSync(()->{
             require(Math.abs(((Number)get(visible().get("Line 10"),"opacity")).floatValue()-.8f)<.001f,"current row uses saved opacity");
-            require(Math.abs(((Number)get(visible().get("Line 9"),"opacity")).floatValue()-.5f)<.001f,"middle row interpolates both endpoints");
+            require(Math.abs(((Number)get(visible().get("Line 9"),"opacity")).floatValue()-.36136485f)<.001f,"middle row matches the desktop exponential fade");
             View outer=visible().get("Line 8");require(outer!=null,"edge row exists");require(Math.abs(((Number)get(outer,"opacity")).floatValue()-.2f)<.001f,"outer row uses saved edge opacity");
             View layer=(View)get(floating,"drawing");Bitmap bitmap=Bitmap.createBitmap(layer.getWidth(),layer.getHeight(),Bitmap.Config.ARGB_8888);layer.draw(new android.graphics.Canvas(bitmap));
             android.graphics.Rect bounds=glyphBounds(outer);android.view.WindowManager.LayoutParams p=(android.view.WindowManager.LayoutParams)get(floating,"drawingParams");int maximum=0;

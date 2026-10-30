@@ -95,8 +95,22 @@ ImportResult copyAudio(const QUrl &url) {
 
 PlayerController::PlayerController(QObject *parent) : PlayerController(MusicApi::builtinEndpoints(), parent) {}
 PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent)
-    : QObject(parent), m_api(endpoints), m_shortcuts(!QStandardPaths::isTestModeEnabled() && !android()), m_sleepTimer(this) {
+    : QObject(parent), m_api(endpoints), m_offlineCache(endpoints), m_cacheLyricsApi(endpoints), m_shortcuts(!QStandardPaths::isTestModeEnabled() && !android()), m_sleepTimer(this) {
     initializePlaybackTools();
+    connect(&m_offlineCache, &OfflineCache::changed, this, [this] {
+        emit cacheChanged();
+#ifndef Q_OS_ANDROID
+        if(m_currentCacheKey.isEmpty())return;
+        const auto entry=m_offlineCache.entry(m_currentCacheKey);
+        if(entry.value("track").toMap().value("id")!=m_loadedTrack.value("id"))return;
+        const auto original=entry.value("lyrics").toString(),translation=entry.value("translation").toString();
+        const bool loading=entry.value("lyricsLoading").toBool(),failed=entry.value("lyricState")=="failed";
+        if(original==m_lyrics&&translation==m_translation&&loading==m_lyricsLoading&&failed==m_lyricsFailed)return;
+        m_lyrics=original;m_translation=translation;m_lyricsLoading=loading;m_lyricsFailed=failed;
+        m_lyricsMessage=m_lyrics.isEmpty()?QStringLiteral("缓存中暂无歌词，可联网后补取。"):QStringLiteral("已加载本地歌词。");
+        rebuildLyrics();emit lyricsChanged();
+#endif
+    });
     if (!m_library.migrateFavorites(QJsonDocument::fromJson(QSettings().value("library/favorites").toByteArray()).array().toVariantList())) {
         m_error = m_library.error(); m_libraryMessage = m_error;
     }
@@ -199,7 +213,7 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
 void PlayerController::setApiBase(const QString &url) {
     if (m_busy) { m_searchMessage = QStringLiteral("请等待当前加载完成后切换服务。"); emit searchChanged(); return; }
     if (!m_api.setBaseUrl(url)) m_searchMessage = QStringLiteral("请输入 http(s) 服务地址，不要包含账号、密码或查询参数。");
-    else { ++m_playlistGeneration; m_onlinePlaylistLoading = false; m_onlinePlaylist.clear();
+    else { m_offlineCache.setBaseUrl(url); m_cacheLyricsApi.setBaseUrl(url); ++m_playlistGeneration; m_onlinePlaylistLoading = false; m_onlinePlaylist.clear();
         ++m_rankingsRequest; m_rankingsLoading = false; m_rankings.clear(); m_rankingsMessage.clear(); emit rankingsChanged();
         m_playlistSearching = false; m_playlistResults.clear(); m_playlistSearchMessage.clear();
         emit playlistSearchChanged(); emit onlinePlaylistChanged();
@@ -326,6 +340,7 @@ QString PlayerController::qualityInfo() const {
     if (m_sessionDeferred) return QStringLiteral("%1 · 偏好：%2\n播放后显示实际音质。").arg(
         currentSourceName(), qualityLabel(qualityForSource(source), source));
     QStringList specs;
+    if (!m_loadedQuality.isEmpty()) specs.append(qualityLabel(m_loadedQuality, source));
     if (!m_loadedFormat.isEmpty()) specs.append(m_loadedFormat);
     else if (!codec.isEmpty()) specs.append(codec);
     if (m_loadedBitsPerSample > 0) specs.append(QStringLiteral("%1 bit").arg(m_loadedBitsPerSample));
@@ -363,6 +378,9 @@ void PlayerController::retryLyrics() {
         m_lyricsLoading = false; m_lyricsFailed = !error.isEmpty();
         if (error.isEmpty()) {
             m_lyrics = lyrics.original; m_translation = lyrics.translation;
+#ifdef Q_OS_ANDROID
+            androidCommand("cacheLyrics",QString::fromUtf8(QJsonDocument(QJsonObject{{"source",m_loadedTrack.value("source").toString()},{"songId",m_loadedTrack.value("songId").toString()},{"original",lyrics.original},{"translation",lyrics.translation},{"lyricLines",QJsonArray::fromVariantList(lyricTimeline(lyrics.original,lyrics.translation))},{"originalState",lyrics.original.isEmpty()?(lyrics.instrumental?"none":"unknown"):"available"},{"translationState",lyrics.translation.isEmpty()?(lyrics.instrumental?"none":"unknown"):"available"}}).toJson(QJsonDocument::Compact)));
+#endif
             rebuildLyrics();
         }
         m_lyricsMessage = !error.isEmpty() ? error : lyrics.instrumental ? QStringLiteral("纯音乐，暂无文字歌词。")
@@ -553,6 +571,14 @@ void PlayerController::step(int delta, bool automatic) {
 }
 bool PlayerController::tryNextAudioSource() {
 #ifndef Q_OS_ANDROID
+    if (!m_currentCacheKey.isEmpty() && !m_resolving) {
+        m_offlineCache.invalidate(m_currentCacheKey);m_currentCacheKey.clear();
+        const auto track=m_loadedTrack;const bool autoplay=m_playIntent;const int ticket=m_loadGeneration;
+        QTimer::singleShot(0,this,[this,track,autoplay,ticket]{if(ticket==m_loadGeneration)loadTrack(track,autoplay);});
+        return true;
+    }
+#endif
+#ifndef Q_OS_ANDROID
     if (!m_online || !m_api.hasAudioBackups(m_loadedTrack.value("source").toString()) || m_attemptedSources.isEmpty() || m_attemptedSources.size() >= 6) return false;
     const int ticket = m_loadGeneration;
     const auto track = m_loadedTrack;
@@ -610,7 +636,11 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
     m_playIntent = autoplay;
     m_requestedTrack = track;
     const QString quality = qualityForSource(track.value("source").toString());
-    auto load = [this, track, autoplay, preservePosition, resumePosition, quality, ticket](MusicApi::Audio audio, QString error) {
+    auto cached = m_preferredCacheKey.isEmpty() ? QVariantMap() : m_offlineCache.lookupKey(m_preferredCacheKey);
+    m_preferredCacheKey.clear();
+    if(cached.value("track").toMap().value("id")!=track.value("id"))cached.clear();
+    if(cached.isEmpty())cached=m_offlineCache.lookup(track,quality);
+    auto load = [this, track, autoplay, preservePosition, resumePosition, quality, ticket, cached](MusicApi::Audio audio, QString error) {
         if (ticket != m_loadGeneration) return;
         m_resolving = false;
         if (!error.isEmpty()) {
@@ -652,6 +682,9 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
         const qint64 resume = resumePosition >= 0 ? resumePosition : preservePosition ? m_position : -1;
         m_mediaTimeout.stop(); m_resolving = true;
         m_player.stop(); m_player.setSource({}); m_resolving = false;
+        m_currentCacheKey = cached.value("key").toString();
+        m_offlineCache.setInUse(m_currentCacheKey);
+        m_currentAudio = audio; m_automaticCacheStarted = false;
         m_sessionDeferred = false;
         m_error.clear(); m_currentTrack = track.value("id").toString(); m_title = track.value("name").toString();
         m_online = onlineSource(track.value("source").toString());
@@ -672,9 +705,20 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
         rebuildLyrics();
         m_lyricsMessage = m_online ? QStringLiteral("正在获取歌词…") : QStringLiteral("本地音乐暂不自动匹配在线歌词。"); emit lyricsChanged();
         m_mediaTimeout.start(); m_player.setSource(audio.url); sync();
-        if (m_online) retryLyrics();
+        if (!cached.isEmpty()) {
+            m_lyrics = cached.value("lyrics").toString(); m_translation = cached.value("translation").toString();
+            m_lyricsFailed = cached.value("lyricState") == "failed";
+            m_lyricsMessage = m_lyrics.isEmpty() ? QStringLiteral("缓存中暂无歌词，可联网后补取。") : QStringLiteral("已加载本地歌词。");
+            rebuildLyrics(); emit lyricsChanged();
+        } else if (m_online) retryLyrics();
     };
-    if (onlineSource(track.value("source").toString())) {
+    if (!cached.isEmpty()) {
+        MusicApi::Audio audio; audio.url = QUrl::fromLocalFile(cached.value("path").toString());
+        audio.quality = cached.value("quality").toString(); audio.format = cached.value("format").toString();
+        audio.bitrate = cached.value("bitrate").toInt(); audio.sampleRate = cached.value("sampleRate").toInt(); audio.bitsPerSample = cached.value("bitsPerSample").toInt();
+        audio.expectedDurationSeconds=cached.value("expectedDurationSeconds").toDouble();
+        audio.sourceName = QStringLiteral("本地缓存"); load(audio, {});
+    } else if (onlineSource(track.value("source").toString())) {
         m_busy = true; m_resolving = true; m_error.clear(); sync();
         m_api.resolveAudio(track.value("source").toString(), track.value("songId").toString(), quality, load, m_attemptedSources,
             track.value("source").toString() == "kuwo" ? track.value("duration").toDouble() : 0);
@@ -839,6 +883,12 @@ void PlayerController::sync() {
     const auto state = QJniObject::callStaticObjectMethod("org/floatmusic/player/PlayerBridge", "snapshot", "()Ljava/lang/String;");
     const QJsonObject o = QJsonDocument::fromJson(state.toString().toUtf8()).object();
     if (o.isEmpty()) return;
+    const auto cacheEntries = o.value("cacheEntries").toArray().toVariantList();
+    const auto cacheSummary = o.value("cacheSummary").toObject().toVariantMap();
+    const auto cacheSettings = o.value("cacheSettings").toObject().toVariantMap();
+    if (cacheEntries != m_androidCacheEntries || cacheSummary != m_androidCacheSummary || cacheSettings != m_androidCacheSettings) {
+        m_androidCacheEntries=cacheEntries; m_androidCacheSummary=cacheSummary; m_androidCacheSettings=cacheSettings; emit cacheChanged();
+    }
     const auto queue = o.value("queueEntries").toArray().toVariantList();
     const auto queueEntry = o.value("currentQueueEntry").toString();
     if (queue != m_androidQueueEntries || queueEntry != m_androidQueueEntry) {
@@ -873,7 +923,8 @@ void PlayerController::sync() {
     const auto loaded = o.value("loadedTrack").toObject().toVariantMap();
     m_loadedQuality = o.value("loadedQuality").toString();
     m_androidQualityInfo = o.value("qualityInfo").toString();
-    if (loaded != m_loadedTrack && !loaded.isEmpty()) {
+    const bool loadedChanged = loaded != m_loadedTrack && !loaded.isEmpty();
+    if (loadedChanged) {
         m_loadedTrack = loaded;
         m_requestedTrack = loaded;
         m_online = onlineSource(loaded.value("source").toString());
@@ -882,7 +933,17 @@ void PlayerController::sync() {
         rebuildLyrics();
         m_lyricsMessage = m_online ? QStringLiteral("正在获取歌词…") : QStringLiteral("本地音乐暂不自动匹配在线歌词。");
         emit lyricsChanged();
-        if (m_online) retryLyrics();
+        if (!o.value("cachePlayback").toBool() && m_online) retryLyrics();
+    }
+    if (o.value("cachePlayback").toBool()) {
+        const auto cached=o.value("cachedLyrics").toObject();
+        const QString original=cached.value("original").toString(), translation=cached.value("translation").toString();
+        if(loadedChanged || m_lyrics!=original || m_translation!=translation || m_lyricsLoading){
+            ++m_lyricsGeneration; m_lyricsLoading=false; m_lyricsFailed=cached.value("originalState").toString()=="failed";
+            m_lyrics=original; m_translation=translation;
+            m_lyricsMessage=original.isEmpty() && translation.isEmpty()?QStringLiteral("本地缓存暂无歌词，可联网后补取。"):QStringLiteral("已加载本地歌词。");
+            rebuildLyrics();emit lyricsChanged();
+        }
     }
     const auto requested = o.value("requestedTrack").toObject().toVariantMap();
     if (!requested.isEmpty()) m_requestedTrack = requested;
@@ -915,6 +976,11 @@ void PlayerController::sync() {
     m_position = m_player.position(); m_duration = m_player.duration();
     m_playing = m_player.playbackState() == QMediaPlayer::PlayingState;
     recordStartedTrack();
+    if (m_playing && !m_busy && m_online && m_currentCacheKey.isEmpty() && !m_automaticCacheStarted) {
+        m_automaticCacheStarted = true;
+        const auto key=m_offlineCache.enqueue(m_loadedTrack, m_requestedQuality, false, m_currentAudio);
+        if(!key.isEmpty())m_offlineCache.setInUse(key);
+    }
     m_seekable = m_player.isSeekable() && m_ready;
     m_status = m_busy ? QStringLiteral("正在导入 / 加载音频…") : m_playing ? QStringLiteral("正在播放 · %1").arg(m_online ? currentSourceName() : QStringLiteral("本地音频")) : m_ready ? QStringLiteral("已就绪 · 点击播放") : QStringLiteral("导入音乐，或从歌单选择歌曲");
     updateCurrentLyric();
@@ -963,6 +1029,19 @@ void PlayerController::processOverlayEvents() {
         } else if (action == "removeTrack") removeTrack(value);
         else if (action == "quality") { setQuality(value); syncQueue(); }
         else if (action == "api") { setApiBase(value); m_overlayMessage=m_searchMessage; }
+        else if (action == "cacheLyricsRequest") {
+            const auto request=QJsonDocument::fromJson(value.toUtf8()).object();
+            const auto track=request.value("track").toObject();
+            const QString key=request.value("key").toString();
+            m_cacheLyricsApi.fetchLyrics(track.value("source").toString(),track.value("songId").toString(),[this,key,track](MusicApi::Lyrics lyrics,QString error){
+                const auto rows=lyricTimeline(lyrics.original,lyrics.translation);
+                QJsonObject payload{{"key",key},{"source",track.value("source")},{"songId",track.value("songId")},
+                    {"original",lyrics.original},{"translation",lyrics.translation},{"lyricLines",QJsonArray::fromVariantList(rows)},
+                    {"originalState",!error.isEmpty()?"failed":!lyrics.original.isEmpty()?"available":lyrics.instrumental?"none":"unknown"},
+                    {"translationState",!error.isEmpty()?"failed":!lyrics.translation.isEmpty()?"available":lyrics.instrumental?"none":"unknown"}};
+                androidCommand("cacheLyrics",QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact)));
+            });
+        }
         else if (action == "retryLyrics") retryLyrics();
         else if (action == "retryPlayback") retryPlayback();
         else if (action == "quit") { quit(); return; }

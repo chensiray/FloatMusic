@@ -78,7 +78,15 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
             changed=changed||!signature.equals(parsedLyrics);parsedUi=ui;
             if(changed){
                 parsedTrack=track;parsedLyrics=signature;lyrics.clear();times=new long[source.length()];remove();
-                for(int i=0;i<source.length();i++){JSONObject line=source.optJSONObject(i);times[i]=line==null?0:line.optLong("time");lyrics.add(line==null?"":line.optString("original").replace('\n',' '));}
+                int kept=0;
+                for(int i=0;i<source.length();i++){
+                    JSONObject line=source.optJSONObject(i);if(line==null)continue;
+                    String words=FloatingLyricRules.cleanWords(line.optString("original"));
+                    if(words.isEmpty())words=FloatingLyricRules.cleanWords(line.optString("translation"));
+                    if(words.isEmpty())continue;
+                    times[kept++]=line.optLong("time");lyrics.add(words);
+                }
+                times=java.util.Arrays.copyOf(times,kept);
             }
         }
         Rect available=workArea();boolean resized=!positioned||!available.equals(area);area=available;
@@ -116,7 +124,7 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
     private void render(){
         if(closed)return;
         int highlightOpacity=FloatingLyricRules.highlightOpacity(prefs.getInt("desktopLyricsHighlightOpacity",100));
-        int edgeOpacity=FloatingLyricRules.edgeOpacity(prefs.getInt("desktopLyricsEdgeOpacity",35),highlightOpacity);
+        int edgeOpacity=FloatingLyricRules.edgeOpacity(prefs.getInt("desktopLyricsEdgeOpacity",55),highlightOpacity);
         int needed=lyrics.isEmpty()?1:count+2;
         try{
             int first=(int)Math.floor(centerIndex)-count/2-1;
@@ -267,7 +275,7 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
             boolean changed=normal==null||!words.equals(value)||cachedSize!=size;
             if(changed){
                 paint.setTextSize(Math.max(1,size*1.12f));
-                paint.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));float normalWidth=paint.measureText(value);
+                paint.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));float normalWidth=paint.measureText(value);
                 paint.setTypeface(Typeface.create("sans-serif",Typeface.BOLD));naturalWidth=Math.max(normalWidth,paint.measureText(value));
             }
             // Free space beyond the natural text width cannot change the raster.
@@ -279,13 +287,13 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
             if(width>limit)paint.setTextSize(paint.getTextSize()*limit/width);
             int padding=dp(3),bitmapWidth=Math.max(1,(int)Math.ceil(Math.min(width,limit))+padding*2);
             Paint.FontMetrics metrics=paint.getFontMetrics();int bitmapHeight=Math.max(1,(int)Math.ceil(metrics.descent-metrics.ascent)+padding*2);baseline=padding-metrics.ascent;
-            outline=night?0xc40c1123:0xb8ffffff;
-            normal=raster(bitmapWidth,bitmapHeight,false,night?0xfff4f0fc:0xff293047);
-            highlight=raster(bitmapWidth,bitmapHeight,true,night?0xffcdaaff:0xff703aff);setContentDescription(words);
+            outline=night?0xff101322:0xffffffff;
+            normal=raster(bitmapWidth,bitmapHeight,false,night?0xffffffff:0xff171c2c);
+            highlight=raster(bitmapWidth,bitmapHeight,true,night?0xffe0ccff:0xff5928c9);setContentDescription(words);
         }
         private Bitmap raster(int width,int height,boolean bold,int color){
             Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);Canvas canvas=new Canvas(bitmap);
-            paint.setTypeface(Typeface.create("sans-serif",bold?Typeface.BOLD:Typeface.NORMAL));paint.setTextAlign(Paint.Align.CENTER);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(Math.max(1,dp(.8f)));paint.setColor(outline);canvas.drawText(words,width/2f,baseline,paint);
+            paint.setTypeface(Typeface.create(bold?"sans-serif":"sans-serif-medium",bold?Typeface.BOLD:Typeface.NORMAL));paint.setTextAlign(Paint.Align.CENTER);paint.setStyle(Paint.Style.STROKE);paint.setStrokeJoin(Paint.Join.ROUND);paint.setStrokeWidth(Math.max(2,dp(1.6f)));paint.setColor(outline);canvas.drawText(words,width/2f,baseline,paint);
             paint.setStyle(Paint.Style.FILL);paint.setColor(color);canvas.drawText(words,width/2f,baseline,paint);return bitmap;
         }
     }

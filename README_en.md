@@ -6,9 +6,9 @@
 
 **Keep music close at hand.** FloatMusic is a floating music player for Windows and Android. It rests as a draggable music-note icon; clicking it opens a player card so you can control playback, read lyrics, and change tracks while using other apps.
 
-Current version: **1.5 · Windows and Android preview**. Both platforms use `1.5.0-preview.2` (Android version code 25), preserving the user-accepted packages and signing identity. Source code and packages are available in the [1.5 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.5.0-preview).
+Current version: **1.6 · Windows and Android preview**. Windows uses `1.6.0-preview.2`; Android uses `1.6.0-preview.3` (version code 29). The release preserves the user-accepted packages. Get source and downloads from the [1.6 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.6.0-preview).
 
-Version 1.5 refines the floating experience: adjust highlighted and edge lyric opacity separately, lock the position, or recenter lyrics. Long-press player lyrics to copy the whole song, or a playlist description to copy its full text. Long descriptions expand and collapse; settings now open dedicated category pages. Android fixes include exiting from the welcome page and keeping the final lyric fully visible after manual scrolling. Playback, queue and performance fixes from the 1.4 code review are included. See the [floating-window notes](docs/1.5-验收与更新说明.md), [lyric and copy fixes](docs/1.5.0-preview.1-修复与验收.md), and [description and settings notes](docs/1.5.0-preview.2-简介与设置.md).
+Version 1.6 adds local audio and bilingual lyric caching, offline playback, and unified cache management. Manual saves are retained; automatic cache defaults to 1 GB with least-recently-used cleanup and Wi-Fi only on Android. A visible **Save offline** button sits below the song title on Android. Settings → Local cache provides progress, lyric fetching and storage cleanup. Independent lyrics use a curved fade emphasizing the center, remove blank rows, and improve visibility on light and dark backgrounds. See the [offline cache notes](docs/1.6-本地缓存与离线播放.md) and [Android save-button fix](docs/1.6-手机手动保存入口修复.md).
 
 The separate playback queue, listening history, and sleep timer remain available. Schedule a track next or append it to the queue; duplicate occurrences, drag reordering, removal, clearing, and restart restoration are supported. Windows provides editable global shortcuts, while Android media notifications support playback, progress, mode, and volume controls. Mixed playlists, independent quality preferences, and lyric size and spacing are unchanged.
 
@@ -34,13 +34,13 @@ The separate playback queue, listening history, and sleep timer remain available
 
 ## Download and run
 
-This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.5 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.5.0-preview):
+This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.6 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.6.0-preview):
 
 | Platform | Download | How to use |
 |---|---|---|
-| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/FloatMusic-1.5.0-preview.2-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
-| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/FloatMusic-1.5.0-preview.2-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
-| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
+| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/FloatMusic-1.6.0-preview.2-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
+| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/FloatMusic-1.6.0-preview.3-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
+| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
 
 Other versions are listed under [Releases](https://github.com/chensiray/FloatMusic/releases). To compile the app yourself, see the [build guide](docs/DEVELOPMENT.md).
 

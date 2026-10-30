@@ -36,7 +36,7 @@ ApplicationWindow {
         property int fontSize: 30
         property int themeMode: 0
         property int highlightOpacity: 100
-        property int edgeOpacity: 35
+        property int edgeOpacity: 55
         property bool positionLocked: false
         property int left: -10000
         property int top: -10000
@@ -105,6 +105,7 @@ ApplicationWindow {
     readonly property var settingsPages: [
         { key: "general", title: "通用与外观", note: "语言、主题、窗口与动效", glyph: "spark" },
         { key: "playback", title: "播放与音频", note: "各曲库音质与输出设备", glyph: "volume" },
+        { key: "cache", title: "本地缓存", note: "离线音乐、歌词与空间管理", glyph: "import" },
         { key: "lyrics", title: "播放器歌词", note: "显示方式、字号与行距", glyph: "lyrics" },
         { key: "floating", title: "桌面歌词", note: "行数、主题、可见度与位置", glyph: "lyrics" },
         { key: "shortcuts", title: "快捷键", note: "全局按键与默认设置", glyph: "keyboard" },
@@ -191,7 +192,7 @@ ApplicationWindow {
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: root.t("浮音 1.5.0-preview.2 · 桌面预览")
+    title: root.t("浮音 1.6.0-preview.2 · 桌面预览")
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -216,7 +217,7 @@ ApplicationWindow {
         fitWindow(root); root.showNormal(); root.raise(); root.requestActivate()
     }
     function collapse() {
-        playbackMenu.close(); volumeMenu.close(); lyricTiming.close()
+        cachePane.closeDialogs(); playbackMenu.close(); volumeMenu.close(); lyricTiming.close()
         libraryMenu.close(); selectionMenu.close(); targetSheet.close(); importSheet.close(); exportSheet.close(); descriptionSheet.close(); playlistDialog.close(); deleteDialog.close(); removeDialog.close(); trackMenu.close()
         queueMenu.close(); historyMenu.close(); playbackRemoval.close(); shortcutCapture.close()
         floating.x = root.x; floating.y = root.y
@@ -448,7 +449,7 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Ctrl+F"; enabled: root.visible && !root.sheetOpen; onActivated: {root.showingOnlinePlaylist=false;root.openDetail("search");Qt.callLater(function(){(root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning();keywords.forceActiveFocus()})} }
     Shortcut { sequence: "Ctrl+O"; enabled: root.visible && !root.sheetOpen; onActivated: root.chooseMusic() }
-    readonly property bool sheetOpen: playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened || queueMenu.opened || historyMenu.opened || playbackRemoval.opened || shortcutCapture.opened
+    readonly property bool sheetOpen: cachePane.modalOpen || playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened || queueMenu.opened || historyMenu.opened || playbackRemoval.opened || shortcutCapture.opened
     Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.closeOnlinePlaylist();else if(root.detail === "settings" && root.settingsPage)root.openSettingsPage("");else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
     component Glyph: Canvas {
         id: glyph
@@ -980,9 +981,13 @@ ApplicationWindow {
                         Action { objectName: "sleepStatusButton"; visible: player.sleepMode !== "off"; glyph: "timer"; quiet: true; selected: true; Accessible.name: root.t(player.sleepText); ToolTip.text: root.t(player.sleepText); onClicked: root.openDetail("sleep") }
                         Action { objectName: "collapseButton"; glyph: "minus"; quiet: true; Accessible.name: root.t("收为图标"); ToolTip.text: root.t("收为图标"); onClicked: root.collapse() }
                     }
-                    Copy {
-                        Layout.fillWidth: true; text: player.currentTrack.length ? player.title : root.t(player.title); font.pixelSize: 22; font.weight: Font.DemiBold
-                        wrapMode: Text.Wrap; maximumLineCount: 2
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 6
+                        Copy {
+                            Layout.fillWidth: true; Layout.minimumWidth: 0; text: player.currentTrack.length ? player.title : root.t(player.title); font.pixelSize: 22; font.weight: Font.DemiBold
+                            wrapMode: Text.Wrap; maximumLineCount: 2
+                        }
+                        Action { objectName: "cacheCurrentTrack"; glyph: "import"; quiet: true; enabled: player.currentTrack.length > 0 && player.online; Accessible.name: root.t("保存当前歌曲"); ToolTip.text: Accessible.name; onClicked: { player.cacheCurrentTrack(); root.openDetail("settings"); root.openSettingsPage("cache") } }
                     }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 6
@@ -1515,6 +1520,7 @@ ApplicationWindow {
                                                 }
                                             }
                                         }
+                                        CachePage { id: cachePane; objectName: "cacheSettingsPage"; Layout.fillWidth: true; visible: root.settingsPage === "cache"; host: root; controller: player }
                                         ColumnLayout { property string settingsKey: "general"; visible: root.settingsPage === "general"; Layout.fillWidth: true; spacing: 8
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 10
@@ -1804,7 +1810,7 @@ ApplicationWindow {
                                         }
                                         }
                                         ColumnLayout { property string settingsKey: "about"; visible: root.settingsPage === "about"; Layout.fillWidth: true; spacing: 8
-                                        SettingsHeading { label: root.t("浮音 1.5.0-preview.2"); glyph: "info"; Layout.topMargin: 0 }
+                                        SettingsHeading { label: root.t("浮音 1.6.0-preview.2"); glyph: "info"; Layout.topMargin: 0 }
                                         Hint { text: root.t("Windows 桌面预览 · 拖动顶部移动窗口\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起") }
                                         }
                                     }
@@ -1925,6 +1931,7 @@ ApplicationWindow {
                                                 textName: "onlinePlaylistDescription"; toggleName: "onlineDescriptionToggle"
                                             }
                                             Hint { text: root.t(player.onlinePlaylist.warning || ""); visible: text.length > 0; color: root.danger }
+                                            Action { objectName: "cacheOnlinePlaylist"; text: root.t("缓存已加载歌曲") + " (" + onlineTracks.count + ")"; enabled: !player.onlinePlaylistLoading && onlineTracks.count > 0; onClicked: { player.cacheTracks(player.onlinePlaylist.tracks || []); root.openDetail("settings"); root.openSettingsPage("cache") } }
                                             Hint { text: player.onlinePlaylistLoading ? root.t("正在读取歌单与歌曲…") : root.t(player.libraryMessage); visible: text.length > 0 }
                                             Hint { text: root.t(player.playbackMessage); visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                                             Item { height: 4; width: 1 }
@@ -2165,6 +2172,7 @@ ApplicationWindow {
     LibrarySheet {
         id: libraryMenu; heading: root.t("歌单管理")
         Hint { text: root.activeList.name + " · " + player.tracks.length + root.t(" 首") }
+        Action { objectName: "cachePlaylist"; readonly property int eligibleCount: player.tracks.filter(function(track) { return !!track.songId && track.source !== "local" }).length; text: root.t("缓存歌单") + " (" + eligibleCount + ")"; Layout.fillWidth: true; enabled: eligibleCount > 0; onClicked: { player.cacheTracks(player.tracks); libraryMenu.close(); root.openDetail("settings"); root.openSettingsPage("cache") } }
         GridLayout {
             Layout.fillWidth: true; columns: 2; rowSpacing: 8; columnSpacing: 8
             Action { text: root.t("新建歌单"); Layout.fillWidth: true; onClicked: { libraryMenu.close(); playlistDialog.renaming = false; playlistName.text = ""; playlistDialog.open() } }
@@ -2195,6 +2203,7 @@ ApplicationWindow {
         property string trackName: ""
         property int trackIndex: -1
         Hint { text: trackMenu.trackName }
+        Action { objectName: "cacheSelectedTrack"; text: root.t("保存到本地"); glyph: "import"; Layout.fillWidth: true; enabled: !!trackMenu.track.songId && trackMenu.track.source !== "local"; onClicked: { player.cacheTrack(trackMenu.track, true); trackMenu.close(); root.openDetail("settings"); root.openSettingsPage("cache") } }
         Action { objectName: "trackEnqueueNext"; text: root.t("下一首播放"); glyph: "next"; Layout.fillWidth: true; onClicked: { player.enqueueTrack(trackMenu.track, "next"); trackMenu.close() } }
         Action { objectName: "trackEnqueueTail"; text: root.t("加入队尾"); glyph: "list"; Layout.fillWidth: true; onClicked: { player.enqueueTrack(trackMenu.track, "tail"); trackMenu.close() } }
         RowLayout {

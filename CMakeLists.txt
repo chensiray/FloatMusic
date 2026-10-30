@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.24)
-project(FloatMusic VERSION 1.5.0 LANGUAGES CXX)
+project(FloatMusic VERSION 1.6.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Concurrent Network)
 qt_standard_project_setup(REQUIRES 6.8)
 set(CATALOG_SOURCES src/musicapi.cpp src/musicapi.h src/musiccatalog.cpp src/catalogcodec.cpp src/catalogcodec.h)
-set(PLAYER_SOURCES src/uilanguage.cpp src/uilanguage.h src/playerlibrary.cpp src/playerplayback.cpp src/playlistdocument.cpp src/playlistdocument.h src/playercontroller.cpp src/playercontroller.h src/audiofilepolicy.cpp src/audiofilepolicy.h src/playliststore.cpp src/playliststore.h ${CATALOG_SOURCES} src/lyrictimeline.cpp src/lyrictimeline.h src/playbackstore.cpp src/playbackstore.h src/globalshortcuts.cpp src/globalshortcuts.h src/sleeptimer.cpp src/sleeptimer.h)
+set(PLAYER_SOURCES src/offlinecache.cpp src/offlinecache.h src/playercache.cpp src/uilanguage.cpp src/uilanguage.h src/playerlibrary.cpp src/playerplayback.cpp src/playlistdocument.cpp src/playlistdocument.h src/playercontroller.cpp src/playercontroller.h src/audiofilepolicy.cpp src/audiofilepolicy.h src/playliststore.cpp src/playliststore.h ${CATALOG_SOURCES} src/lyrictimeline.cpp src/lyrictimeline.h src/playbackstore.cpp src/playbackstore.h src/globalshortcuts.cpp src/globalshortcuts.h src/sleeptimer.cpp src/sleeptimer.h)
 qt_add_executable(FloatMusic src/main.cpp src/singleinstance.cpp src/singleinstance.h ${PLAYER_SOURCES})
-qt_add_qml_module(FloatMusic URI FloatMusic QML_FILES qml/Main.qml qml/AndroidMain.qml qml/PrismaticSurface.qml qml/SmoothLyricList.qml qml/DesktopLyrics.qml)
+qt_add_qml_module(FloatMusic URI FloatMusic QML_FILES qml/Main.qml qml/CachePage.qml qml/AndroidMain.qml qml/PrismaticSurface.qml qml/SmoothLyricList.qml qml/DesktopLyrics.qml)
 set(FLOATMUSIC_ICON_FILES assets/icons/floatmusic-app.png assets/icons/floatmusic-floating.png)
 qt_add_resources(FloatMusic "floatmusic_icons" PREFIX "/icons" BASE "assets/icons" FILES ${FLOATMUSIC_ICON_FILES})
 target_link_libraries(FloatMusic PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Concurrent Qt6::Network)
@@ -31,14 +31,24 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
         QT_ANDROID_MIN_SDK_VERSION 28
         QT_ANDROID_TARGET_SDK_VERSION 36
-        QT_ANDROID_VERSION_CODE 25
-        QT_ANDROID_VERSION_NAME "1.5.0-preview.2"
+        QT_ANDROID_VERSION_CODE 29
+        QT_ANDROID_VERSION_NAME "1.6.0-preview.3"
         QT_ANDROID_APP_NAME "浮音 · 功能验证")
 endif()
 option(FLOATMUSIC_TESTS "Build desktop tests" OFF)
 if(FLOATMUSIC_TESTS AND NOT ANDROID)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
+    qt_add_executable(offlinecache_tests tests/offlinecache_tests.cpp src/offlinecache.cpp src/offlinecache.h ${CATALOG_SOURCES})
+    target_include_directories(offlinecache_tests PRIVATE src)
+    target_link_libraries(offlinecache_tests PRIVATE Qt6::Test Qt6::Network)
+    add_test(NAME offline_cache COMMAND offlinecache_tests -o offline-cache-tests.txt,txt)
+    qt_add_executable(offlinecache_controller_tests tests/offlinecache_controller_tests.cpp ${PLAYER_SOURCES})
+    target_include_directories(offlinecache_controller_tests PRIVATE src)
+    target_link_libraries(offlinecache_controller_tests PRIVATE Qt6::Test Qt6::Quick Qt6::Multimedia Qt6::Concurrent Qt6::Network)
+    set_target_properties(offlinecache_tests offlinecache_controller_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    add_test(NAME offline_cache_playback COMMAND offlinecache_controller_tests -platform offscreen -o offline-cache-controller-tests.txt,txt)
+    set_tests_properties(offline_cache_playback PROPERTIES TIMEOUT 90)
     qt_add_executable(playbackstore_tests tests/playbackstore_tests.cpp src/playbackstore.cpp src/playbackstore.h)
     target_include_directories(playbackstore_tests PRIVATE src)
     target_link_libraries(playbackstore_tests PRIVATE Qt6::Test)

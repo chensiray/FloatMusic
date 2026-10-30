@@ -75,6 +75,80 @@ static bool revealInScrollable(QQuickItem *item) {
 class PlayerTests : public QObject {
     Q_OBJECT
 private slots:
+    void offlineCacheSettingsUi() {
+        PlayerController controller; QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine,&QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player",&controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(),1);
+        auto *window=qobject_cast<QQuickWindow *>(engine.rootObjects().first());QVERIFY(window);
+        auto *page=window->findChild<QQuickItem *>("cacheSettingsPage");QVERIFY(page);
+        QQmlComponent fixture(&engine);
+        fixture.setData(R"(import QtQml
+QtObject {
+    property var cacheEntries: [
+        {key:"manual",title:"A saved song with a longer title to verify wrapping",artist:"Artist",manual:true,state:"complete",quality:"lossless",bytes:12345678,lyricState:"available",translationState:"available"},
+        {key:"auto",title:"Downloading song",artist:"Artist",manual:false,state:"downloading",quality:"standard",bytes:2100000,total:9000000,progress:.23,lyricState:"unknown",translationState:"unknown"}]
+    property var cacheSummary: ({totalBytes:14445678,manualBytes:12345678,automaticBytes:2100000})
+    property var cacheSettings: ({automaticEnabled:true,automaticLimitBytes:1073741824})
+    property bool cleared: false
+    function clearCache(all) { cleared=all }
+    function setCacheSettings(patch) {}
+})",QUrl());
+        QScopedPointer<QObject> model(fixture.create());QVERIFY2(model, qPrintable(fixture.errorString()));
+        QVERIFY(page->setProperty("controller",QVariant::fromValue(model.data())));
+        window->setProperty("section","more");window->setProperty("detail","settings");window->setProperty("settingsPage","cache");
+        window->show();QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto *list=window->findChild<QQuickItem *>("cacheEntryList");QVERIFY(list);
+        QTRY_COMPARE(list->property("count").toInt(),2);
+        const auto artifacts=qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");
+        auto *theme=window->findChild<QObject *>("themeSelector");QVERIFY(theme);
+        for(const QString code:{QString("zh_CN"),QString("en")}){
+            QVERIFY(QMetaObject::invokeMethod(window,"setUiLanguage",Q_ARG(QVariant,code)));
+            for(int mode:{1,2}){
+                QVERIFY(QMetaObject::invokeMethod(theme,"activated",Q_ARG(int,mode)));
+                QVERIFY(revealInScrollable(page));QTest::qWait(150);
+                if(!artifacts.isEmpty()){QDir().mkpath(artifacts);QVERIFY(window->grabWindow().save(artifacts+QString("/cache-%1-%2.png").arg(code).arg(mode)));}
+                QVERIFY(revealInScrollable(list));QTest::qWait(80);
+                if(!artifacts.isEmpty())QVERIFY(window->grabWindow().save(artifacts+QString("/cache-entries-%1-%2.png").arg(code).arg(mode)));
+                QVERIFY(QMetaObject::invokeMethod(page,"askClear",Q_ARG(QVariant,true)));
+                auto *dialog=window->findChild<QObject *>("cacheDeleteConfirmation");QVERIFY(dialog);
+                QTRY_VERIFY(dialog->property("visible").toBool());
+                QVERIFY(dialog->property("message").toString().contains("2"));
+                if(!artifacts.isEmpty())QVERIFY(window->grabWindow().save(artifacts+QString("/cache-confirm-%1-%2.png").arg(code).arg(mode)));
+                QVERIFY(QMetaObject::invokeMethod(dialog,"accept"));
+                QVERIFY(model->property("cleared").toBool());
+            }
+        }
+        QCOMPARE(warnings.size(),0);
+    }
+    void floatingLyricsSkipBlankRows() {
+        PlayerController controller; QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *lyrics = engine.rootObjects().first()->findChild<QQuickWindow *>("desktopLyricsWindow"); QVERIFY(lyrics);
+        const QVariantList source{
+            QVariantMap{{"time",0},{"original",""}},
+            QVariantMap{{"time",1000},{"original",QStringLiteral("第一句")}},
+            QVariantMap{{"time",2000},{"original",QStringLiteral(" \t\u00a0\u200b\ufeff")}},
+            QVariantMap{{"time",3000},{"original",QStringLiteral("第二句\n\n继续")}},
+            QVariantMap{{"time",4000},{"translation","Translation only"}},
+            QVariantMap{{"time",5000},{"original","\n"}}};
+        lyrics->setProperty("motionEnabled", false);
+        lyrics->setProperty("timeline", source); lyrics->setProperty("activeIndex", 3);
+        lyrics->setVisible(true); QVERIFY(QTest::qWaitForWindowExposed(lyrics));
+        auto *view=lyrics->findChild<QQuickItem *>("desktopLyricLines"); QVERIFY(view);
+        QTRY_COMPARE(view->property("count").toInt(),3);
+        QTRY_COMPARE(view->property("currentIndex").toInt(),1);
+        auto *label=findVisualItem(view,"desktopLyricText-1"); QVERIFY(label);
+        QCOMPARE(label->property("text").toString(),QStringLiteral("第二句 · 继续"));
+        lyrics->setProperty("activeIndex",2); QTRY_COMPARE(view->property("currentIndex").toInt(),0);
+        lyrics->setProperty("activeIndex",4); QTRY_COMPARE(view->property("currentIndex").toInt(),2);
+        lyrics->setProperty("activeIndex",5); QTRY_COMPARE(view->property("currentIndex").toInt(),2);
+        lyrics->setProperty("timeline",QVariantList{source.first(),source.at(2),source.last()});
+        QTRY_COMPARE(view->property("count").toInt(),0);
+    }
     void v15FloatingOpacityAndPosition() {
         const auto previousName=QCoreApplication::applicationName();
         const auto restore=qScopeGuard([previousName]{QCoreApplication::setApplicationName(previousName);});
@@ -105,7 +179,18 @@ private slots:
                 QVERIFY(qAbs(fade(count/2+1))<.001);
             }
             QVERIFY(QMetaObject::invokeMethod(rows,"activated",Q_ARG(int,2)));
-            QVERIFY(qAbs(fade(1)-.5)<.001);
+            // Nearby context must visibly recede; the old quadratic kept it at 65%.
+            QVERIFY(qAbs(fade(1)-.36136485)<.001);
+            QVERIFY(QMetaObject::invokeMethod(rows,"activated",Q_ARG(int,4)));
+            double previous = fade(0);
+            for (int i=1;i<=4;++i) {
+                const double value=fade(i);
+                QVERIFY(previous-value>.05);
+                QVERIFY(qAbs(value-fade(-i))<.001);
+                previous=value;
+            }
+            for(double at=0;at<=4;at+=.1) QVERIFY(qAbs(fade(at)-fade(at+.001))<.002);
+            QVERIFY(QMetaObject::invokeMethod(rows,"activated",Q_ARG(int,2)));
             auto *view=lyrics->findChild<QQuickItem *>("desktopLyricLines"); QVERIFY(view);
             QTRY_VERIFY(!view->property("followingAnimation").toBool());
             lyrics->setProperty("activeIndex",11);QTRY_VERIFY(view->property("followingAnimation").toBool());
@@ -205,8 +290,7 @@ private slots:
             auto *current = findVisualItem(view, "desktopLyricText-10"); QVERIFY(current);
             QCOMPARE(current->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
             auto *currentRow = findVisualItem(view, "desktopLyricRow-10"); QVERIFY(currentRow);
-            const auto currentY = currentRow->mapToScene(QPointF()).y();
-            QVERIFY2(qAbs(currentY - (count / 2) * lyrics->property("rowHeight").toDouble()) < 1.5, qPrintable(QString("Current line at %1 for %2 visible rows").arg(currentY).arg(count)));
+            QTRY_VERIFY_WITH_TIMEOUT(qAbs(currentRow->mapToScene(QPointF()).y() - (count / 2) * lyrics->property("rowHeight").toDouble()) < 1.5, 3000);
             const auto frame = lyrics->grabWindow();
             QCOMPARE(frame.pixelColor(0, 0).alpha(), 0);
             if (!screenshots.isEmpty()) QVERIFY(frame.save(screenshots + "/v14-desktop-lyrics-" + QString::number(count) + ".png"));
@@ -362,7 +446,7 @@ private slots:
         QCOMPARE(window->property("languageCode").toString(), QString("zh_CN"));
         QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "en")));
         QTRY_COMPARE(window->property("languageCode").toString(), QString("en"));
-        QVERIFY(window->title().contains("FloatMusic 1.5"));
+        QVERIFY(window->title().contains("FloatMusic 1.6"));
         auto *language = window->findChild<QObject *>("languageSelector"); QVERIFY(language);
         QCOMPARE(language->property("currentIndex").toInt(), 1);
         auto *shortcuts = qobject_cast<GlobalShortcuts *>(controller.shortcuts()); QVERIFY(shortcuts);
@@ -387,7 +471,7 @@ private slots:
             QTRY_COMPARE(lyrics->property("lineCount").toInt(), count);
         }
         QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "zh_CN")));
-        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.5")));
+        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.6")));
         QVERIFY(QMetaObject::invokeMethod(rows, "activated", Q_ARG(int, 1)));
         QCOMPARE(warnings.size(), 0);
     }

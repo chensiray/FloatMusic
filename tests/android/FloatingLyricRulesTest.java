@@ -17,7 +17,9 @@ public final class FloatingLyricRulesTest {
             near(FloatingLyricRules.opacity(edge+1,rows,80,20),0,"offscreen guard fades out");
             require(Math.abs(FloatingLyricRules.opacity(.5f,rows,80,20)-FloatingLyricRules.opacity(.501f,rows,80,20))<.002f,"subpixel transitions are continuous");
         }
-        near(FloatingLyricRules.opacity(1,5,80,20),.5f,"intermediate opacity interpolates both endpoints");
+        near(FloatingLyricRules.opacity(1,5,80,20),.36136485f,"exponential fade matches the desktop curve");
+        require(FloatingLyricRules.cleanWords(" \t\u00a0\u200b\ufeff\n").isEmpty(),"invisible whitespace is not a lyric");
+        require(FloatingLyricRules.cleanWords("hello\n\nworld").equals("hello · world"),"multiline text has no empty segments");
         near(FloatingLyricRules.opacity(0,1,60,0),.6f,"single line ignores edge opacity");
         near(FloatingLyricRules.opacity(2,5,80,0),0,"edge may be fully transparent");
         require(FloatingLyricRules.highlightOpacity(-100)==10&&FloatingLyricRules.highlightOpacity(999)==100,"current stays readable for corrupt preferences");

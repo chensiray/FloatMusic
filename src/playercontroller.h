@@ -9,6 +9,7 @@
 #include <QRect>
 #include "playliststore.h"
 #include "musicapi.h"
+#include "offlinecache.h"
 #include "playbackstore.h"
 #include "globalshortcuts.h"
 #include "sleeptimer.h"
@@ -16,6 +17,9 @@
 
 class PlayerController : public QObject {
     Q_OBJECT
+    Q_PROPERTY(QVariantList cacheEntries READ cacheEntries NOTIFY cacheChanged)
+    Q_PROPERTY(QVariantMap cacheSummary READ cacheSummary NOTIFY cacheChanged)
+    Q_PROPERTY(QVariantMap cacheSettings READ cacheSettings NOTIFY cacheChanged)
     Q_PROPERTY(QString title READ title NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY changed)
     Q_PROPERTY(QString error READ error NOTIFY changed)
@@ -83,6 +87,20 @@ public:
     explicit PlayerController(QObject *parent = nullptr);
     explicit PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent = nullptr);
     ~PlayerController() override;
+    QVariantList cacheEntries() const;
+    QVariantMap cacheSummary() const;
+    QVariantMap cacheSettings() const;
+    Q_INVOKABLE void cacheTrack(const QVariantMap &track, bool manual = true);
+    Q_INVOKABLE void cacheCurrentTrack();
+    Q_INVOKABLE int cacheTracks(const QVariantList &tracks);
+    Q_INVOKABLE void playCached(const QString &key);
+    Q_INVOKABLE void promoteCached(const QString &key);
+    Q_INVOKABLE void retryCached(const QString &key);
+    Q_INVOKABLE void cancelCache(const QString &key);
+    Q_INVOKABLE void removeCache(const QString &key);
+    Q_INVOKABLE void clearCache(bool all);
+    Q_INVOKABLE void setCacheSettings(const QVariantMap &settings);
+    Q_INVOKABLE void retryCachedLyrics(const QString &key);
     QString title() const { return m_title; }
     QString status() const { return m_status; }
     QString error() const { return m_error; }
@@ -200,6 +218,7 @@ public:
     Q_INVOKABLE void quit();
     Q_INVOKABLE void rejectDrop();
 signals:
+    void cacheChanged();
     void changed();
     void audioSettingsChanged();
     void libraryChanged();
@@ -275,6 +294,13 @@ private:
 #endif
     PlaylistStore m_library;
     MusicApi m_api;
+    OfflineCache m_offlineCache;
+    MusicApi m_cacheLyricsApi;
+    QVariantList m_androidCacheEntries;
+    QVariantMap m_androidCacheSummary, m_androidCacheSettings;
+    QString m_currentCacheKey, m_preferredCacheKey;
+    MusicApi::Audio m_currentAudio;
+    bool m_automaticCacheStarted = false;
     PlaybackStore m_playbackStore;
     GlobalShortcuts m_shortcuts;
     UiLanguage m_uiLanguage;

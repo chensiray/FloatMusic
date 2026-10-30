@@ -5,6 +5,7 @@
 #include <QStandardPaths>
 #include <QSettings>
 #include <QDataStream>
+#include <QDir>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QUrlQuery>
@@ -110,12 +111,34 @@ public:
 
 class LibraryTests : public QObject {
     Q_OBJECT
+    QStringList dataDirectories;
 private slots:
     void initTestCase() {
         QVERIFY(QSslSocket::supportsSsl());
         QStandardPaths::setTestModeEnabled(true);
         QCoreApplication::setOrganizationName("FloatMusicTests");
-        QCoreApplication::setApplicationName("library-"+QUuid::createUuid().toString(QUuid::WithoutBraces));
+    }
+    void init() {
+        // Fixture songs reuse IDs but have different media and failure responses.
+        // Isolate every test/data row, while preserving persistence within a test.
+        QCoreApplication::setApplicationName("library-case-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
+        dataDirectories = {QStandardPaths::writableLocation(QStandardPaths::AppDataLocation),
+                           QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)};
+        dataDirectories.removeDuplicates();
+        OfflineCache cache(MusicApi::builtinEndpoints());
+        QVERIFY(cache.entries().isEmpty());
+        // This suite verifies online resolution, decoder fallback and stale replies.
+        // Cached playback has its own engine/controller suite and must not bypass
+        // the deliberate network delay or failure response asserted here.
+        cache.setSettings({{"automaticEnabled", false}});
+        QVERIFY(!cache.settings().value("automaticEnabled").toBool());
+    }
+    void cleanup() {
+        QSettings().clear();
+        for (const auto &directory : dataDirectories) {
+            QCOMPARE(QFileInfo(directory).fileName(), QCoreApplication::applicationName());
+            if (QDir(directory).exists()) QVERIFY(QDir(directory).removeRecursively());
+        }
     }
     void persistenceAndPlaylistEditing() {
         QString id;

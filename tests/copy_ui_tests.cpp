@@ -240,6 +240,11 @@ private slots:
         QCOMPARE(player->onlinePlaylist().value("description").toString(), api->description);
         QVERIFY(loadWindow("more")); window->setProperty("showingOnlinePlaylist", true);
         QQuickItem *text = nullptr; QTRY_VERIFY((text = visibleText(window->contentItem(), api->description)));
+        // Exposing the window precedes the ListView header's first layout. Wait
+        // for its real viewport geometry before selecting a long-press point.
+        auto *viewport=window->findChild<QQuickItem *>("onlinePlaylistTracks");QVERIFY(viewport);
+        QTRY_VERIFY(text->width()<=viewport->width());
+        QTRY_VERIFY(viewport->contains(text->mapToItem(viewport,QPointF(20,text->height()/2))));
         QTRY_VERIFY(text->property("truncated").toBool());
         hold(text);
         QTRY_COMPARE(QGuiApplication::clipboard()->text(), api->description);

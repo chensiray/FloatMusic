@@ -6,9 +6,9 @@
 
 **让音乐留在手边。** 浮音是一款 Windows / Android 悬浮音乐播放器。平时收为可拖动的音符图标，点击后展开音乐卡片，在使用其他应用时也能控制播放、查看歌词和切换歌曲。
 
-当前版本：**1.5 · 双端预览**。Windows 与 Android 均为 `1.5.0-preview.2`（Android 版本码 25），沿用用户验收通过的安装包与签名。源码与安装包见 [1.5 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.5.0-preview)。
+当前版本：**1.6 · 双端预览**。Windows 为 `1.6.0-preview.2`，Android 为 `1.6.0-preview.3`（版本码 29），均沿用用户验收通过的安装包。源码与下载见 [1.6 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.6.0-preview)。
 
-1.5 优化悬浮窗体验：独立歌词支持分别调节高亮与边缘可见度、锁定位置和一键居中；双端长按播放器歌词复制整首，长按简介复制全文。歌单详情的长简介可展开／收起，设置按分类进入二级页面。修复 Android 开启页退出无响应、手动滚到末尾时末句裁切，并保留此前 1.4 审查中的播放、队列和性能修复。查看 [1.5 悬浮窗说明](docs/1.5-验收与更新说明.md)、[歌词与复制修复](docs/1.5.0-preview.1-修复与验收.md) 和[简介与设置说明](docs/1.5.0-preview.2-简介与设置.md)。
+1.6 新增歌曲与双语歌词本地缓存、断网播放和统一管理。手动保存长期保留，自动缓存默认 1 GB、按最近使用清理，Android 默认仅 Wi-Fi 自动缓存。手机播放器歌名下方提供直接可见的“保存到本地”按钮；设置 → 本地缓存可查看进度、补取歌词和清理空间。独立歌词采用突出中间、淡化边缘的曲线渐变，过滤空白歌词并增强明暗背景下的可见度。详见[缓存与离线播放](docs/1.6-本地缓存与离线播放.md)、[手机保存入口修复](docs/1.6-手机手动保存入口修复.md)。
 
 独立播放队列、最近播放和睡眠定时继续保留。歌曲可以安排为下一首或加入队尾，队列支持重复曲目、拖动排序、移除、清空与重启恢复。Windows 提供可修改的全局快捷键，Android 通知栏支持播放、进度、模式和音量控制。混合歌单、独立音质、歌词字号与行距等原有功能保持不变。
 
@@ -35,13 +35,13 @@
 
 ## 获取与运行
 
-本仓库提供源码。**Code → Download ZIP 下载的是源码，不能直接安装。** 请从 [1.5 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.5.0-preview) 下载对应平台的运行包：
+本仓库提供源码。**Code → Download ZIP 下载的是源码，不能直接安装。** 请从 [1.6 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.6.0-preview) 下载对应平台的运行包：
 
 | 平台 | 下载 | 使用方式 |
 |---|---|---|
-| Windows x64 | [完整运行包 ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/FloatMusic-1.5.0-preview.2-windows-x64.zip) | 解压完整目录后运行 `FloatMusic.exe`，保留全部 DLL 和插件 |
-| Android ARM64 | [安装包 APK](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/FloatMusic-1.5.0-preview.2-android-arm64-v8a.apk) | Android 9 及以上，同签名旧版可覆盖安装 |
-| 文件校验 | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.5.0-preview/SHA256SUMS.txt) | 核对下载文件的 SHA256 |
+| Windows x64 | [完整运行包 ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/FloatMusic-1.6.0-preview.2-windows-x64.zip) | 解压完整目录后运行 `FloatMusic.exe`，保留全部 DLL 和插件 |
+| Android ARM64 | [安装包 APK](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/FloatMusic-1.6.0-preview.3-android-arm64-v8a.apk) | Android 9 及以上，同签名旧版可覆盖安装 |
+| 文件校验 | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/SHA256SUMS.txt) | 核对下载文件的 SHA256 |
 
 其他版本见 [Releases](https://github.com/chensiray/FloatMusic/releases)；自行编译见[构建说明](docs/DEVELOPMENT.md)。
 
