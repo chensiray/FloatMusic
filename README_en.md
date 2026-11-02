@@ -6,13 +6,20 @@
 
 **Keep music close at hand.** FloatMusic is a floating music player for Windows and Android. It rests as a draggable music-note icon; clicking it opens a player card so you can control playback, read lyrics, and change tracks while using other apps.
 
-Current version: **1.6 · Windows and Android preview**. Windows uses `1.6.0-preview.2`; Android uses `1.6.0-preview.3` (version code 29). The release preserves the user-accepted packages. Get source and downloads from the [1.6 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.6.0-preview).
+Current version: **1.7 · Windows and Android preview**. Both platforms use `1.7.0-preview.3`; Android version code is 33. The release preserves the user-accepted packages. Get source and downloads from the [1.7 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.7.0-preview).
 
-Version 1.6 adds local audio and bilingual lyric caching, offline playback, and unified cache management. Manual saves are retained; automatic cache defaults to 1 GB with least-recently-used cleanup and Wi-Fi only on Android. A visible **Save offline** button sits below the song title on Android. Settings → Local cache provides progress, lyric fetching and storage cleanup. Independent lyrics use a curved fade emphasizing the center, remove blank rows, and improve visibility on light and dark backgrounds. See the [offline cache notes](docs/1.6-本地缓存与离线播放.md) and [Android save-button fix](docs/1.6-手机手动保存入口修复.md).
+Version 1.7 adds song details and readable comments, with the current metadata source shown and an entry to switch it. All song lists now display artwork, with an option to hide it. Matching information and download icons sit beside the title on both platforms. Current lyrics reveal their highlight from left to right in both the player and independent floating lyrics; the effect can be turned off. See the [1.7 release notes](docs/1.7-发布说明.md).
+
+Local audio and bilingual lyric caching, offline playback, and unified management remain available. Use the download icon beside the title to save a track permanently. Automatic cache defaults to 1 GB with least-recently-used cleanup and Wi-Fi only on Android. Settings → Local cache provides progress, lyric fetching and storage cleanup. Independent lyrics retain the curved center-to-edge fade and blank-row filtering. See the [offline cache notes](docs/1.6-本地缓存与离线播放.md).
 
 The separate playback queue, listening history, and sleep timer remain available. Schedule a track next or append it to the queue; duplicate occurrences, drag reordering, removal, clearing, and restart restoration are supported. Windows provides editable global shortcuts, while Android media notifications support playback, progress, mode, and volume controls. Mixed playlists, independent quality preferences, and lyric size and spacing are unchanged.
 
 ## Main features
+
+- **Details and comments**: Read artwork, album, available release dates and comment counts, plus hot and latest comments. Expand long comments and load more. View the current source and confirm a matching version when switching it, without changing playback. Missing counts are not shown as zero.
+- **Consistent artwork**: Search, playlists, rankings, queue, history and cache lists display artwork. Missing images are fetched asynchronously, with a consistent fallback. Turn off **Show song artwork** in Settings → General & appearance.
+- **Lyric color progress**: Highlight color reveals from left to right as each line plays, including wrapped and bilingual lyrics. Pause, seeking and timing adjustments stay synchronized. Disable **Lyric color progress** in player or floating lyric settings to restore whole-line highlighting. Line timestamps provide a uniform reveal within each line.
+- **Offline cache**: Manually save audio and lyrics, use capacity-limited automatic caching, play offline and manage storage. Missing lyrics can now be fetched even when audio is already cached.
 
 - **Floating experience**: Independently adjust current and edge lyric opacity with gradual fading between them; lock or recenter the position. Long-press player lyrics to copy the whole song and descriptions to copy their full text. Expand long descriptions and browse categorized settings pages.
 
@@ -34,13 +41,13 @@ The separate playback queue, listening history, and sleep timer remain available
 
 ## Download and run
 
-This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.6 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.6.0-preview):
+This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.7 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.7.0-preview):
 
 | Platform | Download | How to use |
 |---|---|---|
-| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/FloatMusic-1.6.0-preview.2-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
-| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/FloatMusic-1.6.0-preview.3-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
-| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.6.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
+| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.7.0-preview/FloatMusic-1.7.0-preview.3-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
+| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.7.0-preview/FloatMusic-1.7.0-preview.3-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
+| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.7.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
 
 Other versions are listed under [Releases](https://github.com/chensiray/FloatMusic/releases). To compile the app yourself, see the [build guide](docs/DEVELOPMENT.md).
 
@@ -74,6 +81,8 @@ The volume button sits beside previous, play/pause, next, and playback mode. Cli
 
 | Entry | Purpose |
 |---|---|
+| Information icon beside the title | Read the current track's details and comments, view the metadata source or choose a matching version from another source |
+| Download icon beside the title | Save the current track and lyrics; manage them under Settings → Local cache |
 | Lyrics (歌词) | Read timed lyrics, return to the current line, adjust timing, or fetch again; original/translation selection, font size, and spacing are in settings on both platforms |
 | Playlists (歌单) | Select a playlist, view its description and count, and manage, reorder, select, import, or export tracks through the operations panel |
 | More → Search music (更多 → 搜索音乐) | Switch between song and playlist search; open online playlist details, preview tracks, or import the entire playlist |
@@ -159,15 +168,15 @@ URL resolution, audio connection, and loading failures automatically trigger bac
 
 If you have a compatible NetEase service, enter its address under **More → Settings → Search & services → Custom NetEase service (更多 → 设置 → 搜索与服务 → 自定义网易云服务)**. It only affects NetEase. Custom NetEase mode contacts only the selected service; switching back to built-in mode restores backup sources. Selected QQ and Kuwo libraries continue using their own built-in services. Windows API requests follow system proxy configuration; Android follows the device's network environment. Network conditions and experiment boundaries are in the [verification notes](VERIFICATION.md); historical backup parameters are in the [test report](docs/备用音源接入与实测-2026-10-01.md).
 
-The GD Studio API is provided by GD Studio. Its public terms restrict it to personal learning and noncommercial use, and source attribution is retained. FloatMusic does not download or distribute online songs.
+The GD Studio API is provided by GD Studio. Its public terms restrict it to personal learning and noncommercial use, and source attribution is retained. FloatMusic can cache playable audio and lyrics locally. The repository and installation packages contain no online song files, and FloatMusic does not distribute songs.
 
 Local imports save an audio copy in the app data directory. The original file is not modified, and audio is not uploaded. Playlists, favorites, and settings stay on the device. Removing tracks or deleting playlists does not delete original files; imported copies are not currently cleaned up automatically. Online requests send search terms, track IDs, and related information to the corresponding service.
 
 ## Current limitations and feedback
 
-Playlists support bulk JSON import and drag reordering. Bulk audio-file import, local LRC import, and downloading online songs are not currently supported. Phone power-saving policies, screen sizes, and Bluetooth devices still need ongoing compatibility work.
+Playlists support bulk JSON import and drag reordering; online tracks support manual saves and automatic offline caching. Bulk audio-file import and local LRC import are not currently supported. Public metadata and comment interfaces may change, and some sources do not provide comments or statistics. Phone power-saving policies, screen sizes, and Bluetooth devices still need ongoing compatibility work.
 
-Version 1.5's build, interface checks, and device installation details, along with earlier online API samples, are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
+Version 1.7's build, desktop regression, Android emulator checks and user acceptance, along with earlier online API samples, are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
 
 To report a problem, open an [Issue](https://github.com/chensiray/FloatMusic/issues) and include the app version, OS/device model, reproduction steps, and actual behavior.
 

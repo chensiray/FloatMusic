@@ -1,5 +1,6 @@
 #include "musicapi.h"
 #include "catalogcodec.h"
+#include "artworkpolicy.h"
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonParseError>
@@ -117,7 +118,7 @@ QVariantMap track(const QString &s, const QJsonObject &song) {
     if (id.isEmpty() || name.isEmpty())
         return {};
     const auto album = song.value("album");
-    return {{"id", s + ':' + id},
+    QVariantMap result{{"id", s + ':' + id},
             {"songId", id},
             {"source", s},
             {"sourceName", sourceName(s)},
@@ -125,6 +126,14 @@ QVariantMap track(const QString &s, const QJsonObject &song) {
             {"artist", names(song.value(s == "tencent" ? "singer" : "artist"))},
             {"album", album.isObject() ? album.toObject().value("name").toString() : album.toString()},
             {"duration", count(song.value(s == "tencent" ? "interval" : "duration"), 0)}};
+    QString cover=song.value("pic").toString();
+    if(s=="tencent"){
+        const auto mid=album.toObject().value("mid").toString();
+        if(QRegularExpression("^[A-Za-z0-9]{1,64}$").match(mid).hasMatch())cover="https://y.gtimg.cn/music/photo_new/T002R300x300M000"+mid+".jpg";
+    }
+    cover=ArtworkPolicy::fromSong(s,song.toVariantMap());
+    if(!cover.isEmpty())result["coverUrl"]=cover;
+    return result;
 }
 QString firstText(const QJsonObject &o, const QStringList &keys) {
     for (const auto &k : keys) {
@@ -133,6 +142,13 @@ QString firstText(const QJsonObject &o, const QStringList &keys) {
             return s;
     }
     return {};
+}
+void playlistMetrics(QVariantMap &row,const QJsonObject &o,const QString &source) {
+    const QList<QPair<QString,QStringList>> fields={
+        {"playCount",source=="netease"?QStringList{"playCount"}:source=="tencent"?QStringList{"listennum","listen_num"}:QStringList{"playnum"}},
+        {"favoriteCount",source=="netease"?QStringList{"subscribedCount"}:source=="tencent"?QStringList{"favnum"}:QStringList{"favorcnt"}},
+        {"commentCount",QStringList{"commentCount"}}};
+    for(const auto &field:fields)for(const auto &key:field.second){const auto n=count(o.value(key));if(n>=0){row[field.first]=n;break;}}
 }
 QUrl rankingUrl(const QString &endpoint, const QString &id, int page) {
     const QJsonObject payload{{"uid", ""},
@@ -219,6 +235,7 @@ void MusicApi::fetchTencentPlaylistSearchPage(const std::shared_ptr<TencentPlayl
                 row["trackCount"] = count(o.value("song_count"), 0);
                 row["creator"] = o.value("creator").toObject().value("name").toString();
                 row["coverUrl"] = o.value("imgurl").toString();
+                playlistMetrics(row,o,"tencent");
                 state->playlists.append(row);
                 if (state->playlists.size() >= state->limit)
                     break;
@@ -352,6 +369,7 @@ void MusicApi::searchPlaylists(const QString &query, const QStringList &sources,
                                               : s == "tencent" ? "imgurl"
                                                                : "coverImgUrl")
                                           .toString();
+                    playlistMetrics(row,o,s);
                     rows.append(row);
                     if (rows.size() >= limit)
                         break;
@@ -575,6 +593,7 @@ void MusicApi::fetchCatalogPage(const std::shared_ptr<CatalogFetch> &state) {
                                                    meta.value("host_nick").toString())
                                              : meta.value("uname").toString();
             state->playlist["updateTime"] = firstText(meta, {"updateTime", "releaseDate"});
+            playlistMetrics(state->playlist,meta,state->source);
         }
         const auto songs = raw.toArray();
         const auto fingerprint = QCryptographicHash::hash(QJsonDocument(songs).toJson(QJsonDocument::Compact),

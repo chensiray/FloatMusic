@@ -24,6 +24,7 @@ public:
         QString vkeys;
         QString ourcraft;
         QString qqMusicu = "https://u.y.qq.com/cgi-bin/musicu.fcg";
+        QString qqComments = "https://c.y.qq.com/base/fcgi-bin/fcg_global_comment_h5.fcg";
         QString kuwoPlaylistSearch = "https://search.kuwo.cn/r.s";
         QString kuwoPlaylistDetail = "https://nplserver.kuwo.cn/pl.svc";
         QString kuwoRanking = "https://wbd.kuwo.cn/api/bd/bang/bang_info";
@@ -49,6 +50,9 @@ public:
     void searchPlaylists(const QString &query, const QStringList &sources);
     void searchPlaylists(const QString &query, const QStringList &sources, int limit);
     void fetchRankings(std::function<void(QVariantList, QString)> done);
+    void fetchSongDetails(const QVariantMap &track, std::function<void(QVariantMap, QString)> done);
+    void fetchComments(const QVariantMap &track, const QString &order, int page,
+                       std::function<void(QVariantMap, QString)> done);
     void fetchRankings(const QString &source, std::function<void(QVariantList, QString)> done);
     // An optional browsing guard stops obsolete batches; canceled calls do not invoke done.
     void fetchPlaylist(const QString &id, std::function<void(QVariantMap, QString)> done,

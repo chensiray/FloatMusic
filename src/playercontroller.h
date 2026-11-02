@@ -9,6 +9,8 @@
 #include <QRect>
 #include "playliststore.h"
 #include "musicapi.h"
+#include "musicdetails.h"
+#include "songartwork.h"
 #include "offlinecache.h"
 #include "playbackstore.h"
 #include "globalshortcuts.h"
@@ -17,6 +19,8 @@
 
 class PlayerController : public QObject {
     Q_OBJECT
+    Q_PROPERTY(MusicDetails* musicDetails READ musicDetails CONSTANT)
+    Q_PROPERTY(SongArtwork* artwork READ artwork CONSTANT)
     Q_PROPERTY(QVariantList cacheEntries READ cacheEntries NOTIFY cacheChanged)
     Q_PROPERTY(QVariantMap cacheSummary READ cacheSummary NOTIFY cacheChanged)
     Q_PROPERTY(QVariantMap cacheSettings READ cacheSettings NOTIFY cacheChanged)
@@ -84,6 +88,9 @@ class PlayerController : public QObject {
     Q_PROPERTY(QObject *shortcuts READ shortcuts CONSTANT)
     Q_PROPERTY(QObject *uiLanguage READ uiLanguage CONSTANT)
 public:
+    SongArtwork *artwork() {return &m_artwork;}
+    MusicDetails *musicDetails() { return &m_musicDetails; }
+    Q_INVOKABLE void openCurrentMusicDetails() { m_musicDetails.action("open", {{"track",m_loadedTrack}}); }
     explicit PlayerController(QObject *parent = nullptr);
     explicit PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent = nullptr);
     ~PlayerController() override;
@@ -287,6 +294,8 @@ private:
     void processOverlayEvents();
     void publishOverlayUi();
     QByteArray m_overlayUi;
+    QVariantMap m_overlayUiState;
+    QByteArray m_androidCacheLyricStamp;
     QString m_overlayMessage;
     QVariantList m_androidQueueEntries, m_androidHistoryEntries;
     QString m_androidQueueEntry, m_androidSleepMode = "off", m_androidSleepText = QStringLiteral("未开启");
@@ -294,6 +303,8 @@ private:
 #endif
     PlaylistStore m_library;
     MusicApi m_api;
+    MusicDetails m_musicDetails;
+    SongArtwork m_artwork;
     OfflineCache m_offlineCache;
     MusicApi m_cacheLyricsApi;
     QVariantList m_androidCacheEntries;

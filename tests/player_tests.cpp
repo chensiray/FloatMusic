@@ -75,6 +75,76 @@ static bool revealInScrollable(QQuickItem *item) {
 class PlayerTests : public QObject {
     Q_OBJECT
 private slots:
+    void lyricColorProgressSetting() {
+        QSettings().remove("lyricColorProgress/enabled");
+        PlayerController controller; QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *root=engine.rootObjects().first();
+        auto *lyrics=root->findChild<QQuickWindow *>("desktopLyricsWindow"); QVERIFY(lyrics);
+        QVERIFY2(lyrics->property("progressEnabled").isValid(), "Desktop lyrics must expose the color-progress setting");
+        QVERIFY(lyrics->property("progressEnabled").toBool());
+        auto *toggle=root->findChild<QObject *>("lyricColorProgressSwitch"); QVERIFY(toggle);
+        toggle->setProperty("checked", false); QVERIFY(QMetaObject::invokeMethod(toggle,"toggled"));
+        QTRY_VERIFY(!lyrics->property("progressEnabled").toBool());
+        QTRY_COMPARE(QSettings().value("lyricColorProgress/enabled").toBool(), false);
+        auto *other=root->findChild<QObject *>("desktopLyricColorProgressSwitch"); QVERIFY(other);
+        QTRY_COMPARE(other->property("checked").toBool(), false);
+        other->setProperty("checked", true); QVERIFY(QMetaObject::invokeMethod(other,"toggled"));
+        QTRY_VERIFY(lyrics->property("progressEnabled").toBool());
+    }
+    void lyricColorProgressClock() {
+        QQmlEngine engine; QQmlComponent component(&engine, QUrl::fromLocalFile(QFileInfo(QStringLiteral(FLOATMUSIC_QML_FILE)).dir().filePath("LyricProgressClock.qml")));
+        QScopedPointer<QObject> clock(component.create()); QVERIFY2(clock, qPrintable(component.errorString()));
+        clock->setProperty("timeline", QVariantList{QVariantMap{{"time",1000}},QVariantMap{{"time",5000}},QVariantMap{{"time",6000}}});
+        clock->setProperty("activeIndex",0);clock->setProperty("duration",10000); clock->setProperty("position",3000);
+        auto fraction=[&](int index){QVariant result;QMetaObject::invokeMethod(clock.data(),"progressFor",Q_RETURN_ARG(QVariant,result),Q_ARG(QVariant,index));return result.toDouble();};
+        QCOMPARE(fraction(0), .5); QCOMPARE(fraction(1),0.); QCOMPARE(fraction(2),0.);
+        clock->setProperty("position",8000); QCOMPARE(fraction(2),.5); QCOMPARE(fraction(0),1.);
+        clock->setProperty("offset",-1000); QCOMPARE(fraction(2),.25);
+        clock->setProperty("position",1000); QCOMPARE(fraction(0),0.);
+        clock->setProperty("offset",0); clock->setProperty("duration",0); QCOMPARE(fraction(2),1.);
+        clock->setProperty("duration",10000); clock->setProperty("position",3000);
+        clock->setProperty("enabled",true); clock->setProperty("playing",true);
+        QTest::qWait(120); QVERIFY(fraction(0)>.51);
+        clock->setProperty("playing",false); double frozen=fraction(0);QTest::qWait(120);QCOMPARE(fraction(0),frozen);
+        clock->setProperty("position",7000); QCOMPARE(fraction(2),.25);
+        clock->setProperty("enabled",false); QVERIFY(!clock->property("ticking").toBool());
+        clock->setProperty("activeIndex",2);clock->setProperty("position",10000);clock->setProperty("playing",true);clock->setProperty("enabled",true);
+        QVERIFY2(!clock->property("ticking").toBool(),"Completed or untimed lyrics must stop requesting progress frames");
+    }
+    void lyricColorProgressRendering() {
+        QQmlEngine engine; QQmlComponent component(&engine);
+        QSignalSpy warnings(&engine,&QQmlEngine::warnings);
+        component.setData(R"(import QtQuick
+Window { width:400; height:260; visible:true; color:"white"
+    ProgressLyricText { objectName:"progressWords"; x:70; y:50; width:260
+        text:"MMMM MMMM MMMM MMMM MMMM MMMM"; wrapMode:Text.Wrap; horizontalAlignment:Text.AlignHCenter
+        font.family:"Arial"; font.pixelSize:28; font.weight:Font.Bold
+        color:"black"; progressColor:"crimson"; progressEnabled:true; progress:0
+    }
+})", QUrl::fromLocalFile(QFileInfo(QStringLiteral(FLOATMUSIC_QML_FILE)).dir().filePath("progress-render-fixture.qml")));
+        QScopedPointer<QObject> object(component.create()); QVERIFY2(object,qPrintable(component.errorString()));
+        auto *window=qobject_cast<QQuickWindow *>(object.data());QVERIFY(window);QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto *words=window->findChild<QQuickItem *>("progressWords");QVERIFY(words);
+        QTRY_VERIFY(words->property("lineBoxes").toList().size()>1);
+        const auto size=words->size();
+        auto redPixels=[&](double progress){words->setProperty("progress",progress);QTest::qWait(60);const auto frame=window->grabWindow();int red=0;for(int y=0;y<frame.height();y++)for(int x=0;x<frame.width();x++){const auto c=frame.pixelColor(x,y);if(c.red()>140&&c.red()>c.green()*2&&c.blue()<150)red++;}return red;};
+        QCOMPARE(redPixels(0),0);const auto quarter=redPixels(.25),threeQuarter=redPixels(.75),full=redPixels(1);
+        QVERIFY(quarter>30);QVERIFY(threeQuarter>quarter*2);QVERIFY(full>threeQuarter);QCOMPARE(words->size(),size);
+        words->setProperty("progress",.5);QTest::qWait(60);
+        const auto artifacts=qEnvironmentVariable("FLOATMUSIC_TEST_ARTIFACTS");if(!artifacts.isEmpty()){QDir().mkpath(artifacts);QVERIFY(window->grabWindow().save(artifacts+"/lyric-progress-wrapped.png"));}
+        words->setProperty("progressEnabled",false);QCOMPARE(redPixels(.75),0);
+        // Independent desktop lyrics shrink long, centered single lines to fit.
+        words->setProperty("wrapMode",0);words->setProperty("width",150);words->setProperty("height",60);
+        words->setProperty("fontSizeMode",1);words->setProperty("minimumPixelSize",10);
+        words->setProperty("text","MMMMMMMMMMMMMMM");words->setProperty("progress",0);words->setProperty("progressEnabled",true);
+        QTest::qWait(100);const auto fittedQuarter=redPixels(.25),fittedFull=redPixels(1);
+        QVERIFY2(fittedQuarter>10,"Fitted centered text must reveal from its actual left edge");
+        QVERIFY(fittedFull>fittedQuarter*2);
+        QCOMPARE(warnings.size(),0);
+    }
     void offlineCacheSettingsUi() {
         PlayerController controller; QQmlApplicationEngine engine;
         QSignalSpy warnings(&engine,&QQmlEngine::warnings);
@@ -313,7 +383,8 @@ QtObject {
             QVERIFY(QMetaObject::invokeMethod(desktopTheme, "activated", Q_ARG(int, mode)));
             QTRY_COMPARE(lyrics->property("darkStyle").toBool(), mode == 2);
             QTest::qWait(220);
-            QVERIFY(current->property("color").value<QColor>() != next->property("color").value<QColor>());
+            QVERIFY(current->property("progressEnabled").toBool());
+            QVERIFY(current->property("progressColor").value<QColor>() != next->property("color").value<QColor>());
             QCOMPARE(window->property("darkMode").toBool(), originalMainTheme);
             if (!screenshots.isEmpty()) {
                 const auto transparent = lyrics->grabWindow();
@@ -446,7 +517,7 @@ QtObject {
         QCOMPARE(window->property("languageCode").toString(), QString("zh_CN"));
         QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "en")));
         QTRY_COMPARE(window->property("languageCode").toString(), QString("en"));
-        QVERIFY(window->title().contains("FloatMusic 1.6"));
+        QVERIFY(window->title().contains("FloatMusic 1.7"));
         auto *language = window->findChild<QObject *>("languageSelector"); QVERIFY(language);
         QCOMPARE(language->property("currentIndex").toInt(), 1);
         auto *shortcuts = qobject_cast<GlobalShortcuts *>(controller.shortcuts()); QVERIFY(shortcuts);
@@ -471,7 +542,7 @@ QtObject {
             QTRY_COMPARE(lyrics->property("lineCount").toInt(), count);
         }
         QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "zh_CN")));
-        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.6")));
+        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.7")));
         QVERIFY(QMetaObject::invokeMethod(rows, "activated", Q_ARG(int, 1)));
         QCOMPARE(warnings.size(), 0);
     }
@@ -700,7 +771,8 @@ QtObject {
         QTRY_VERIFY(findVisualItem(view, "lyricOriginal-1"));
         auto *current = findVisualItem(view, "lyricOriginal-1");
         QTRY_COMPARE(current->property("font").value<QFont>().pixelSize(), 32);
-        QCOMPARE(current->property("color").value<QColor>(), window->property("accent").value<QColor>());
+        QVERIFY(current->property("progressEnabled").toBool());
+        QCOMPARE(current->property("progressColor").value<QColor>(), window->property("accent").value<QColor>());
         view->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Down);
         QTRY_VERIFY(view->property("manualBrowsing").toBool());
         window->setProperty("section", "more"); window->setProperty("detail", "settings");

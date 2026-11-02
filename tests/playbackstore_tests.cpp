@@ -36,6 +36,13 @@ bool writeFile(const QString &path, const QByteArray &bytes) {
 class PlaybackStoreTests : public QObject {
     Q_OBJECT
 private slots:
+    void artworkSurvivesQueueAndHistoryReload(){
+        QTemporaryDir dir;const QString file=dir.filePath("artwork.json");
+        auto track=song("netease","123");track["coverUrl"]="https://example.com/cover.jpg";track["album"]="Album";
+        {PlaybackStore store(file);QVERIFY(store.replaceQueue({track},0));QVERIFY(store.recordPlayed(track));}
+        PlaybackStore restored(file);QCOMPARE(restored.entries().first().toMap().value("coverUrl").toString(),track.value("coverUrl").toString());
+        QCOMPARE(restored.history().first().toMap().value("album").toString(),"Album");
+    }
     void duplicateSongsHavePersistentIndependentOccurrences() {
         QTemporaryDir dir;
         const QString path = dir.filePath("playback.json");

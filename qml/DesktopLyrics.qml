@@ -11,6 +11,8 @@ Window {
     property int highlightOpacity: 100
     property int edgeOpacity: 55
     property bool motionEnabled: true
+    property bool progressEnabled: true
+    property real activeProgress: 0
     property bool darkStyle: false
     property int themeMode: 0
     property int availableHeight: 10000
@@ -139,7 +141,7 @@ Window {
             readonly property bool isCurrent: index === window.displayActiveIndex
             readonly property real centerDistance: Math.abs(y + height / 2 - lines.contentY - lines.height / 2) / window.rowHeight
             width: lines.width; height: window.rowHeight
-            Text {
+            ProgressLyricText {
                 id: words
                 objectName: "desktopLyricText-" + index
                 anchors.centerIn: parent
@@ -151,13 +153,16 @@ Window {
                 font.weight: lyricRow.isCurrent ? Font.Bold : Font.DemiBold
                 fontSizeMode: Text.HorizontalFit; minimumPixelSize: 10
                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                color: lyricRow.isCurrent ? window.lyricHighlight : window.lyricInk
+                color: lyricRow.isCurrent && !progressEnabled ? window.lyricHighlight : window.lyricInk
+                progressEnabled: lyricRow.isCurrent && window.progressEnabled
+                progress: progressEnabled ? window.activeProgress : 0
+                progressColor: window.lyricHighlight
                 opacity: window.fadeAt(lyricRow.centerDistance)
                 property real currentBoost: lyricRow.isCurrent ? 1.12 : 1.0
                 scale: currentBoost * Math.max(0.94, 1.0 - lyricRow.centerDistance * 0.015)
                 style: Text.Outline; styleColor: window.lyricOutline
                 Behavior on currentBoost { enabled: window.motionEnabled; NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-                Behavior on color { enabled: window.motionEnabled; ColorAnimation { duration: 180 } }
+                Behavior on color { enabled: window.motionEnabled && !window.progressEnabled; ColorAnimation { duration: 180 } }
                 onContentWidthChanged: window.scheduleInputUpdate()
                 onContentHeightChanged: window.scheduleInputUpdate()
                 onScaleChanged: window.scheduleInputUpdate()

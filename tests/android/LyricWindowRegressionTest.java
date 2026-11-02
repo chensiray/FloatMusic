@@ -39,13 +39,17 @@ public final class LyricWindowRegressionTest extends Instrumentation {
     }
     @Override public void onStart(){
         screenshotDirectory=new File(getTargetContext().getExternalFilesDir(null),"run-"+SystemClock.uptimeMillis());screenshotDirectory.mkdirs();
-        String[] cases=selectedCases.isEmpty()?new String[]{"floating-blank-rows","floating-readability","player-bottom-visible","player-description-fold","player-settings-navigation","floating-empty-touch-through","floating-opacity-settings","floating-lock-recenter","floating-settings-ui","floating-drag-cache","floating-cache-invalidation","player-rebuild-no-lyrics","floating-no-motion-identity","floating-animated-identity","floating-horizontal-anchor","floating-ui-refresh","floating-stable-raster","floating-stable-surfaces","floating-nine-line-surfaces","floating-idle-stops","floating-touch-through","floating-cross-app-touch","floating-frame-pacing","floating-nine-frame-pacing","player-frame-pacing","player-long-frame-pacing","player-idle-layout","player-animated-follow","player-neighbor-follow","player-manual-return","player-no-motion-return","player-accessible-browse","player-no-motion-follow","player-copy-all","player-copy-description","player-copy-drag","player-copy-ranking"}:selectedCases.split(",");int passed=0;
+        String[] cases=selectedCases.isEmpty()?new String[]{"floating-color-progress","player-color-progress","player-progress-settings","player-progress-wrapped","floating-blank-rows","floating-readability","player-bottom-visible","player-description-fold","player-settings-navigation","floating-empty-touch-through","floating-opacity-settings","floating-lock-recenter","floating-settings-ui","floating-drag-cache","floating-cache-invalidation","player-rebuild-no-lyrics","floating-no-motion-identity","floating-animated-identity","floating-horizontal-anchor","floating-ui-refresh","floating-stable-raster","floating-stable-surfaces","floating-nine-line-surfaces","floating-idle-stops","floating-touch-through","floating-cross-app-touch","floating-frame-pacing","floating-nine-frame-pacing","player-frame-pacing","player-long-frame-pacing","player-idle-layout","player-animated-follow","player-neighbor-follow","player-manual-return","player-no-motion-return","player-accessible-browse","player-no-motion-follow","player-copy-all","player-copy-description","player-copy-drag","player-copy-ranking"}:selectedCases.split(",");int passed=0;
         for(String scene:cases){
             Bundle progress=new Bundle();progress.putString("currentCase",scene);sendStatus(0,progress);
             try{
                 boolean motion=!scene.equals("floating-no-motion-identity")&&!scene.equals("floating-horizontal-anchor")&&!scene.startsWith("player-no-motion-");
                 runOnMainSync(()->prepare(motion,scene.equals("floating-horizontal-anchor")?.20f:.5f));SystemClock.sleep(500);
-                if(scene.equals("floating-readability"))testReadability();
+                if(scene.equals("floating-color-progress"))testFloatingColorProgress();
+                else if(scene.equals("player-color-progress"))testPlayerColorProgress();
+                else if(scene.equals("player-progress-settings"))testProgressSettings();
+                else if(scene.equals("player-progress-wrapped"))testWrappedProgress();
+                else if(scene.equals("floating-readability"))testReadability();
                 else if(scene.equals("floating-blank-rows"))testBlankRows();
                 else if(scene.equals("player-description-fold"))testDescriptionFold();
                 else if(scene.equals("player-settings-navigation"))testSettingsNavigation();
@@ -105,6 +109,60 @@ public final class LyricWindowRegressionTest extends Instrumentation {
         }catch(Exception error){throw new RuntimeException(error);}
     }
     private void next(int position){try{state=new JSONObject(state.toString()).put("position",position);floating.update(state,ui);}catch(Exception e){throw new RuntimeException(e);}}
+    private static Bitmap rendered(View view){Bitmap image=Bitmap.createBitmap(view.getWidth(),view.getHeight(),Bitmap.Config.ARGB_8888);view.draw(new android.graphics.Canvas(image));return image;}
+    private static int different(Bitmap a,Bitmap b){int result=0;for(int y=0;y<a.getHeight();y++)for(int x=0;x<a.getWidth();x++)if(a.getPixel(x,y)!=b.getPixel(x,y))result++;return result;}
+    private void testFloatingColorProgress(){
+        runOnMainSync(()->{
+            next(3250);View drawing=(View)get(floating,"drawing");Object glyph=visible().get("Line 3"),raster=get(glyph,"highlight");int before=windowMoves;
+            Bitmap early=rendered(drawing);next(3750);Bitmap late=rendered(drawing);
+            require(different(early,late)>10,"current lyric must visibly change color within the same sentence");early.recycle();late.recycle();
+            require(get(glyph,"highlight")==raster,"color progress reuses the existing glyph raster");require(windowMoves==before,"color progress does not move native lyric windows");
+            context.getSharedPreferences("window",0).edit().putBoolean("lyricColorProgress",false).apply();next(3250);early=rendered(drawing);next(3750);late=rendered(drawing);
+            require(different(early,late)==0,"disabled progress returns to a stable whole-line highlight");early.recycle();late.recycle();
+        });
+        capture("floating-progress-disabled");
+        runOnMainSync(()->{context.getSharedPreferences("window",0).edit().putBoolean("lyricColorProgress",true).apply();next(3500);});SystemClock.sleep(100);capture("floating-progress-half");
+    }
+    private void testPlayerColorProgress(){
+        testPlayer(true,true);
+        SystemClock.sleep(200);
+        runOnMainSync(()->{
+            try{state=new JSONObject(state.toString()).put("position",1250);}catch(Exception e){throw new RuntimeException(e);}overlay.update(state);
+            View words=(View)((java.util.List<?>)get(overlay,"lyricTexts")).get(1);Bitmap early=rendered(words);
+            try{state=new JSONObject(state.toString()).put("position",1750);}catch(Exception e){throw new RuntimeException(e);}overlay.update(state);Bitmap late=rendered(words);
+            require(different(early,late)>10,"player lyric text must visibly cover color within the same sentence");early.recycle();late.recycle();
+            try{state=new JSONObject(state.toString()).put("playing",true);}catch(Exception e){throw new RuntimeException(e);}overlay.update(state);
+        });SystemClock.sleep(80);
+        runOnMainSync(()->{
+            require((Boolean)get(overlay,"progressFramePosted"),"playing visible lyrics schedule continuous progress");
+            set(overlay,"manualLyrics",true);((ScrollView)get(overlay,"lyricScroll")).scrollTo(0,100000);overlay.update(state);
+            require(!(Boolean)get(overlay,"progressFramePosted"),"browsing away from the active row stops hidden color animation");
+            try{state=new JSONObject(state.toString()).put("playing",false);}catch(Exception e){throw new RuntimeException(e);}overlay.update(state);
+            require(!(Boolean)get(overlay,"progressFramePosted"),"paused lyrics stop the progress frame loop");
+        });capture("player-progress-half");
+    }
+    private void testProgressSettings(){
+        runOnMainSync(()->{
+            floating.close();floating=null;overlay=new OverlayWindow(service);set(overlay,"ui",ui);set(overlay,"playback",state);overlay.openLyricSettings();
+            android.widget.Switch toggle=((View)get(overlay,"window")).findViewWithTag("lyricColorProgressSwitch");require(toggle!=null&&toggle.isChecked(),"floating settings expose enabled progress by default");toggle.performClick();
+            require(!context.getSharedPreferences("window",0).getBoolean("lyricColorProgress",true),"turning off the visible switch persists progress preference");
+            invoke(overlay,"openSettingsPage",new Class<?>[]{String.class},"lyrics");toggle=((View)get(overlay,"window")).findViewWithTag("lyricColorProgressSwitch");require(toggle!=null&&!toggle.isChecked(),"player and floating settings share the same progress preference");toggle.performClick();
+            require(context.getSharedPreferences("window",0).getBoolean("lyricColorProgress",false),"the second entry can re-enable progress");
+        });SystemClock.sleep(100);capture("progress-settings");
+    }
+    private static int redPixels(Bitmap image,int top,int bottom){int result=0;for(int y=top;y<bottom;y++)for(int x=0;x<image.getWidth();x++){int color=image.getPixel(x,y);if(android.graphics.Color.alpha(color)>100&&android.graphics.Color.red(color)>140&&android.graphics.Color.green(color)<70&&android.graphics.Color.blue(color)<70)result++;}return result;}
+    private void testWrappedProgress(){
+        runOnMainSync(()->{
+            ProgressLyricTextView words=new ProgressLyricTextView(context);words.setText("MMMM MMMM MMMM MMMM\nMMMM MMMM MMMM MMMM");words.setTextColor(android.graphics.Color.BLACK);words.setTextSize(24);words.setIncludeFontPadding(false);
+            words.measure(View.MeasureSpec.makeMeasureSpec(230,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED));words.layout(0,0,230,words.getMeasuredHeight());int height=words.getHeight();
+            require(words.getLayout().getLineCount()>=4,"fixture must exercise wrapping in both paragraphs");
+            words.setColorProgress(true,.25f,android.graphics.Color.RED);Bitmap early=rendered(words);
+            int top=redPixels(early,0,height/2),bottom=redPixels(early,height/2,height);require(top>10&&bottom>10,"original and translation reveal together after wrapping");
+            words.setColorProgress(true,.75f,android.graphics.Color.RED);Bitmap late=rendered(words);require(redPixels(late,0,height)>2*(top+bottom),"wrapped progress advances through each paragraph in reading order");
+            words.setColorProgress(false,.75f,android.graphics.Color.RED);Bitmap disabled=rendered(words);require(redPixels(disabled,0,height)==0,"disabled overlay draws only the base text");require(words.getHeight()==height,"color progress cannot change line layout or row height");
+            early.recycle();late.recycle();disabled.recycle();
+        });
+    }
     private void testBlankRows(){
         runOnMainSync(()->{
             try{

@@ -10,6 +10,19 @@ ApplicationWindow {
     readonly property string languageCode: player.uiLanguage.code
     function t(source) { var dependency = languageCode; return player.uiLanguage.text(String(source || "")) }
     function setUiLanguage(code) { player.uiLanguage.code = code }
+    function openMusicDetails(track) {
+        trackMenu.close()
+        if (track) player.musicDetails.action("open", {track:track})
+        else player.openCurrentMusicDetails()
+        musicDetailsPopup.open()
+    }
+    function onlineStats(info) {
+        var parts = []
+        if (info.playCount !== undefined) parts.push(t("播放量：") + Number(info.playCount).toLocaleString(Qt.locale(), "f", 0))
+        if (info.favoriteCount !== undefined) parts.push(t("收藏数：") + Number(info.favoriteCount).toLocaleString(Qt.locale(), "f", 0))
+        if (info.commentCount !== undefined) parts.push(t("评论数：") + Number(info.commentCount).toLocaleString(Qt.locale(), "f", 0))
+        return parts.join(" · ")
+    }
     function toggleDesktopLyrics() { desktopPreferences.enabled = !desktopPreferences.enabled; desktopPreferences.sync() }
     function desktopRowCount(value) { return Math.max(1, Math.min(9, Math.floor(value / 2) * 2 + 1)) }
     function setDesktopLyricOpacity(highlight, edge) {
@@ -54,6 +67,8 @@ ApplicationWindow {
         visible: desktopPreferences.enabled && !root.quitting
         timeline: player.lyricLines
         activeIndex: player.currentLyricIndex
+        progressEnabled: lyricColorPreferences.enabled
+        activeProgress: displayActiveIndex >= 0 ? lyricProgressClock.progressFor(displayTimeline[displayActiveIndex].sourceIndex) : 0
         lineCount: root.desktopRowCount(desktopPreferences.rowCount)
         textSize: Math.max(18, Math.min(48, desktopPreferences.fontSize))
         highlightOpacity: Math.max(10, Math.min(100, desktopPreferences.highlightOpacity))
@@ -189,10 +204,21 @@ ApplicationWindow {
             sync()
         }
     }
+    LyricProgressClock {
+        id: lyricProgressClock
+        timeline: player.lyricLines
+        position: player.position
+        duration: player.duration
+        offset: player.lyricOffset
+        playing: player.playing
+        activeIndex: root.visible && root.section === "lyrics" ? player.currentLyricIndex : (desktopLyrics.displayActiveIndex >= 0 ? desktopLyrics.displayTimeline[desktopLyrics.displayActiveIndex].sourceIndex : -1)
+        enabled: lyricColorPreferences.enabled && (desktopLyrics.visible || (root.visible && root.section === "lyrics" && lyricView.currentItem && lyricView.currentItem.y + lyricView.currentItem.height > lyricView.contentY && lyricView.currentItem.y < lyricView.contentY + lyricView.height)) && player.currentLyricIndex >= 0
+    }
+    Settings { id: lyricColorPreferences; category: "lyricColorProgress"; property bool enabled: true }
     visible: false
     width: Math.ceil(baseWidth * contentScale)
-    height: Math.min(Math.max(160, workArea.height - 16), Math.ceil(shell.implicitHeight * contentScale))
-    title: root.t("浮音 1.6.0-preview.2 · 桌面预览")
+    height: Math.min(Math.max(160, workArea.height - 16), Math.ceil((musicDetailsPopup.opened ? Math.max(620, shell.implicitHeight) : shell.implicitHeight) * contentScale))
+    title: root.t("浮音 1.7.0-preview.3 · 桌面预览")
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -220,6 +246,7 @@ ApplicationWindow {
         cachePane.closeDialogs(); playbackMenu.close(); volumeMenu.close(); lyricTiming.close()
         libraryMenu.close(); selectionMenu.close(); targetSheet.close(); importSheet.close(); exportSheet.close(); descriptionSheet.close(); playlistDialog.close(); deleteDialog.close(); removeDialog.close(); trackMenu.close()
         queueMenu.close(); historyMenu.close(); playbackRemoval.close(); shortcutCapture.close()
+        musicDetailsPopup.close()
         floating.x = root.x; floating.y = root.y
         section = ""; detail = ""; showingOnlinePlaylist = false; root.hide(); fitWindow(floating); saveIconPosition()
     }
@@ -449,7 +476,7 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Ctrl+F"; enabled: root.visible && !root.sheetOpen; onActivated: {root.showingOnlinePlaylist=false;root.openDetail("search");Qt.callLater(function(){(root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning();keywords.forceActiveFocus()})} }
     Shortcut { sequence: "Ctrl+O"; enabled: root.visible && !root.sheetOpen; onActivated: root.chooseMusic() }
-    readonly property bool sheetOpen: cachePane.modalOpen || playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened || queueMenu.opened || historyMenu.opened || playbackRemoval.opened || shortcutCapture.opened
+    readonly property bool sheetOpen: musicDetailsPopup.opened || cachePane.modalOpen || playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened || queueMenu.opened || historyMenu.opened || playbackRemoval.opened || shortcutCapture.opened
     Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.closeOnlinePlaylist();else if(root.detail === "settings" && root.settingsPage)root.openSettingsPage("");else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
     component Glyph: Canvas {
         id: glyph
@@ -504,6 +531,17 @@ ApplicationWindow {
             else if (kind === "info") { c.beginPath();c.arc(12,12,9,0,Math.PI*2);c.stroke();path([[12,11],[12,17]]);c.beginPath();c.arc(12,7,0.8,0,Math.PI*2);c.fill() }
             else { path([[9,17],[9,5],[19,3],[19,15]]);c.beginPath();c.ellipse(3,16,6,4);c.fill();c.beginPath();c.ellipse(13,14,6,4);c.fill() }
         }
+    }
+    component Cover: Rectangle {
+        property string url: ""
+        implicitWidth: 44; implicitHeight: 44; radius: 8; color: root.control
+        Rectangle { anchors.centerIn: parent; width: parent.width * .58; height: width; radius: width/2; color: "transparent"; border.color: root.muted; opacity: .45
+            Rectangle { anchors.centerIn: parent; width: parent.width * .24; height: width; radius: width/2; color: "transparent"; border.color: root.muted }
+        }
+        Image { anchors.fill: parent; source: parent.url; sourceSize: Qt.size(128,128); asynchronous: true; fillMode: Image.PreserveAspectFit; visible: status === Image.Ready }
+    }
+    component SongCover: SongArtworkView {
+        artwork: player.artwork; placeholderColor: root.control; lineColor: root.muted
     }
     component Copy: Text { color: root.ink; textFormat: Text.PlainText; font: root.font; elide: Text.ElideRight }
     component Action: Button {
@@ -869,6 +907,7 @@ ApplicationWindow {
         RowLayout {
             anchors.fill: parent; anchors.margins: 6; spacing: 8
             Copy { visible: song.rank > 0; text: song.rank; font.pixelSize: 13; font.weight: song.rank <= 3 ? Font.DemiBold : Font.Normal; color: song.rank <= 3 ? root.accent : root.muted; elide: Text.ElideNone; Layout.preferredWidth: Math.max(24, implicitWidth); Layout.minimumWidth: implicitWidth; horizontalAlignment: Text.AlignHCenter }
+            SongCover { track: song.track; Layout.preferredWidth: 40; Layout.preferredHeight: 40 }
             ColumnLayout {
                 Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
                 Copy { Layout.fillWidth: true; text: song.track.name; font.weight: Font.DemiBold }
@@ -987,6 +1026,7 @@ ApplicationWindow {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; text: player.currentTrack.length ? player.title : root.t(player.title); font.pixelSize: 22; font.weight: Font.DemiBold
                             wrapMode: Text.Wrap; maximumLineCount: 2
                         }
+                        Action { objectName: "currentMusicDetails"; glyph: "info"; quiet: true; enabled: player.currentTrack.length > 0 && player.online; Accessible.name: root.t("资料与评论"); ToolTip.text: Accessible.name; onClicked: root.openMusicDetails(null) }
                         Action { objectName: "cacheCurrentTrack"; glyph: "import"; quiet: true; enabled: player.currentTrack.length > 0 && player.online; Accessible.name: root.t("保存当前歌曲"); ToolTip.text: Accessible.name; onClicked: { player.cacheCurrentTrack(); root.openDetail("settings"); root.openSettingsPage("cache") } }
                     }
                     RowLayout {
@@ -1113,21 +1153,27 @@ ApplicationWindow {
                                         }
                                         Column {
                                             id: lyricWords; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 14; anchors.verticalCenter: parent.verticalCenter; spacing: 0
-                                            Text {
+                                            ProgressLyricText {
                                                 id: lyricOriginalText
                                                 objectName: "lyricOriginal-" + lyricRow.index
                                                 width: parent.width; textFormat: Text.PlainText; wrapMode: Text.Wrap
                                                 lineHeight: root.lyricLineSpacing; lineHeightMode: Text.ProportionalHeight
                                                 text: root.lyricDisplayMode === 1 ? (lyricRow.modelData.translation || (lyricRow.modelData.original ? root.t("暂无该句译文") : "♪")) : (lyricRow.modelData.original || "♪")
                                                 font.family: root.font.family; font.pixelSize: root.lyricFontSize + (lyricRow.active ? 2 : 0); font.weight: lyricRow.active ? Font.DemiBold : Font.Normal
-                                                color: lyricRow.active ? root.accent : root.muted
+                                                color: lyricRow.active ? (progressEnabled ? root.ink : root.accent) : root.muted
+                                                progressEnabled: lyricRow.active && lyricColorPreferences.enabled
+                                                progress: progressEnabled ? lyricProgressClock.progressFor(lyricRow.index) : 0
+                                                progressColor: root.accent
                                             }
-                                            Text {
+                                            ProgressLyricText {
                                                 objectName: "lyricTranslation-" + lyricRow.index
                                                 width: parent.width; visible: root.lyricDisplayMode === 2 && text.length > 0
                                                 text: lyricRow.modelData.translation; textFormat: Text.PlainText; wrapMode: Text.Wrap
                                                 lineHeight: root.lyricLineSpacing; lineHeightMode: Text.ProportionalHeight
                                                 font.family: root.font.family; font.pixelSize: root.lyricFontSize + (lyricRow.active ? 2 : 0); color: lyricRow.active ? root.ink : root.muted
+                                                progressEnabled: lyricRow.active && lyricColorPreferences.enabled
+                                                progress: progressEnabled ? lyricProgressClock.progressFor(lyricRow.index) : 0
+                                                progressColor: root.accent
                                             }
                                         }
                                     }
@@ -1343,6 +1389,7 @@ ApplicationWindow {
                                             ToolTip.text: songs.reorderEnabled ? root.t("拖动排序，也可在歌曲菜单中上移、下移") : root.t("清除筛选后可拖动排序")
                                             HoverHandler { id: handleHover }
                                         }
+                                        SongCover { track: libraryTrack.modelData; Layout.preferredWidth: 40; Layout.preferredHeight: 40 }
                                         Button {
                                             id: trackTap
                                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.fillHeight: true; padding: 4
@@ -1469,7 +1516,11 @@ ApplicationWindow {
                                                     spacing: 4
                                                     scale: onlineResult.visualScale
                                                     Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: onlineResult.down ? 80 : 150; easing.type: Easing.OutCubic } }
-                                                    Copy { text: onlineResult.modelData.name; Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold; wrapMode: Text.Wrap; maximumLineCount: 2 }
+                                                    RowLayout {
+                                                        Layout.fillWidth: true
+                                                        Cover { url: onlineResult.modelData.coverUrl || ""; visible: url.length>0; Layout.preferredWidth: 40; Layout.preferredHeight: 40 }
+                                                        Copy { text: onlineResult.modelData.name; Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold; wrapMode: Text.Wrap; maximumLineCount: 2 }
+                                                    }
                                                     Copy { objectName: "playlistResultMetadata"; text: root.onlineSourceName(onlineResult.modelData) + " · " + onlineResult.modelData.trackCount + root.t(" 首") + (onlineResult.modelData.creator ? " · " + onlineResult.modelData.creator : ""); Layout.fillWidth: true; Layout.minimumWidth: 0; wrapMode: Text.Wrap; maximumLineCount: 2; color: root.muted; font.pixelSize: 12 }
                                                     Copy {
                                                         text: onlineResult.modelData.description || root.t("暂无简介"); Layout.fillWidth: true; color: root.muted; font.pixelSize: 12
@@ -1533,6 +1584,11 @@ ApplicationWindow {
                                         }
                                         }
                                         ColumnLayout { property string settingsKey: "floating"; visible: root.settingsPage === "floating"; Layout.fillWidth: true; spacing: 8
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Copy { text: root.t("歌词颜色进度"); Layout.fillWidth: true; font.pixelSize: 13 }
+                                            Switch { objectName: "desktopLyricColorProgressSwitch"; checked: lyricColorPreferences.enabled; Accessible.name: root.t("歌词颜色进度"); onToggled: { lyricColorPreferences.enabled = checked; lyricColorPreferences.sync() } }
+                                        }
                                         RowLayout {
                                             Layout.fillWidth: true
                                             Copy { text: root.t("桌面歌词"); Layout.fillWidth: true; font.pixelSize: 13 }
@@ -1641,6 +1697,12 @@ ApplicationWindow {
                                         }
                                         ColumnLayout { property string settingsKey: "lyrics"; visible: root.settingsPage === "lyrics"; Layout.fillWidth: true; spacing: 8
                                         RowLayout {
+                                            Layout.fillWidth: true
+                                            Copy { text: root.t("歌词颜色进度"); Layout.fillWidth: true; font.pixelSize: 13 }
+                                            Switch { objectName: "lyricColorProgressSwitch"; checked: lyricColorPreferences.enabled; Accessible.name: root.t("歌词颜色进度"); onToggled: { lyricColorPreferences.enabled = checked; lyricColorPreferences.sync() } }
+                                        }
+                                        Hint { text: root.t("高亮颜色随当前句进度从左向右覆盖，同时应用于播放器与桌面歌词。"); Layout.fillWidth: true }
+                                        RowLayout {
                                             Layout.fillWidth: true; spacing: 10
                                             Copy { text: root.t("显示方式"); Layout.preferredWidth: root.languageCode === "en" ? 106 : 70; font.pixelSize: 13 }
                                             Choice {
@@ -1679,6 +1741,7 @@ ApplicationWindow {
                                         }
                                         ColumnLayout { property string settingsKey: "general"; visible: root.settingsPage === "general"; Layout.fillWidth: true; spacing: 8
                                         SettingsHeading { label: root.t("外观"); glyph: "spark" }
+                                        Switch { objectName: "songCoversSwitch"; text: root.t("显示歌曲封面"); checked: player.artwork.enabled; onToggled: player.artwork.enabled=checked; palette.windowText: root.ink }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 10
                                             Copy { text: root.t("主题"); Layout.preferredWidth: root.languageCode === "en" ? 106 : 70; font.pixelSize: 13 }
@@ -1810,7 +1873,7 @@ ApplicationWindow {
                                         }
                                         }
                                         ColumnLayout { property string settingsKey: "about"; visible: root.settingsPage === "about"; Layout.fillWidth: true; spacing: 8
-                                        SettingsHeading { label: root.t("浮音 1.6.0-preview.2"); glyph: "info"; Layout.topMargin: 0 }
+                                        SettingsHeading { label: root.t("浮音 1.7.0-preview.3"); glyph: "info"; Layout.topMargin: 0 }
                                         Hint { text: root.t("Windows 桌面预览 · 拖动顶部移动窗口\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起") }
                                         }
                                     }
@@ -1878,6 +1941,7 @@ ApplicationWindow {
                                                     Layout.preferredWidth: 34; Layout.preferredHeight: 34; radius: 9
                                                     color: rankingResult.emphasized ? root.selection : root.control
                                                     Glyph { anchors.centerIn: parent; kind: root.rankingGlyph(rankingResult.modelData.name); tint: root.accent; width: 20; height: 20 }
+                                                    Image { anchors.fill: parent; source: rankingResult.modelData.coverUrl || ""; sourceSize: Qt.size(128,128); asynchronous: true; fillMode: Image.PreserveAspectFit; visible: status === Image.Ready }
                                                 }
                                                 ColumnLayout {
                                                     Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
@@ -1925,6 +1989,8 @@ ApplicationWindow {
                                             }
                                             Copy { objectName: "onlinePlaylistMetadata"; text: root.onlineSourceName(player.onlinePlaylist) + (player.onlinePlaylist.kind === "ranking" || root.onlinePlaylistSource === "rankings" ? root.t(" · 榜单") : root.t(" · 歌单")) + " · " + (player.onlinePlaylist.trackCount || 0) + root.t(" 首") + (onlineTracks.count !== (player.onlinePlaylist.trackCount || 0) ? root.t(" · 已读取 ") + onlineTracks.count + root.t(" 首") : ""); Layout.fillWidth: true; wrapMode: Text.Wrap; color: root.accent; font.pixelSize: 12 }
                                             Hint { objectName: "onlinePlaylistCreator"; text: (player.onlinePlaylist.creator || "") + (player.onlinePlaylist.updateFrequency ? (player.onlinePlaylist.creator ? " · " : "") + player.onlinePlaylist.updateFrequency : ""); visible: text.length > 0 }
+                                            Cover { url: player.onlinePlaylist.coverUrl || ""; visible: url.length > 0; Layout.preferredWidth: 64; Layout.preferredHeight: 64 }
+                                            Hint { text: root.onlineStats(player.onlinePlaylist); visible: text.length > 0; Layout.fillWidth: true; wrapMode: Text.Wrap }
                                             ExpandableDescription {
                                                 fullText: player.onlinePlaylist.description || ""; contextKey: player.onlinePlaylist.id || ""
                                                 browsing: onlineTracks.dragging || onlineTracks.flicking
@@ -2040,6 +2106,7 @@ ApplicationWindow {
                                                     ToolTip.visible: queueHandleHover.hovered && queueView.dragEntryId.length === 0; ToolTip.text: root.t("拖动排序，也可在菜单中上移、下移")
                                                     HoverHandler { id: queueHandleHover }
                                                 }
+                                                SongCover { track: queuedTrack.modelData; Layout.preferredWidth: 40; Layout.preferredHeight: 40 }
                                                 Button {
                                                     id: queueTap
                                                     objectName: "queuePlay_" + queuedTrack.modelData.queueId
@@ -2138,6 +2205,23 @@ ApplicationWindow {
         }
     }
     // Sheets stay within the always-on-top card and scroll when the desktop is short.
+    Popup {
+        id: musicDetailsPopup; objectName: "musicDetailsPopup"
+        parent: Overlay.overlay; popupType: Popup.Item; z: 1100
+        modal: true; dim: false; focus: true; padding: 14
+        width: Math.max(160,root.width / root.contentScale - 24)
+        height: Math.max(80,root.height / root.contentScale - 24)
+        x: 12 * root.contentScale; y: 12 * root.contentScale
+        scale: root.contentScale; transformOrigin: Popup.TopLeft
+        closePolicy: Popup.CloseOnEscape
+        onClosed: player.musicDetails.action("close", {})
+        background: PrismaticSurface { radius: 14; darkMode: root.darkMode; elevated: true }
+        contentItem: MusicDetailsPage {
+            api: player.musicDetails; translate: root.t
+            ink: root.ink; muted: root.muted; accent: root.accent; surface: root.control; selected: root.selection
+            onCloseRequested: musicDetailsPopup.close()
+        }
+    }
     component LibrarySheet: Popup {
         id: sheet
         default property alias body: sheetBody.data
@@ -2203,6 +2287,7 @@ ApplicationWindow {
         property string trackName: ""
         property int trackIndex: -1
         Hint { text: trackMenu.trackName }
+        Action { objectName: "trackMusicDetails"; text: root.t("资料与评论"); glyph: "info"; Layout.fillWidth: true; enabled: !!trackMenu.track.songId && trackMenu.track.source !== "local"; onClicked: root.openMusicDetails(trackMenu.track) }
         Action { objectName: "cacheSelectedTrack"; text: root.t("保存到本地"); glyph: "import"; Layout.fillWidth: true; enabled: !!trackMenu.track.songId && trackMenu.track.source !== "local"; onClicked: { player.cacheTrack(trackMenu.track, true); trackMenu.close(); root.openDetail("settings"); root.openSettingsPage("cache") } }
         Action { objectName: "trackEnqueueNext"; text: root.t("下一首播放"); glyph: "next"; Layout.fillWidth: true; onClicked: { player.enqueueTrack(trackMenu.track, "next"); trackMenu.close() } }
         Action { objectName: "trackEnqueueTail"; text: root.t("加入队尾"); glyph: "list"; Layout.fillWidth: true; onClicked: { player.enqueueTrack(trackMenu.track, "tail"); trackMenu.close() } }

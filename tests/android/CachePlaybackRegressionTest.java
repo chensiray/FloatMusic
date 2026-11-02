@@ -160,6 +160,22 @@ public final class CachePlaybackRegressionTest extends Instrumentation {
             check(first.optString("id").equals(ui.optString("lyricTrack")) && !ui.optBoolean("lyricsLoading"), "native lyric state is restored without Qt or network response");
         });
         capture("offline-bilingual-playback");
+        runOnMainSync(()->{
+            JSONObject cached=(JSONObject)get(service,"cachedPlayback");
+            JSONObject missing=OfflineCache.copy(cached);OfflineCache.put(missing,"original","");OfflineCache.put(missing,"translation","");OfflineCache.put(missing,"lyricLines",new JSONArray());
+            set(service,"cachedPlayback",missing);
+            JSONObject pending=new JSONObject();OfflineCache.put(pending,"lyricTrack",first.optString("id"));OfflineCache.put(pending,"lyricsLoading",true);OfflineCache.put(pending,"lyricsMessage","正在获取歌词…");
+            PlayerBridge.updateUi(pending.toString());service.refreshOverlayData();
+            check(((JSONObject)get(service,"libraryUi")).optBoolean("lyricsLoading"),"audio-only cache must not hide a live online lyric request");
+            OfflineCache.put(pending,"lyricsLoading",false);OfflineCache.put(pending,"lyrics","[00:00]Recovered from network");
+            PlayerBridge.updateUi(pending.toString());service.refreshOverlayData();
+            check(((JSONObject)get(service,"libraryUi")).optString("lyrics").contains("Recovered from network"),"older empty cache cannot overwrite newly fetched current-song lyrics");
+            set(service,"cachedPlayback",null);OfflineCache.put(pending,"lyricTrack","netease:other-song");PlayerBridge.updateUi(pending.toString());service.refreshOverlayData();
+            JSONObject waiting=(JSONObject)get(service,"libraryUi");
+            check(waiting.optBoolean("lyricsLoading")&&waiting.optString("lyricsMessage").equals("正在获取歌词…"),"online playback with delayed bridge state shows loading rather than the play-online placeholder");
+            check(waiting.optString("lyrics").isEmpty(),"stale lyrics from the previous song are not displayed");
+            set(service,"cachedPlayback",cached);PlayerBridge.updateUi("{}");service.refreshOverlayData();
+        });
         testVisibleManualSave(firstKey);
         runOnMainSync(() -> {
             set(service, "sourceQualities", TrackState.sourceQualities(null, "standard"));
@@ -266,7 +282,7 @@ public final class CachePlaybackRegressionTest extends Instrumentation {
                 View button=((View)get(overlay,"window")).findViewWithTag("saveCurrentTrack");
                 android.graphics.Rect bounds=new android.graphics.Rect();
                 check(button.isShown()&&button.getGlobalVisibleRect(bounds)&&bounds.width()>0&&bounds.height()>0,"manual save remains on screen "+language+" mode "+mode);
-                check(button instanceof TextView&&((TextView)button).getText().toString().equals(UiStrings.text("保存到本地")),"manual save has a localized visible label "+language+" mode "+mode);
+                check(UiStrings.text("保存当前歌曲").contentEquals(button.getContentDescription()),"manual save icon has a localized accessible label "+language+" mode "+mode);
                 JSONObject noSong=new JSONObject();overlay.update(noSong);check(!button.isEnabled(),"manual save disabled without current song");
                 JSONObject local=service.playbackSnapshot();try{local.put("loadedTrack",new JSONObject().put("id","local:fixture").put("source","local"));}catch(Exception e){throw new RuntimeException(e);}overlay.update(local);check(!button.isEnabled(),"imported local audio needs no duplicate cache save");
                 service.update();check(button.isEnabled(),"manual save re-enables when an online song becomes current");

@@ -787,11 +787,19 @@ public class PlaybackService extends Service {
     void syncOverlay() { if(overlay!=null)overlay.syncVisibility();if(floatingLyrics!=null)floatingLyrics.syncVisibility();openNotificationVolume(); }
     void refreshOverlayData() {
         libraryUi=PlayerBridge.uiData();
-        if(cachedPlayback!=null)try{
+        boolean currentLyrics=currentTrack.equals(libraryUi.optString("lyricTrack"))&&!currentTrack.isEmpty();
+        boolean liveLyrics=currentLyrics&&(libraryUi.optBoolean("lyricsLoading")||libraryUi.optBoolean("lyricsFailed")||!libraryUi.optString("lyrics").isEmpty()||!libraryUi.optString("translation").isEmpty());
+        if(cachedPlayback!=null&&!liveLyrics)try{
             libraryUi.put("lyricTrack",currentTrack);libraryUi.put("lyrics",cachedPlayback.optString("original"));libraryUi.put("translation",cachedPlayback.optString("translation"));
             libraryUi.put("lyricLines",cachedPlayback.optJSONArray("lyricLines")==null?new JSONArray():cachedPlayback.optJSONArray("lyricLines"));
             libraryUi.put("lyricsLoading",false);libraryUi.put("lyricsFailed","failed".equals(cachedPlayback.optString("originalState")));
             libraryUi.put("lyricsMessage",cachedPlayback.optString("original").isEmpty()?"暂无本地歌词，可联网后补取":"已加载本地歌词。");
+        }catch(Exception ignored){}
+        else if(cachedPlayback==null&&!currentLyrics&&loadedTrack!=null)try{
+            boolean online=TrackState.online(loadedTrack.optString("source"));
+            libraryUi.put("lyricTrack",currentTrack);libraryUi.put("lyrics","");libraryUi.put("translation","");libraryUi.put("lyricLines",new JSONArray());
+            libraryUi.put("lyricsLoading",online);libraryUi.put("lyricsFailed",false);
+            libraryUi.put("lyricsMessage",online?"正在获取歌词…":"本地音乐暂不自动匹配在线歌词。");
         }catch(Exception ignored){}
         if(overlay!=null)overlay.refreshData(libraryUi);if(floatingLyrics!=null)floatingLyrics.update(playbackSnapshot(),libraryUi);
     }

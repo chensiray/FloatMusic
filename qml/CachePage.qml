@@ -106,7 +106,11 @@ ColumnLayout {
             width: cacheList.width - 12; height: entryContent.implicitHeight + 18
             ColumnLayout {
                 id: entryContent; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.topMargin: 8; spacing: 5
-                Words { text: entryRow.modelData.title || (entryRow.modelData.track || {}).name || page.tr("未知歌曲"); font.weight: Font.DemiBold; maximumLineCount: 2; elide: Text.ElideRight }
+                RowLayout {
+                    Layout.fillWidth: true
+                    SongArtworkView { artwork: page.controller.artwork; track: entryRow.modelData.track || entryRow.modelData; placeholderColor: page.host.control; lineColor: page.host.muted; Layout.preferredWidth: 40; Layout.preferredHeight: 40 }
+                    Words { Layout.fillWidth: true; text: entryRow.modelData.title || (entryRow.modelData.track || {}).name || page.tr("未知歌曲"); font.weight: Font.DemiBold; maximumLineCount: 2; elide: Text.ElideRight }
+                }
                 Words { text: (entryRow.modelData.artist || "") + " · " + page.qualityText(entryRow.modelData.quality) + " · " + page.bytes(entryRow.modelData.bytes); color: page.host.muted; font.pixelSize: 12 }
                 Words { text: page.stateText(entryRow.modelData) + (entryRow.modelData.state === "downloading" && entryRow.modelData.progress >= 0 ? " · " + Math.round(entryRow.modelData.progress * 100) + "%" : ""); color: entryRow.modelData.state === "failed" ? page.host.danger : page.host.accent; font.pixelSize: 12 }
                 ProgressBar { Layout.fillWidth: true; visible: entryRow.working; indeterminate: entryRow.modelData.progress < 0; value: Math.max(0, entryRow.modelData.progress || 0); Accessible.name: page.tr("缓存进度") }

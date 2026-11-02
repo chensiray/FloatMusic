@@ -1,4 +1,5 @@
 #include "playlistdocument.h"
+#include "artworkpolicy.h"
 #include "audiofilepolicy.h"
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -105,6 +106,9 @@ Parsed parse(const QString &text) {
         const double seconds = raw.value("duration").toVariant().toDouble();
         if ((source == "tencent" || source == "kuwo") && std::isfinite(seconds) && seconds > 0 && seconds <= 86400)
             track["duration"] = seconds;
+        const auto cover=ArtworkPolicy::url(raw.value("coverUrl").toString());
+        if(!cover.isEmpty())track["coverUrl"]=cover;
+        const auto album=raw.value("album").toString().left(1000);if(!album.isEmpty())track["album"]=album;
         tracks << track;
     }
     if (!songs.isEmpty() && tracks.isEmpty()) {
@@ -125,6 +129,8 @@ QByteArray encode(const QVariantMap &playlist, const QStringList &ids, QString &
         QVariantMap clean;
         for (const auto &key : {"id", "source", "songId", "name", "artist", "path"})
             if (song.contains(key)) clean[key] = song.value(key);
+        const auto cover=ArtworkPolicy::url(song.value("coverUrl").toString());if(!cover.isEmpty())clean["coverUrl"]=cover;
+        if(song.contains("album"))clean["album"]=song.value("album").toString().left(1000);
         const double seconds = song.value("duration").toDouble();
         const auto source = song.value("source").toString();
         if ((source == "tencent" || source == "kuwo") && std::isfinite(seconds) && seconds > 0 && seconds <= 86400)

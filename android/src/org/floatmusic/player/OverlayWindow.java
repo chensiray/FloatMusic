@@ -46,10 +46,17 @@ final class OverlayWindow {
     private String lyricTrack="";
     private boolean manualLyrics=false;
     private int activeLyric=-1;
+    private final LyricProgress lyricProgress=new LyricProgress();
+    private boolean progressFramePosted;
+    private View progressFrameHost;
+    private final Runnable progressFrame=()->{progressFramePosted=false;updateColorProgress();};
     private SeekBar progress, volume;
     private Button lyricsTab, playlistTab, moreTab;
     private Button searchButton, qualityButton;
-    private Button outputButton,saveTrackButton,moreSaveTrackButton;
+    private Button outputButton,moreSaveTrackButton;
+    private IconButton saveTrackButton,infoTrackButton;
+    private Boolean pendingSongCovers;
+    private final java.util.Set<SongCoverView> songCoverViews=java.util.Collections.newSetFromMap(new java.util.WeakHashMap<SongCoverView,Boolean>());
     private final ArrayList<Button> sourceQualityButtons=new ArrayList<>();
     private final JSONObject pendingSourceQualities=new JSONObject();
     private LinearLayout customServiceFields;
@@ -70,6 +77,9 @@ final class OverlayWindow {
     private boolean rankingsRequested=false;
     private int tracksPage=0, resultsPage=0, onlinePage=0, playlistResultsPage=0;
     private int queuePage=0, historyPage=0;
+    private int commentsPage=0;
+    private int pendingCommentsPage=-1;
+    private final java.util.HashSet<String> expandedComments=new java.util.HashSet<>();
     private String sleepDraft="30";
     private static final int SONG_PAGE_SIZE=80, PLAYLIST_PAGE_SIZE=30;
     private boolean selecting=false;
@@ -283,6 +293,7 @@ final class OverlayWindow {
         if(hidden && keyboard)hideKeyboard();
         if(hidden)dismissPopup();
         window.setVisibility(hidden?View.GONE:View.VISIBLE);
+        updateColorProgress();
     }
     void close(){closed=true;cancelLyricFollow();hideKeyboard();remove();}
     void openLyricSettings(){show();if(!expanded)expand();rememberDrafts();hideKeyboard();clearSelection();section="more";settingsPage="floating";selectDetail("settings");}
@@ -293,7 +304,7 @@ final class OverlayWindow {
         if(opened.isLaidOut()&&anchor.getWidth()>0)show.run();
         else opened.addOnLayoutChangeListener(new View.OnLayoutChangeListener(){public void onLayoutChange(View v,int l,int t,int r,int b,int ol,int ot,int or,int ob){if(r>l&&b>t&&anchor.getWidth()>0){v.removeOnLayoutChangeListener(this);show.run();}}});
     }
-    private void remove(){stopReorder();dismissPopup();if(window!=null){try{manager.removeView(window);}catch(IllegalArgumentException ignored){}window=null;}}
+    private void remove(){stopColorProgress();stopReorder();dismissPopup();if(window!=null){try{manager.removeView(window);}catch(IllegalArgumentException ignored){}window=null;}}
     private void attach(){try{clamp();manager.addView(window,params);syncVisibility();}catch(Exception e){window=null;service.report(UiStrings.text("无法显示悬浮窗，请检查悬浮权限。"));}}
     private void collapse(){hideKeyboard();rememberDrafts();remove();section="";detail="";settingsPage="";show();}
     private void expand(){
@@ -303,10 +314,11 @@ final class OverlayWindow {
         header.addView(brand,new LinearLayout.LayoutParams(0,dp(48),1));brand.setGravity(Gravity.CENTER_VERTICAL);
         sleepButton=new IconButton("timing",UiStrings.text("睡眠定时"),false);sleepButton.setOnClickListener(v->{rememberDrafts();hideKeyboard();clearSelection();section="more";selectDetail("sleep");});sleepButton.setVisibility(View.GONE);header.addView(sleepButton,new LinearLayout.LayoutParams(dp(48),dp(48)));
         IconButton minimize=new IconButton("minus",UiStrings.text("收为图标"),false);minimize.setOnClickListener(v->collapse());header.addView(minimize,new LinearLayout.LayoutParams(dp(48),dp(48)));add(shell,header,48);
-        title=text(UiStrings.text("选择一首音乐"),22,false);title.setTypeface(null,Typeface.BOLD);title.setMaxLines(2);title.setEllipsize(TextUtils.TruncateAt.END);title.setOnLongClickListener(v->{JSONObject track=playback.optJSONObject("loadedTrack");if(track!=null)showExternalTrackMenu(track);return true;});add(shell,title,-2);
-        LinearLayout songActions=row();
-        artist=text(UiStrings.text("更多里搜索或导入音乐"),13,true);artist.setSingleLine(true);artist.setEllipsize(TextUtils.TruncateAt.END);songActions.addView(artist,new LinearLayout.LayoutParams(0,dp(48),1));artist.setGravity(Gravity.CENTER_VERTICAL);
-        saveTrackButton=button(UiStrings.text("保存到本地"),this::saveCurrentTrack);saveTrackButton.setBackground(buttonBackground(true));saveTrackButton.setTextColor(accent());saveTrackButton.setTag("saveCurrentTrack");saveTrackButton.setContentDescription(UiStrings.text("保存当前歌曲"));LinearLayout.LayoutParams saveLayout=new LinearLayout.LayoutParams(dp(96),dp(48));saveLayout.leftMargin=dp(8);songActions.addView(saveTrackButton,saveLayout);add(shell,songActions,48);updateSaveTrackButtons();
+        LinearLayout titleActions=row();
+        title=text(UiStrings.text("选择一首音乐"),22,false);title.setTypeface(null,Typeface.BOLD);title.setMaxLines(2);title.setEllipsize(TextUtils.TruncateAt.END);title.setOnLongClickListener(v->{JSONObject track=playback.optJSONObject("loadedTrack");if(track!=null)showExternalTrackMenu(track);return true;});titleActions.addView(title,new LinearLayout.LayoutParams(0,-2,1));
+        infoTrackButton=new IconButton("info",UiStrings.text("资料与评论"),false);infoTrackButton.setTag("currentMusicDetails");infoTrackButton.setOnClickListener(v->openMusicDetails(playback.optJSONObject("loadedTrack")));control(titleActions,infoTrackButton);
+        saveTrackButton=new IconButton("import",UiStrings.text("保存当前歌曲"),false);saveTrackButton.setTag("saveCurrentTrack");saveTrackButton.setOnClickListener(v->saveCurrentTrack());control(titleActions,saveTrackButton);add(shell,titleActions,-2);
+        artist=text(UiStrings.text("更多里搜索或导入音乐"),13,true);artist.setSingleLine(true);artist.setEllipsize(TextUtils.TruncateAt.END);add(shell,artist,22);updateSaveTrackButtons();
         progress=slider();progress.setContentDescription(UiStrings.text("播放进度"));add(shell,progress,48);
         time=text("0:00 / 0:00",12,true);add(shell,time,18);
         progress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
@@ -361,6 +373,7 @@ final class OverlayWindow {
     private static String clock(int ms){int s=ms/1000;return String.format(Locale.ROOT,"%d:%02d",s/60,s%60);}
     void update(JSONObject data){
         playback=data;
+        lyricProgress.update(data.optLong("position"),data.optInt("lyricOffset"),data.optLong("duration"),data.optBoolean("playing"),android.os.SystemClock.uptimeMillis());
         acknowledgeSourceQualities(data);
         if(!expanded || window==null)return;
         updateQualityControls();
@@ -388,15 +401,16 @@ final class OverlayWindow {
         textIfChanged(artist,caption.isEmpty()?UiStrings.text("更多里搜索或导入音乐"):caption);
     }
     private boolean canSaveCurrentTrack(){JSONObject track=playback.optJSONObject("loadedTrack");return track!=null&&TrackState.online(track.optString("source"))&&!track.optString("songId").isEmpty();}
-    private void updateSaveTrackButtons(){boolean enabled=canSaveCurrentTrack();for(Button button:new Button[]{saveTrackButton,moreSaveTrackButton})if(button!=null){button.setEnabled(enabled);button.setAlpha(enabled?1f:.45f);}}
+    private void updateSaveTrackButtons(){boolean enabled=canSaveCurrentTrack();for(View button:new View[]{saveTrackButton,infoTrackButton,moreSaveTrackButton})if(button!=null){button.setEnabled(enabled);button.setAlpha(enabled?1f:.45f);}}
     private void saveCurrentTrack(){if(!canSaveCurrentTrack())return;act("cacheTrack",args("track",playback.optJSONObject("loadedTrack"),"manual",true).toString());notice(UiStrings.text("已加入缓存任务，可在设置中查看进度。"));}
     private void toggle(String name){
+        if(detail.equals("musicDetails"))detailsAction("close",new JSONObject());
         hideKeyboard();rememberDrafts();clearSelection();section=section.equals(name)?"":name;detail="";settingsPage="";buildDrawer();
         // A tab change starts at the top immediately; a parent scroll animation
         // would intercept the first DOWN before the new list can reserve it.
         scroll.post(()->scroll.scrollTo(0,0));
     }
-    private void selectDetail(String name){hideKeyboard();rememberDrafts();detail=name;if(!name.equals("settings"))settingsPage="";if(detailScroll!=null)detailScroll.scrollTo(0,0);buildDrawer();if(name.equals("rankings"))ensureRankings();}
+    private void selectDetail(String name){if(detail.equals("musicDetails")&&!name.equals(detail))detailsAction("close",new JSONObject());hideKeyboard();rememberDrafts();detail=name;if(!name.equals("settings"))settingsPage="";if(detailScroll!=null)detailScroll.scrollTo(0,0);buildDrawer();if(name.equals("rankings"))ensureRankings();}
     private void openSettingsPage(String page){settingsPage=page;selectDetail("settings");}
     private void ensureRankings(){if(!rankingsRequested&&array(ui,"rankings").length()==0&&!ui.optBoolean("rankingsLoading"))loadRankings();}
     private void loadRankings(){if(ui.optBoolean("rankingsLoading")||pendingRankingSource!=null)return;rankingsRequested=true;library("loadRankings",args("source",selectedRankingSource()));}
@@ -409,6 +423,7 @@ final class OverlayWindow {
     private void styleTab(Button b,String name){boolean selected=section.equals(name);b.setSelected(selected);b.setBackground(buttonBackground(selected));b.setTextColor(selected?accent():muted());b.setTypeface(null,selected?Typeface.BOLD:Typeface.NORMAL);b.setContentDescription(b.getText()+(selected?UiStrings.text("，已展开，再次点击收起"):UiStrings.text("，点击展开")));}
     private void buildDrawer(){
         if(drawer==null)return;
+        stopColorProgress();
         cancelLyricFollow();
         stopReorder();
         if(detailScroll!=null)detailScroll.setOnDragListener(null);
@@ -427,6 +442,7 @@ final class OverlayWindow {
         else if(detail.equals("search"))buildSearch();
         else if(detail.equals("rankings"))buildRankings();
         else if(detail.equals("online"))buildOnline();
+        else if(detail.equals("musicDetails"))buildMusicDetails();
         else if(detail.equals("settings"))buildSettings();
         else if(detail.equals("queue"))buildQueue();
         else if(detail.equals("history"))buildHistory();
@@ -442,6 +458,7 @@ final class OverlayWindow {
         Button back=button(backLabel,onBack);back.setTag("settingsBack");head.addView(back,new LinearLayout.LayoutParams(dp(96),dp(48)));add(drawer,head,48);gap(drawer,8);
     }
     private void buildMore(){
+        moreItem("info",UiStrings.text("资料与评论"),()->openMusicDetails(playback.optJSONObject("loadedTrack")));
         moreItem("queue",UiStrings.text("播放队列"),()->selectDetail("queue"));
         moreItem("history",UiStrings.text("最近播放"),()->selectDetail("history"));
         moreItem("timing",UiStrings.text("睡眠定时"),()->selectDetail("sleep"));
@@ -463,7 +480,7 @@ final class OverlayWindow {
         hint(parent,UiStrings.text("点歌名播放 · 长按手柄拖动，或点击选择排序"));queuePage=Math.min(queuePage,(entries.length()-1)/SONG_PAGE_SIZE);
         LinearLayout songs=column();add(parent,songs,-2);String current=playback.optString("currentQueueEntry");String order=queueOrderKey(entries);
         for(int i=queuePage*SONG_PAGE_SIZE;i<Math.min(entries.length(),(queuePage+1)*SONG_PAGE_SIZE);i++){
-            final int index=i;JSONObject entry=entries.optJSONObject(i);if(entry==null)continue;String entryId=entry.optString("queueId"),name=entry.optString("name"),by=trackSubtitle(entry);boolean active=entryId.equals(current);LinearLayout song=row();song.setTag(index);
+            final int index=i;JSONObject entry=entries.optJSONObject(i);if(entry==null)continue;String entryId=entry.optString("queueId"),name=entry.optString("name"),by=trackSubtitle(entry);boolean active=entryId.equals(current);LinearLayout song=row();song.setTag(index);songArtwork(song,entry);
             Button nameButton=button(name,()->act("playQueueEntry",entryId));nameButton.setText(songCaption((active?UiStrings.text("正在播放 · "):"")+name,by));nameButton.setTextSize(14);nameButton.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);nameButton.setMaxLines(2);nameButton.setEllipsize(TextUtils.TruncateAt.END);nameButton.setContentDescription(UiStrings.text("播放队列第 ")+(index+1)+UiStrings.text(" 首，")+name+"，"+by+(active?UiStrings.text("，正在播放"):""));nameButton.setBackground(buttonBackground(active));if(active)nameButton.setTextColor(accent());song.addView(nameButton,new LinearLayout.LayoutParams(0,dp(48),1));
             IconButton handle=new IconButton("grip",UiStrings.text("排序队列，")+name+UiStrings.text("，长按拖动，点击选择上移或下移"),false);handle.motionEnabled=false;handle.setOnClickListener(v->showQueueReorderMenu(entryId));handle.setOnLongClickListener(v->{if(queueEntryIndex(array(playback,"queueEntries"),entryId)<0)return true;resetPress(handle);dragReorder=new DragReorder(songs,song,"queue",index,order);boolean started=handle.startDragAndDrop(ClipData.newPlainText("queue-entry",entryId),new View.DragShadowBuilder(song),dragReorder,0);if(started){song.setAlpha(.45f);handle.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);}else stopReorder();return true;});control(song,handle);
             IconButton more=new IconButton("more",UiStrings.text("队列歌曲操作，")+name,false);more.setOnClickListener(v->showQueueTrackMenu(entry));control(song,more);add(songs,song,-2);divider(songs);
@@ -484,7 +501,7 @@ final class OverlayWindow {
         JSONArray entries=array(playback,"historyEntries");LinearLayout tools=row();tools.addView(text(UiStrings.text("最近实际播放的 ")+entries.length()+UiStrings.text(" 首"),13,true),new LinearLayout.LayoutParams(0,-2,1));Button clear=button(UiStrings.text("清空历史"),()->confirm(UiStrings.text("清空最近播放"),UiStrings.text("清空最近播放记录？播放队列和歌单会保留。"),UiStrings.text("确认清空历史"),()->act("clearPlaybackHistory","")));clear.setEnabled(entries.length()>0);clear.setAlpha(entries.length()>0?1f:.45f);tools.addView(clear,new LinearLayout.LayoutParams(dp(96),dp(48)));add(parent,tools,48);
         if(entries.length()==0){hint(parent,UiStrings.text("还没有最近播放记录。音乐成功开始播放后会出现在这里。"));return;}historyPage=Math.min(historyPage,(entries.length()-1)/SONG_PAGE_SIZE);
         for(int i=historyPage*SONG_PAGE_SIZE;i<Math.min(entries.length(),(historyPage+1)*SONG_PAGE_SIZE);i++){
-            JSONObject track=entries.optJSONObject(i);if(track==null)continue;String id=track.optString("id"),name=track.optString("name"),subtitle=historySubtitle(track);LinearLayout item=row();LinearLayout info=column();info.setPadding(0,dp(8),0,dp(8));
+            JSONObject track=entries.optJSONObject(i);if(track==null)continue;String id=track.optString("id"),name=track.optString("name"),subtitle=historySubtitle(track);LinearLayout item=row();songArtwork(item,track);LinearLayout info=column();info.setPadding(0,dp(8),0,dp(8));
             Button replay=button(name,()->act("playHistoryTrack",id));replay.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);replay.setTextSize(14);replay.setMaxLines(2);replay.setEllipsize(TextUtils.TruncateAt.END);replay.setContentDescription(UiStrings.text("重播历史歌曲，")+name+"，"+subtitle);add(info,replay,48);TextView metadata=text(subtitle,12,true);metadata.setPadding(dp(8),0,0,0);add(info,metadata,-2);item.addView(info,new LinearLayout.LayoutParams(0,-2,1));
             IconButton more=new IconButton("more",UiStrings.text("历史歌曲操作，")+name,false);more.setOnClickListener(v->{LinearLayout menu=column();menuItem(menu,UiStrings.text("重新播放"),()->{dismissPopup();act("playHistoryTrack",id);});menuItem(menu,UiStrings.text("下一首播放"),()->enqueue(track,"next"));menuItem(menu,UiStrings.text("加入队尾"),()->enqueue(track,"tail"));menuItem(menu,UiStrings.text("加入歌单"),()->addTrackTo(track));showPanel(name,menu);});control(item,more);add(parent,item,-2);divider(parent);
         }pageControls(parent,"history",historyPage,entries.length(),SONG_PAGE_SIZE);
@@ -519,7 +536,7 @@ final class OverlayWindow {
         for(int i=0;i<lists.length();i++){
             JSONObject list=lists.optJSONObject(i);if(list==null)continue;String id=list.optString("id"),name=list.optString("name"),frequency=list.optString("updateFrequency");
             LinearLayout item=new PressRow();item.setOrientation(LinearLayout.VERTICAL);item.setPadding(dp(8),dp(12),dp(8),dp(12));item.setBackground(buttonBackground(false));item.setOnClickListener(v->openOnline(id,"rankings"));item.setFocusable(true);item.setContentDescription(UiStrings.text("查看")+name+(frequency.isEmpty()?"":"，"+frequency));
-            TextView heading=text(name,16,false);heading.setTypeface(null,Typeface.BOLD);heading.setMaxLines(2);heading.setEllipsize(TextUtils.TruncateAt.END);add(item,heading,-2);
+            artwork(item,list.optString("coverUrl"));TextView heading=text(name,16,false);heading.setTypeface(null,Typeface.BOLD);heading.setMaxLines(2);heading.setEllipsize(TextUtils.TruncateAt.END);add(item,heading,-2);
             String meta=onlineMetadata(list);item.setContentDescription(UiStrings.text("查看")+name+"，"+meta);
             if(!meta.isEmpty()){TextView info=text(meta,13,true);info.setPadding(0,dp(4),0,0);add(item,info,-2);}
             String description=list.optString("description");if(!description.isEmpty()){TextView note=text(description,13,true);note.setMaxLines(2);note.setEllipsize(TextUtils.TruncateAt.END);note.setPadding(0,dp(4),0,0);copyOnLongPress(note,()->description);note.setOnClickListener(v->item.performClick());add(item,note,-2);}
@@ -564,7 +581,7 @@ final class OverlayWindow {
             }
         };lyricScroll.setFillViewport(false);
         lyricRows=new LyricColumn();lyricRows.setPadding(dp(4),dp(12),dp(12),dp(64));lyricScroll.addView(lyricRows);viewport.addView(lyricScroll,new FrameLayout.LayoutParams(-1,-1));
-        lyricScroll.setOnScrollChangeListener((v,x,y,oldX,oldY)->updateLyricArrow());
+        lyricScroll.setOnScrollChangeListener((v,x,y,oldX,oldY)->{updateLyricArrow();updateColorProgress();});
         lyricReturn=new IconButton("down",UiStrings.text("回到当前歌词并恢复跟随"),false);lyricReturn.setBackground(buttonBackground(true));lyricReturn.setOnClickListener(v->{manualLyrics=false;updateLyrics(true);});
         FrameLayout.LayoutParams arrow=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.RIGHT|Gravity.BOTTOM);arrow.rightMargin=dp(4);arrow.bottomMargin=dp(4);viewport.addView(lyricReturn,arrow);
         // ScaledFrame allocates the remaining screen height after measuring the controls.
@@ -671,6 +688,7 @@ final class OverlayWindow {
     private void updateTimingValue(){if(timingValue!=null)timingValue.setText(String.format(Locale.ROOT,"%+.1fs",playback.optInt("lyricOffset")/1000f));}
     private void renderLyrics(){
         if(lyricRows==null)return;
+        stopColorProgress();
         cancelLyricFollow();
         String track=playback.optString("currentTrack");
         if(!track.equals(lyricTrack)){lyricTrack=track;manualLyrics=false;}
@@ -697,7 +715,7 @@ final class OverlayWindow {
         lyricRows.post(()->updateLyrics(true));
     }
     private TextView lyricText(String content){
-        TextView words=text(content,lyricFontSize,true);words.setPadding(dp(8),0,0,0);words.setIncludeFontPadding(false);words.setMinLines(0);words.setLineSpacing(0f,lyricLineSpacing);
+        TextView words=new ProgressLyricTextView(service);words.setText(content);words.setTextSize(lyricFontSize);words.setTextColor(muted());words.setFontFeatureSettings("kern");words.setPadding(dp(8),0,0,0);words.setIncludeFontPadding(false);words.setMinLines(0);words.setLineSpacing(0f,lyricLineSpacing);
         if(Build.VERSION.SDK_INT>=28)words.setFallbackLineSpacing(true);
         words.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE);words.setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE);return words;
     }
@@ -740,7 +758,7 @@ final class OverlayWindow {
         }
     }
     private void updateLyrics(boolean force){
-        if(lyricScroll==null||!section.equals("lyrics"))return;
+        if(lyricScroll==null||!section.equals("lyrics")){stopColorProgress();return;}
         if(!lyricTrack.equals(playback.optString("currentTrack"))){renderLyrics();return;}
         long time=(long)playback.optInt("position")+playback.optInt("lyricOffset");int low=0,high=lyricLines.length();
         while(low<high){int middle=(low+high)/2;if(lyricLines.optJSONObject(middle).optLong("time")<=time)low=middle+1;else high=middle;}
@@ -754,6 +772,29 @@ final class OverlayWindow {
             else{cancelLyricFollow();lyricScroll.scrollTo(0,0);}
         }
         updateLyricArrow();updateTimingValue();
+        updateColorProgress();
+    }
+    private void stopColorProgress(){if(progressFrameHost!=null)progressFrameHost.removeCallbacks(progressFrame);progressFrameHost=null;progressFramePosted=false;}
+    private void updateColorProgress(){
+        boolean enabled=prefs.getBoolean("lyricColorProgress",true);
+        boolean visible=!closed&&expanded&&window!=null&&window.isShown()&&section.equals("lyrics")&&lyricScroll!=null&&lyricScroll.isShown();
+        float value=1;
+        if(activeLyric>=0&&activeLyric<lyricTexts.size()&&activeLyric<lyricLines.length()){
+            TextView words=lyricTexts.get(activeLyric);
+            visible=visible&&words.getBottom()>lyricScroll.getScrollY()&&words.getTop()<lyricScroll.getScrollY()+lyricScroll.getHeight();
+            long start=lyricLines.optJSONObject(activeLyric).optLong("time");
+            long end=activeLyric+1<lyricLines.length()?lyricLines.optJSONObject(activeLyric+1).optLong("time"):playback.optLong("duration");
+            value=LyricProgress.fraction(start,end,lyricProgress.position(android.os.SystemClock.uptimeMillis()));
+            ((ProgressLyricTextView)words).setColorProgress(enabled,value,accent());
+        }
+        if(visible&&enabled&&playback.optBoolean("playing")&&activeLyric>=0&&value<1){
+            if(!progressFramePosted){progressFrameHost=lyricScroll;progressFramePosted=true;progressFrameHost.postOnAnimation(progressFrame);}
+        }else stopColorProgress();
+    }
+    private void colorProgressSetting(){
+        Switch toggle=new Switch(service);toggle.setTag("lyricColorProgressSwitch");toggle.setText(UiStrings.text("歌词颜色进度"));toggle.setContentDescription(UiStrings.text("歌词颜色进度"));toggle.setTextColor(ink());toggle.setTextSize(13);toggle.setMinimumHeight(dp(48));toggle.setChecked(prefs.getBoolean("lyricColorProgress",true));
+        toggle.setOnCheckedChangeListener((button,enabled)->{prefs.edit().putBoolean("lyricColorProgress",enabled).apply();if(activeLyric>=0&&activeLyric<lyricTexts.size())styleLyric(lyricTexts.get(activeLyric),true);updateColorProgress();});add(drawer,toggle,48);
+        hint(drawer,UiStrings.text("高亮颜色随当前句进度从左向右覆盖，同时应用于播放器与桌面歌词。"));
     }
     private void cancelLyricFollow(){lyricFollowRevision++;if(lyricFollow!=null){ValueAnimator running=lyricFollow;lyricFollow=null;running.cancel();}if(lyricRows!=null)lyricRows.setTranslationY(0);}
     private void scheduleLyricFollow(){
@@ -789,7 +830,8 @@ final class OverlayWindow {
     private void styleLyric(TextView words,boolean active){
         // Keep wrapping and row metrics fixed, like the desktop delegates.
         // Highlight enlargement is a render transform, never a new text layout.
-        words.setTextColor(active?accent():muted());words.getPaint().setFakeBoldText(active);words.invalidate();
+        words.setTextColor(active?(prefs.getBoolean("lyricColorProgress",true)?ink():accent()):muted());words.getPaint().setFakeBoldText(active);words.invalidate();
+        ((ProgressLyricTextView)words).setColorProgress(active&&prefs.getBoolean("lyricColorProgress",true),0,accent());
         words.setPivotX(words.getPaddingLeft());float target=active?1f:lyricFontSize/(lyricFontSize+2f);
         words.animate().cancel();
         if(animationsEnabled())words.animate().scaleX(target).scaleY(target).setDuration(160).setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f)).start();
@@ -908,18 +950,83 @@ final class OverlayWindow {
         if(pendingSearchSources!=null)return;
         JSONArray lists=array(ui,"playlistResults");if(lists.length()==0){hint(parent,ui.optBoolean("playlistSearching")?UiStrings.text("正在搜索歌单…"):UiStrings.text("暂无歌单结果，换个关键词试试。"));return;}
         playlistResultsPage=Math.min(playlistResultsPage,(lists.length()-1)/PLAYLIST_PAGE_SIZE);int start=playlistResultsPage*PLAYLIST_PAGE_SIZE;
-        for(int i=start;i<Math.min(lists.length(),start+PLAYLIST_PAGE_SIZE);i++){JSONObject list=lists.optJSONObject(i);if(list==null)continue;String id=list.optString("id");LinearLayout item=column();item.setPadding(0,dp(12),0,dp(12));TextView name=text(list.optString("name"),16,false);name.setTypeface(null,Typeface.BOLD);name.setMaxLines(2);name.setEllipsize(TextUtils.TruncateAt.END);add(item,name,-2);hint(item,onlineMetadata(list));String summary=list.optString("description");if(!summary.isEmpty()){TextView note=text(summary,13,true);note.setMaxLines(2);note.setEllipsize(TextUtils.TruncateAt.END);copyOnLongPress(note,()->summary);add(item,note,-2);gap(item,8);}add(item,button(UiStrings.text("查看歌单"),()->openOnline(id,"search")),48);add(parent,item,-2);divider(parent);}
+        for(int i=start;i<Math.min(lists.length(),start+PLAYLIST_PAGE_SIZE);i++){JSONObject list=lists.optJSONObject(i);if(list==null)continue;String id=list.optString("id");LinearLayout item=column();item.setPadding(0,dp(12),0,dp(12));artwork(item,list.optString("coverUrl"));TextView name=text(list.optString("name"),16,false);name.setTypeface(null,Typeface.BOLD);name.setMaxLines(2);name.setEllipsize(TextUtils.TruncateAt.END);add(item,name,-2);hint(item,onlineMetadata(list));String summary=list.optString("description");if(!summary.isEmpty()){TextView note=text(summary,13,true);note.setMaxLines(2);note.setEllipsize(TextUtils.TruncateAt.END);copyOnLongPress(note,()->summary);add(item,note,-2);gap(item,8);}add(item,button(UiStrings.text("查看歌单"),()->openOnline(id,"search")),48);add(parent,item,-2);divider(parent);}
         pageControls(parent,"playlistResults",playlistResultsPage,lists.length(),PLAYLIST_PAGE_SIZE);
     }
     private void onlineRows(LinearLayout parent){
         JSONObject online=ui.optJSONObject("onlinePlaylist");boolean matching=online!=null&&online.optString("id").equals(requestedOnlineId);
         if(ui.optBoolean("onlinePlaylistLoading")||!matching){hint(parent,ui.optBoolean("onlinePlaylistLoading")?UiStrings.text("正在加载歌单…"):UiStrings.text("歌单未能加载，请重试或返回列表。"));if(!ui.optBoolean("onlinePlaylistLoading")&&!requestedOnlineId.isEmpty())add(parent,button(UiStrings.text("重试加载"),()->library("openOnline",args("id",requestedOnlineId))),48);return;}
-        TextView name=text(online.optString("name"),18,false);name.setTypeface(null,Typeface.BOLD);add(parent,name,-2);hint(parent,onlineMetadata(online)+UiStrings.text(" · 已加载 ")+array(online,"tracks").length()+UiStrings.text(" 首"));
+        artwork(parent,online.optString("coverUrl"));String counts=stats(online);if(!counts.isEmpty())hint(parent,counts);TextView name=text(online.optString("name"),18,false);name.setTypeface(null,Typeface.BOLD);add(parent,name,-2);hint(parent,onlineMetadata(online)+UiStrings.text(" · 已加载 ")+array(online,"tracks").length()+UiStrings.text(" 首"));
         String summary=online.optString("description");if(!summary.isEmpty()){DescriptionBlock note=new DescriptionBlock(3);note.setTag("onlineDescription");note.setContent(summary,"",online.optString("id"));add(parent,note,-2);}String warning=UiStrings.text(online.optString("warning"));if(!warning.isEmpty()){TextView note=text(warning,13,false);note.setTextColor(color("#B42318","#FF9B93"));add(parent,note,-2);gap(parent,8);}
         if(array(online,"tracks").length()>0){add(parent,button(UiStrings.text("缓存已加载歌曲")+" · "+array(online,"tracks").length(),()->cacheTracks(array(online,"tracks"))),48);String onlineId=online.optString("id");LinearLayout actions=row();IconButton first=new IconButton("play",UiStrings.text("播放第一首"),true);first.setOnClickListener(v->{if(onlineCurrent(onlineId))library("playOnline",args("index",0));});control(actions,first);TextView label=text(UiStrings.text("播放榜单"),13,false);label.setText(onlineSource.equals("rankings")?UiStrings.text("播放榜单"):UiStrings.text("播放歌单"));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.leftMargin=dp(8);actions.addView(label,lp);actions.addView(button(UiStrings.text("整单加入"),()->showTargets(UiStrings.text("歌单加入到"),true,"",target->{if(onlineCurrent(onlineId))library("addOnline",args("target",target));})),new LinearLayout.LayoutParams(dp(88),dp(48)));add(parent,actions,48);}
         songRows(parent,array(online,"tracks"),"online");
     }
     private boolean onlineCurrent(String id){JSONObject online=ui.optJSONObject("onlinePlaylist");if(online!=null&&!ui.optBoolean("onlinePlaylistLoading")&&id.equals(online.optString("id")))return true;notice(UiStrings.text("在线歌单已更新，请重新打开详情。"));return false;}
+    private void detailsAction(String action,JSONObject payload){send("musicDetails",args("action",action,"args",payload).toString());}
+    private void openMusicDetails(JSONObject track){
+        if(track==null||!TrackState.online(track.optString("source"))||track.optString("songId").isEmpty()){notice(UiStrings.text("本地歌曲暂无在线资料。"));return;}
+        dismissPopup();commentsPage=0;pendingCommentsPage=-1;expandedComments.clear();section="more";
+        try{ui.put("musicDetails",args("loading",true,"source",track.optString("source"),"track",track));}catch(JSONException ignored){}
+        detailsAction("open",args("track",track));selectDetail("musicDetails");
+    }
+    private void detailsMenuItem(LinearLayout menu,JSONObject track){if(track!=null&&TrackState.online(track.optString("source")))menuItem(menu,UiStrings.text("资料与评论"),()->openMusicDetails(track));}
+    private void buildMusicDetails(){detailHeader(UiStrings.text("音乐资料与评论"));dynamic=column();add(drawer,dynamic,-2);}
+    private void artwork(LinearLayout parent,String url){
+        if(url.isEmpty())return;ImageView image=new ImageView(service);image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setBackground(background(color("#F2F0F8","#292D43"),8));image.setContentDescription(UiStrings.text("封面"));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(64),dp(64));lp.bottomMargin=dp(8);parent.addView(image,lp);AlbumArt.load(service,image,url);
+    }
+    private static String stats(JSONObject data){
+        StringBuilder text=new StringBuilder();String[] keys={"playCount","favoriteCount","commentCount"};String[] labels={"播放量：","收藏数：","评论数："};
+        for(int i=0;i<keys.length;i++)if(data.has(keys[i])&&!data.isNull(keys[i])&&data.optLong(keys[i],-1)>=0){if(text.length()>0)text.append(" · ");text.append(UiStrings.text(labels[i])).append(java.text.NumberFormat.getIntegerInstance().format(data.optLong(keys[i])));}
+        return text.toString();
+    }
+    private void musicDetailsRows(LinearLayout parent){
+        JSONObject state=ui.optJSONObject("musicDetails");if(state==null)return;
+        String source=state.optString("source");LinearLayout sources=row();
+        for(String id:SEARCH_SOURCE_IDS){Button b=button(sourceLabel(id),()->{commentsPage=0;pendingCommentsPage=-1;expandedComments.clear();detailsAction("source",args("source",id));});b.setSelected(source.equals(id));b.setBackground(buttonBackground(source.equals(id)));b.setTextColor(source.equals(id)?accent():ink());weighted(sources,b,48);}add(parent,sources,48);gap(parent,8);
+        boolean choosing=state.optBoolean("choosing"),loading=state.optBoolean("loading");
+        JSONObject track=state.optJSONObject("track"),data=state.optJSONObject("details");if(data==null)data=new JSONObject();
+        if(choosing){
+            hint(parent,UiStrings.text("请选择同一版本的歌曲；不会改变正在播放的音乐。"));
+            JSONArray candidates=array(state,"candidates");
+            for(int i=0;i<candidates.length();i++){JSONObject t=candidates.optJSONObject(i);if(t==null)continue;
+                TextView name=text(t.optString("name"),16,false);name.setTypeface(null,Typeface.BOLD);add(parent,name,-2);
+                hint(parent,t.optString("artist")+" · "+t.optString("album"));add(parent,button(UiStrings.text("查看此版本"),()->detailsAction("select",args("id",t.optString("id")))),48);gap(parent,8);
+            }
+        }else{
+            artwork(parent,data.optString("coverUrl"));
+            if(track!=null){TextView name=text(track.optString("name"),18,false);name.setTypeface(null,Typeface.BOLD);add(parent,name,-2);hint(parent,track.optString("artist"));}
+            String album=data.optString("album"),date=data.optString("publishDate");if(!album.isEmpty()||!date.isEmpty())hint(parent,album+(album.isEmpty()||date.isEmpty()?"":" · ")+date);
+            String counts=stats(data);if(!counts.isEmpty())hint(parent,counts);
+            if(state.optBoolean("stale"))hint(parent,UiStrings.text("正在显示缓存内容，可能不是最新。"));
+            if(!state.optString("detailsError").isEmpty())hint(parent,UiStrings.text(state.optString("detailsError")));
+            LinearLayout orders=row();for(String order:new String[]{"hot","new"}){Button b=button(UiStrings.text(order.equals("hot")?"热门评论":"最新评论"),()->{commentsPage=0;pendingCommentsPage=-1;expandedComments.clear();detailsAction("order",args("order",order));});b.setBackground(buttonBackground(order.equals(state.optString("order"))));weighted(orders,b,48);}add(parent,orders,48);gap(parent,8);
+            JSONArray comments=array(state,"comments");
+            if(pendingCommentsPage>=0&&!loading){if(comments.length()>pendingCommentsPage*20)commentsPage=pendingCommentsPage;pendingCommentsPage=-1;}
+            int last=Math.max(0,(comments.length()-1)/20);commentsPage=Math.min(commentsPage,last);
+            for(int i=commentsPage*20;i<Math.min(comments.length(),(commentsPage+1)*20);i++){
+                JSONObject c=comments.optJSONObject(i);if(c==null)continue;String id=c.optString("id");
+                TextView author=text(c.optString("author"),14,false);author.setTypeface(null,Typeface.BOLD);add(parent,author,-2);
+                hint(parent,c.optString("date")+(c.has("likes")?" · "+UiStrings.text("赞 ")+c.optLong("likes"):""));
+                TextView content=text(c.optString("content"),14,false);boolean expanded=expandedComments.contains(id);
+                content.setLineSpacing(0,1.4f);if(!expanded){content.setMaxLines(6);content.setEllipsize(TextUtils.TruncateAt.END);}add(parent,content,-2);
+                Button expand=button(UiStrings.text(expanded?"收起":"展开"),()->{if(expandedComments.contains(id))expandedComments.remove(id);else expandedComments.add(id);rendered="";refreshDynamic();});
+                expand.setVisibility(expanded||c.optString("content").length()>100||c.optString("content").split("\n",-1).length>6?View.VISIBLE:View.GONE);add(parent,expand,48);
+                content.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->content.post(()->{
+                    android.text.Layout layout=content.getLayout();
+                    boolean truncated=layout!=null&&layout.getLineCount()>0&&(layout.getLineCount()>content.getMaxLines()||layout.getEllipsisCount(Math.min(layout.getLineCount(),content.getMaxLines())-1)>0);
+                    expand.setVisibility(expanded||truncated?View.VISIBLE:View.GONE);
+                }));
+                gap(parent,10);divider(parent);gap(parent,10);
+            }
+            if(comments.length()==0&&!loading&&state.optString("error").isEmpty())hint(parent,UiStrings.text("暂无评论"));
+            if(comments.length()>20){LinearLayout pages=row();Button prev=button(UiStrings.text("上一页"),()->{commentsPage--;rendered="";refreshDynamic();detailScroll.scrollTo(0,0);});prev.setEnabled(commentsPage>0);weighted(pages,prev,48);Button next=button(UiStrings.text("下一页"),()->{commentsPage++;rendered="";refreshDynamic();detailScroll.scrollTo(0,0);});next.setEnabled(commentsPage<last);weighted(pages,next,48);add(parent,pages,48);hint(parent,(commentsPage+1)+" / "+(last+1));}
+            if(state.optBoolean("hasMore")){Button more=button(UiStrings.text("加载更多"),()->{pendingCommentsPage=comments.length()/20;detailsAction("more",new JSONObject());});more.setEnabled(!loading);add(parent,more,48);}
+        }
+        if(!state.optString("error").isEmpty()){hint(parent,UiStrings.text(state.optString("error")));Button retry=button(UiStrings.text("重试"),()->detailsAction(choosing?"source":"retry",choosing?args("source",source):new JSONObject()));retry.setEnabled(!loading&&!state.optBoolean("matching"));add(parent,retry,48);}
+        if(loading||state.optBoolean("matching"))hint(parent,UiStrings.text("正在加载…"));
+    }
     private void divider(LinearLayout parent){View line=new View(service);line.setBackgroundColor(color("#DFDFEB","#343950"));add(parent,line,1);}
     private void songRows(LinearLayout parent,JSONArray tracks,String source){
         if(tracks.length()==0){hint(parent,source.equals("results")?(selectedSearchSources().length()==0?UiStrings.text("勾选曲库后即可搜索歌曲。"):UiStrings.text("输入歌名，查找想听的音乐。")) :UiStrings.text("这里还没有歌曲。可在更多中搜索或导入。"));return;}
@@ -927,7 +1034,7 @@ final class OverlayWindow {
         int page=Math.min(source.equals("tracks")?tracksPage:source.equals("results")?resultsPage:onlinePage,(tracks.length()-1)/SONG_PAGE_SIZE);setPage(source,page);int start=page*SONG_PAGE_SIZE;
         for(int i=start;i<Math.min(tracks.length(),start+SONG_PAGE_SIZE);i++){
             final int index=i;JSONObject track=tracks.optJSONObject(i);if(track==null)continue;String id=track.optString("id"),name=track.optString("name"),by=trackSubtitle(track);
-            LinearLayout song=row();song.setTag(index);
+            LinearLayout song=row();song.setTag(index);songArtwork(song,track);
             if(local&&selecting){CheckBox choice=new CheckBox(service);choice.setText(songCaption(name,by));choice.setTextColor(ink());choice.setTextSize(14);choice.setMaxLines(2);choice.setEllipsize(TextUtils.TruncateAt.END);choice.setButtonTintList(ColorStateList.valueOf(accent()));choice.setChecked(selectedIds.contains(id));choice.setContentDescription(name+"，"+by);choice.setPadding(0,0,dp(8),0);choice.setMinHeight(dp(48));choice.setOnCheckedChangeListener((v,checked)->{if(checked)selectedIds.add(id);else selectedIds.remove(id);updateSelectionCount();});choice.setOnLongClickListener(v->{showSelectionMenu();return true;});song.addView(choice,new LinearLayout.LayoutParams(-1,dp(48)));}
             else{
                 boolean ranking=source.equals("online")&&onlineSource.equals("rankings");int position=track.optInt("playlistPosition",index+1);if(ranking){TextView rank=text(Integer.toString(position),14,true);rank.setGravity(Gravity.CENTER);rank.setTypeface(null,position<=3?Typeface.BOLD:Typeface.NORMAL);if(position<=3)rank.setTextColor(accent());rank.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);int rankWidth=Math.max(dp(32),(int)Math.ceil(rank.getPaint().measureText(rank.getText().toString()))+dp(8));song.addView(rank,new LinearLayout.LayoutParams(rankWidth,dp(48)));}
@@ -939,6 +1046,32 @@ final class OverlayWindow {
         }
         pageControls(parent,source,page,tracks.length(),SONG_PAGE_SIZE);
         if(local)detailScroll.setOnDragListener((v,event)->handleSongDrag(event));
+    }
+    private boolean songCoversEnabled(){return pendingSongCovers!=null?pendingSongCovers:ui.has("songCoversEnabled")?ui.optBoolean("songCoversEnabled"):prefs.getBoolean("songCovers",true);}
+    private void songArtwork(LinearLayout row,JSONObject track){
+        if(!songCoversEnabled())return;
+        SongCoverView cover=new SongCoverView(track);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(40),dp(40));lp.rightMargin=dp(8);lp.gravity=Gravity.CENTER_VERTICAL;row.addView(cover,lp);
+    }
+    private final class SongCoverView extends FrameLayout {
+        final JSONObject track;final ImageView image;String loaded="";boolean requested=false;
+        final ViewTreeObserver.OnScrollChangedListener scrolled=()->refresh();
+        SongCoverView(JSONObject value){super(service);track=value;setTag("songCover-"+value.optString("id"));setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);setBackground(new DefaultCover());image=new ImageView(service);image.setScaleType(ImageView.ScaleType.FIT_CENTER);addView(image,new FrameLayout.LayoutParams(-1,-1));songCoverViews.add(this);}
+        @Override protected void onAttachedToWindow(){super.onAttachedToWindow();getViewTreeObserver().addOnScrollChangedListener(scrolled);post(this::refresh);}
+        @Override protected void onDetachedFromWindow(){if(getViewTreeObserver().isAlive())getViewTreeObserver().removeOnScrollChangedListener(scrolled);super.onDetachedFromWindow();}
+        @Override protected void onLayout(boolean changed,int l,int t,int r,int b){super.onLayout(changed,l,t,r,b);post(this::refresh);}
+        void refresh(){
+            if(!songCoversEnabled()||!isAttachedToWindow()||!isShown())return;
+            Rect visible=new Rect();if(!getGlobalVisibleRect(visible)||visible.isEmpty())return;
+            String url=track.optString("coverUrl");JSONObject urls=ui.optJSONObject("artworkUrls");String key=track.optString("source")+":"+track.optString("songId");
+            if(url.isEmpty()&&urls!=null)url=urls.optString(key);
+            if(!url.isEmpty()&&!url.equals(loaded)){loaded=url;AlbumArt.load(service,image,url);}
+            if(!requested&&TrackState.online(track.optString("source"))){requested=true;send("songArtwork",track.toString());}
+        }
+    }
+    private final class DefaultCover extends Drawable {
+        final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
+        public void draw(Canvas canvas){Rect b=getBounds();p.setStyle(Paint.Style.FILL);p.setColor(color("#EFEBF8","#30324C"));canvas.drawRoundRect(new RectF(b),dp(8),dp(8),p);p.setColor(muted());p.setAlpha(120);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(dp(1));canvas.drawCircle(b.centerX(),b.centerY(),b.width()*.29f,p);canvas.drawCircle(b.centerX(),b.centerY(),b.width()*.07f,p);}
+        public void setAlpha(int alpha){}public void setColorFilter(ColorFilter filter){}public int getOpacity(){return PixelFormat.TRANSLUCENT;}
     }
     private CharSequence songCaption(String name,String artist){
         if(artist.isEmpty())return name;SpannableString caption=new SpannableString(name+"\n"+artist);int start=name.length()+1;
@@ -996,9 +1129,11 @@ final class OverlayWindow {
         if(settingsPage.equals("cache")){buildCacheSettings();return;}
         if(settingsPage.equals("cacheManager")){buildCacheManager();return;}
         if(settingsPage.equals("general")){
+        Switch covers=new Switch(service);covers.setTag("songCoversSwitch");covers.setText(UiStrings.text("显示歌曲封面"));covers.setTextColor(ink());covers.setTextSize(13);covers.setMinimumHeight(dp(48));covers.setChecked(songCoversEnabled());covers.setOnCheckedChangeListener((v,checked)->{pendingSongCovers=checked;prefs.edit().putBoolean("songCovers",checked).apply();send("songCoversEnabled",Boolean.toString(checked));});add(drawer,covers,48);
         add(drawer,button(UiStrings.text("界面语言：")+(UiStrings.english()?"English":"简体中文"),()->{rememberDrafts();PlayerBridge.setLanguage(UiStrings.english()?"zh_CN":"en");}),48);
         }
         if(settingsPage.equals("floating")){
+        colorProgressSetting();
         Switch floating=new Switch(service);floating.setText(UiStrings.text("显示独立悬浮歌词"));floating.setTextColor(ink());floating.setTextSize(13);floating.setMinimumHeight(dp(48));floating.setChecked(prefs.getBoolean("desktopLyricsEnabled",false));floating.setOnCheckedChangeListener((view,checked)->{prefs.edit().putBoolean("desktopLyricsEnabled",checked).apply();service.refreshFloatingLyrics();});add(drawer,floating,48);
         int rows=FloatingLyricRules.rows(prefs.getInt("desktopLyricsRows",3));
         add(drawer,button(UiStrings.text("悬浮歌词行数：")+rows+UiStrings.text(" · 点击切换"),()->{prefs.edit().putInt("desktopLyricsRows",rows==9?1:rows+2).apply();buildDrawer();}),48);
@@ -1022,6 +1157,7 @@ final class OverlayWindow {
         outputButton=button("",this::showOutputChoices);settingChoice(UiStrings.text("输出设备"),outputButton);updateOutputControl();
         }
         if(settingsPage.equals("lyrics")){
+        colorProgressSetting();
         LinearLayout languages=row();String[] lyricLabels={UiStrings.text("原文"),UiStrings.text("译文"),UiStrings.text("双语")};
         ArrayList<Button> languageButtons=new ArrayList<>();
         for(int i=0;i<lyricLabels.length;i++){
@@ -1075,13 +1211,14 @@ final class OverlayWindow {
         LinearLayout apiActions=row();weighted(apiActions,button(UiStrings.text("保存地址"),()->{apiDraft=apiInput.getText().toString();hideKeyboard();send("api",apiDraft);}),48);weighted(apiActions,button(UiStrings.text("恢复内置"),()->{apiDraft="";apiInput.setText("");hideKeyboard();send("api","");}),48);add(customServiceFields,apiActions,48);add(drawer,customServiceFields,-2);updateCustomServiceFold();
         }
         if(settingsPage.equals("about")){
-            hint(drawer,UiStrings.text("浮音 1.6.0-preview.3 · 悬浮播放"));
+            hint(drawer,UiStrings.text("浮音 1.7.0-preview.3 · 悬浮播放"));
             hint(drawer,UiStrings.text("点歌名播放 · 长按右侧手柄拖动排序"));
             hint(drawer,UiStrings.text("仅歌词文字可拖动，留白点击穿透；长按歌词打开设置。支持 1、3、5、7、9 行，屏幕空间不足时自动缩小。"));
         }
     }
     private static String cacheSize(long bytes){return bytes>=1073741824L?String.format(Locale.ROOT,"%.2f GB",bytes/1073741824.0):String.format(Locale.ROOT,"%.1f MB",bytes/1048576.0);}
     private void cacheMenuItem(LinearLayout menu,JSONObject track){
+        detailsMenuItem(menu,track);
         if(track==null||"local".equals(track.optString("source")))return;
         menuItem(menu,UiStrings.text("保存到本地"),()->{dismissPopup();act("cacheTrack",args("track",track,"manual",true).toString());notice(UiStrings.text("已加入缓存任务，可在设置中查看进度。"));});
     }
@@ -1120,7 +1257,7 @@ final class OverlayWindow {
         for(int i=0;i<entries.length();i++){
             JSONObject entry=entries.optJSONObject(i);if(entry==null||cacheFilter.equals("manual")&&!entry.optBoolean("manual")||cacheFilter.equals("automatic")&&entry.optBoolean("manual"))continue;shown++;
             JSONObject track=entry.optJSONObject("track");if(track==null)track=entry;
-            String key=entry.optString("key"),status=entry.optString("status");LinearLayout item=column();item.setPadding(0,dp(10),0,dp(10));TextView caption=text(track.optString("name"),15,false);caption.setMaxLines(2);caption.setEllipsize(TextUtils.TruncateAt.END);add(item,caption,-2);
+            String key=entry.optString("key"),status=entry.optString("status");LinearLayout item=column();item.setPadding(0,dp(10),0,dp(10));LinearLayout heading=row();songArtwork(heading,track);TextView caption=text(track.optString("name"),15,false);caption.setMaxLines(2);caption.setEllipsize(TextUtils.TruncateAt.END);heading.addView(caption,new LinearLayout.LayoutParams(0,-2,1));add(item,heading,-2);
             hint(item,track.optString("artist")+" · "+UiStrings.text(AudioResolver.qualityName(entry.optString("quality","standard")))+" · "+entry.optString("format"));
             hint(item,(entry.optBoolean("deletePending")?UiStrings.text("播放结束后删除"):cacheStatus(status))+" · "+cacheSize(entry.optLong("bytes"))+" · "+UiStrings.text(entry.optBoolean("manual")?"手动保存":"自动缓存"));
             hint(item,UiStrings.text("原文")+": "+cacheLyricState(entry.optString("originalState"))+" · "+UiStrings.text("译文")+": "+cacheLyricState(entry.optString("translationState")));
@@ -1238,6 +1375,8 @@ final class OverlayWindow {
     private static String searchStatus(JSONObject ui,boolean songs){return UiStrings.text(ui.optBoolean(songs?"searching":"playlistSearching")?"正在搜索…":ui.optString(songs?"searchMessage":"playlistSearchMessage"));}
     void refreshData(JSONObject next){
         JSONObject previous=ui;ui=next;
+        if(next.has("songCoversEnabled")&&(pendingSongCovers==null||pendingSongCovers==next.optBoolean("songCoversEnabled"))){pendingSongCovers=null;prefs.edit().putBoolean("songCovers",next.optBoolean("songCoversEnabled")).apply();}
+        for(SongCoverView cover:new ArrayList<>(songCoverViews))cover.refresh();
         if(playback.optJSONObject("sourceQualities")==null)acknowledgeSourceQualities(next);
         if(pendingSearchSources!=null&&pendingSearchSources.toString().equals(searchSourceIds(next).toString()))pendingSearchSources=null;
         if(pendingSearchResultLimit!=null&&pendingSearchResultLimit==searchResultLimit(next))pendingSearchResultLimit=null;
@@ -1264,11 +1403,12 @@ final class OverlayWindow {
         }
         if(dynamic==null||dragReorder!=null)return;
         if(detailTouching){dynamicRefreshQueued=true;return;}
-        String signature=section+detail+searchKind;
+        String signature=section+detail+searchKind+songCoversEnabled();
         if(section.equals("playlist"))signature+=array(ui,"tracks").toString()+selecting;
         else if(detail.equals("search"))signature+=(searchKind.equals("songs")?array(ui,"results").toString()+UiStrings.text(ui.optString("searchMessage"))+ui.optBoolean("searching"):array(ui,"playlistResults").toString()+UiStrings.text(ui.optString("playlistSearchMessage"))+ui.optBoolean("playlistSearching"))+selectedSearchSources().toString()+(pendingSearchSources!=null);
         else if(detail.equals("rankings"))signature+=array(ui,"rankings").toString()+ui.optBoolean("rankingsLoading")+UiStrings.text(ui.optString("rankingsMessage"))+selectedRankingSource()+(pendingRankingSource!=null);
         else if(detail.equals("online"))signature+=ui.optString("onlinePlaylist")+ui.optBoolean("onlinePlaylistLoading")+requestedOnlineId+onlineSource;
+        else if(detail.equals("musicDetails"))signature+=ui.optString("musicDetails")+commentsPage+expandedComments.toString();
         else if(detail.equals("queue"))signature+=array(playback,"queueEntries").toString()+playback.optString("currentQueueEntry");
         else if(detail.equals("history"))signature+=array(playback,"historyEntries").toString();
         else if(settingsPage.equals("cacheManager"))signature+=cacheFilter+array(playback,"cacheEntries").toString()+playback.optString("cacheSummary");
@@ -1277,6 +1417,7 @@ final class OverlayWindow {
         else if(detail.equals("search")){boolean songs=searchKind.equals("songs"),waiting=pendingSearchSources!=null;hint(dynamic,waiting?"":searchStatus(ui,songs));if(songs)songRows(dynamic,waiting?new JSONArray():array(ui,"results"),"results");else playlistResults(dynamic);}
         else if(detail.equals("rankings"))rankingRows(dynamic);
         else if(detail.equals("online"))onlineRows(dynamic);
+        else if(detail.equals("musicDetails"))musicDetailsRows(dynamic);
         else if(detail.equals("queue"))queueRows(dynamic);
         else if(detail.equals("history"))historyRows(dynamic);
         else if(settingsPage.equals("cacheManager"))cacheRows(dynamic);

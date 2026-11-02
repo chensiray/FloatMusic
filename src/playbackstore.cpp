@@ -1,4 +1,5 @@
 #include "playbackstore.h"
+#include "artworkpolicy.h"
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -50,9 +51,11 @@ bool normalizeTrack(const QVariantMap &input, QVariantMap &track) {
     } else {
         return false;
     }
-    for (const auto &key : {"artist", "sourceName"})
+    for (const auto &key : {"artist", "sourceName", "album"})
         if (input.value(key).metaType().id() == QMetaType::QString)
             track[key] = input.value(key).toString().trimmed();
+    const auto cover=ArtworkPolicy::url(input.value("coverUrl").toString());
+    if(!cover.isEmpty())track["coverUrl"]=cover;
     bool durationValid = false;
     const double seconds = input.value("duration").toDouble(&durationValid);
     if (durationValid && std::isfinite(seconds) && seconds > 0 && seconds <= 86400)

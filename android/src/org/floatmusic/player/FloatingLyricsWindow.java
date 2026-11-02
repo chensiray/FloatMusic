@@ -44,6 +44,8 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
     private String parsedLyrics="";
     private ArrayList<String> lyrics=new ArrayList<>();
     private long[] times=new long[0];
+    private long[] ends=new long[0];
+    private final LyricProgress progressClock=new LyricProgress();
     private Rect area=new Rect();
     private int count=3,step=50,current=-1;
     private float centerX,topY,centerIndex=0,textPx;
@@ -69,6 +71,7 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
     }
     void update(JSONObject nextState,JSONObject nextUi){
         state=nextState;ui=nextUi;
+        progressClock.update(state.optLong("position"),state.optInt("lyricOffset"),state.optLong("duration"),state.optBoolean("playing"),SystemClock.uptimeMillis());
         boolean enabled=prefs.getBoolean("desktopLyricsEnabled",false)&&Settings.canDrawOverlays(service)&&!PlayerBridge.foreground&&!PlayerBridge.picking;
         if(closed||!enabled){cancelAnimation();remove();return;}
         String track=state.optString("currentTrack");boolean changed=!parsedTrack.equals(track),uiChanged=parsedUi!=ui;
@@ -77,16 +80,17 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
             if(source==null)source=new JSONArray();String signature=source.toString();
             changed=changed||!signature.equals(parsedLyrics);parsedUi=ui;
             if(changed){
-                parsedTrack=track;parsedLyrics=signature;lyrics.clear();times=new long[source.length()];remove();
+                parsedTrack=track;parsedLyrics=signature;lyrics.clear();times=new long[source.length()];ends=new long[source.length()];remove();
                 int kept=0;
                 for(int i=0;i<source.length();i++){
                     JSONObject line=source.optJSONObject(i);if(line==null)continue;
                     String words=FloatingLyricRules.cleanWords(line.optString("original"));
                     if(words.isEmpty())words=FloatingLyricRules.cleanWords(line.optString("translation"));
                     if(words.isEmpty())continue;
-                    times[kept++]=line.optLong("time");lyrics.add(words);
+                    times[kept]=line.optLong("time");ends[kept]=i+1<source.length()?source.optJSONObject(i+1).optLong("time"):-1;kept++;lyrics.add(words);
                 }
                 times=java.util.Arrays.copyOf(times,kept);
+                ends=java.util.Arrays.copyOf(ends,kept);
             }
         }
         Rect available=workArea();boolean resized=!positioned||!available.equals(area);area=available;
@@ -105,6 +109,11 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
             current=next;cancelAnimation();
             settleCurrent();
         }else if(uiChanged&&(scroll==null||!scroll.isRunning()))render();
+        if(drawing!=null)drawing.refreshProgress();
+    }
+    private float currentProgress(){
+        if(current<0||current>=times.length)return 0;
+        return LyricProgress.fraction(times[current],ends[current]>=0?ends[current]:state.optLong("duration"),progressClock.position(SystemClock.uptimeMillis()));
     }
     private void settleCurrent(){
         int target=Math.max(0,current);cancelAnimation();
@@ -147,6 +156,8 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
                 boolean visible=!words.trim().isEmpty()&&(empty||Math.abs(distance)<=count/2f+1);
                 label.setVisibility(visible?View.VISIBLE:View.GONE);if(!visible)continue;
                 label.configure(words,textPx,dark());
+                label.active=!empty&&index==current;
+                if(label.active&&prefs.getBoolean("lyricColorProgress",true)&&label.progressBase==null)label.progressBase=label.raster(label.normal.getWidth(),label.normal.getHeight(),true,label.cachedNight?0xffffffff:0xff171c2c);
                 label.focus=empty||current<0?0:FloatingLyricRules.emphasis(distance);
                 label.visualScale=(empty?.7f:current<0?FloatingLyricRules.scale(distance,false):FloatingLyricRules.visualScale(distance))/1.12f;
                 label.measuredTextWidth=Math.max(1,Math.round(label.normal.getWidth()*label.visualScale));
@@ -198,6 +209,13 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
         final Paint composite=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
         final Region touchRegion=new Region(),appliedRegion=new Region();
         boolean touchRegionApplied;
+        float drawnProgress=-1;
+        boolean progressFramePosted;
+        final Runnable progressFrame=()->{progressFramePosted=false;if(!closed&&drawing==this)invalidate();};
+        void refreshProgress(){
+            if(prefs.getBoolean("lyricColorProgress",true)&&currentProgress()!=drawnProgress)invalidate();
+        }
+        @Override protected void onDetachedFromWindow(){removeCallbacks(progressFrame);progressFramePosted=false;super.onDetachedFromWindow();}
         DrawingLayer(){super(service);setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);if(regionInput)bindDrag(this);}
         void updateTouchableRegion(){
             if(Build.VERSION.SDK_INT<33||getRootSurfaceControl()==null)return;
@@ -210,12 +228,18 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
         }
         @Override protected void onAttachedToWindow(){super.onAttachedToWindow();touchRegionApplied=false;if(regionInput)updateTouchableRegion();}
         @Override protected void onDraw(Canvas canvas){
+            boolean progressEnabled=prefs.getBoolean("lyricColorProgress",true);
+            drawnProgress=currentProgress();
             for(Glyph label:windows.values()){
                 if(label.getVisibility()!=View.VISIBLE||label.normal==null)continue;
                 int save=canvas.save();canvas.translate(centerX-area.left,label.rowCenter);canvas.scale(label.visualScale,label.visualScale);
                 float x=-label.normal.getWidth()/2f,y=-label.normal.getHeight()/2f;
                 int alpha=Math.round(255*label.opacity);
-                if(label.focus<=0||label.focus>=1){composite.setAlpha(alpha);canvas.drawBitmap(label.focus>=1?label.highlight:label.normal,x,y,composite);}
+                if(progressEnabled&&label.active){
+                    int layer=canvas.saveLayerAlpha(x,y,-x,-y,alpha);composite.setAlpha(255);canvas.drawBitmap(label.progressBase!=null?label.progressBase:label.normal,x,y,composite);
+                    if(drawnProgress>0){int clip=canvas.save();float end=drawnProgress>=1?-x:x+dp(3)+(label.normal.getWidth()-dp(6))*drawnProgress;canvas.clipRect(x,y,end,-y);canvas.drawBitmap(label.highlight,x,y,composite);canvas.restoreToCount(clip);}canvas.restoreToCount(layer);
+                }
+                else if(label.focus<=0||label.focus>=1){composite.setAlpha(alpha);canvas.drawBitmap(label.focus>=1?label.highlight:label.normal,x,y,composite);}
                 else{
                     int layer=canvas.saveLayerAlpha(x,y,-x,-y,alpha);
                     composite.setAlpha(255);canvas.drawBitmap(label.normal,x,y,composite);
@@ -223,6 +247,9 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
                 }
                 canvas.restoreToCount(save);
             }
+            boolean animate=progressEnabled&&state.optBoolean("playing")&&current>=0&&drawnProgress<1&&isShown();
+            if(animate&&!progressFramePosted){progressFramePosted=true;postOnAnimation(progressFrame);}
+            else if(!animate&&progressFramePosted){removeCallbacks(progressFrame);progressFramePosted=false;}
         }
     }
     void configurationChanged(){positioned=false;parsedUi=null;update(state,ui);}
@@ -232,6 +259,7 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
     private void remove(){for(Glyph label:windows.values())detach(label);windows.clear();if(drawing!=null){try{manager.removeViewImmediate(drawing);}catch(IllegalArgumentException ignored){}drawing=null;drawingParams=null;}}
     @Override public void onSharedPreferenceChanged(SharedPreferences ignored,String key){
         if(key==null)return;
+        if(key.equals("lyricColorProgress")){if(drawing!=null)render();return;}
         if(key.equals("desktopLyricsHighlightOpacity")||key.equals("desktopLyricsEdgeOpacity")||key.equals("desktopLyricsLocked")){if(drawing!=null)render();return;}
         if((key.startsWith("desktopLyrics")||key.equals("animationsEnabled"))&&!dragging)configurationChanged();
     }
@@ -260,7 +288,7 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
         final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.SUBPIXEL_TEXT_FLAG);
         final WindowManager.LayoutParams params;
         String words="";int fill,outline,measuredTextWidth=1,measuredTextHeight=1,crop;float baseline,rowCenter,distance,opacity=1;
-        Bitmap normal,highlight;float visualScale=1,focus,cachedSize=-1,naturalWidth;int cachedLimit=-1;boolean cachedNight;
+        Bitmap normal,highlight,progressBase;float visualScale=1,focus,cachedSize=-1,naturalWidth;int cachedLimit=-1;boolean cachedNight,active;
         boolean attached;
         Glyph(){
             super(service);params=new WindowManager.LayoutParams(1,1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -288,6 +316,7 @@ final class FloatingLyricsWindow implements SharedPreferences.OnSharedPreference
             int padding=dp(3),bitmapWidth=Math.max(1,(int)Math.ceil(Math.min(width,limit))+padding*2);
             Paint.FontMetrics metrics=paint.getFontMetrics();int bitmapHeight=Math.max(1,(int)Math.ceil(metrics.descent-metrics.ascent)+padding*2);baseline=padding-metrics.ascent;
             outline=night?0xff101322:0xffffffff;
+            progressBase=null;
             normal=raster(bitmapWidth,bitmapHeight,false,night?0xffffffff:0xff171c2c);
             highlight=raster(bitmapWidth,bitmapHeight,true,night?0xffe0ccff:0xff5928c9);setContentDescription(words);
         }

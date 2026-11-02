@@ -6,15 +6,16 @@
 #include <QStandardPaths>
 #include "singleinstance.h"
 #include "playercontroller.h"
+#include "artnetworkfactory.h"
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
     app.setOrganizationName("FloatMusic"); app.setApplicationName("FloatMusic");
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/floatmusic-app.png")));
 #ifdef Q_OS_ANDROID
-    app.setApplicationVersion("1.6.0-preview.3");
+    app.setApplicationVersion("1.7.0-preview.3");
     app.setQuitOnLastWindowClosed(false);
 #else
-    app.setApplicationVersion("1.6.0-preview.2");
+    app.setApplicationVersion("1.7.0-preview.3");
 #endif
 #ifndef Q_OS_ANDROID
     SingleInstance instance(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));
@@ -23,7 +24,9 @@ int main(int argc, char *argv[]) {
 #endif
     QQuickStyle::setStyle("Basic");
     PlayerController controller;
+    ArtNetworkFactory artNetwork;
     QQmlApplicationEngine engine;
+    engine.setNetworkAccessManagerFactory(&artNetwork);
     engine.rootContext()->setContextProperty("player", &controller);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
 #ifdef Q_OS_ANDROID

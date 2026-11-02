@@ -1,5 +1,6 @@
 #include "musicapi.h"
 #include "catalogcodec.h"
+#include "artworkpolicy.h"
 #include <QUrlQuery>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -86,8 +87,10 @@ QVariantMap songTrack(const QJsonObject &song) {
         const QString artistName = artist.toObject().value("name").toString();
         if (!artistName.isEmpty()) artists.append(artistName);
     }
+    const auto album=song.value(song.contains("al")?"al":"album").toObject();
     return {{"id", "netease:" + id}, {"songId", id}, {"source", "netease"},
-            {"name", name}, {"artist", artists.join(" / ")}, {"sourceName", platformName("netease")}};
+            {"name", name}, {"artist", artists.join(" / ")}, {"sourceName", platformName("netease")},
+            {"album",album.value("name").toString()},{"coverUrl",album.value("picUrl").toString()}};
 }
 QUrl withQuery(QUrl url, const QList<QPair<QString, QString>> &query) {
     QUrlQuery params;
@@ -565,6 +568,8 @@ void MusicApi::search(const QString &keywords, const QStringList &sources, int l
                         {"artist", singerNames(song.value("singer"))}, {"sourceName", platformName(source)}};
                     const double duration = songDurationSeconds(song.value(source == "tencent" ? "interval" : "duration"));
                     if (duration > 0) track["duration"] = duration;
+                    track["coverUrl"]=ArtworkPolicy::fromSong(source,song.toVariantMap());
+                    track["album"]=song.value(source=="tencent"?"albumName":"album").toString();
                 }
                 const QString id = track.value("id").toString();
                 if (id.isEmpty() || seen.contains(id)) continue;
@@ -605,6 +610,9 @@ void MusicApi::fetchTencentSongSearchPage(const std::shared_ptr<TencentSongSearc
                 {"sourceName", platformName("tencent")}};
             const double duration = songDurationSeconds(song.value("interval"));
             if (duration > 0) track["duration"] = duration;
+            const auto albumMid=song.value("albumMID").toString();
+            track["album"]=song.value("albumName").toString();
+            if(QRegularExpression("^[A-Za-z0-9]{1,64}$").match(albumMid).hasMatch())track["coverUrl"]="https://y.gtimg.cn/music/photo_new/T002R300x300M000"+albumMid+".jpg";
             state->tracks.append(track);
             if (state->tracks.size() >= 100) break;
         }
@@ -705,6 +713,12 @@ void MusicApi::fetchPlaylist(const QString &id, std::function<void(QVariantMap, 
         state->playlist = {{"id", id}, {"name", name}, {"source", "netease"}, {"sourceName", platformName("netease")}, {"kind", "playlist"}, {"resourceId", id}, {"description", CatalogCodec::descriptionText(list.value("description").toString())},
             {"trackCount", state->expectedCount},
             {"creator", list.value("creator").toObject().value("nickname").toString()}};
+        state->playlist["coverUrl"]=list.value("coverImgUrl").toString();
+        for(const auto &field:QList<QPair<QString,QString>>{{"playCount","playCount"},{"favoriteCount","subscribedCount"},{"commentCount","commentCount"}}){
+            const auto value=list.value(field.second);bool ok=false;
+            const qint64 n=(value.isString()?value.toString():value.isDouble()?QString::number(value.toInteger(-1)):QString()).toLongLong(&ok);
+            if(ok&&n>=0)state->playlist[field.first]=n;
+        }
 
         QSet<QString> seen;
         qsizetype invalidIds = 0, duplicateIds = 0;

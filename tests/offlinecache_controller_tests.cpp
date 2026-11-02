@@ -12,6 +12,7 @@
 #include <QUuid>
 #include "offlinecache.h"
 #include "playercontroller.h"
+#include "cachelyricstate.h"
 
 static QVariantMap cachedTrack(const QString &id) {
     return {{"id", "netease:" + id}, {"source", "netease"}, {"songId", id},
@@ -77,6 +78,25 @@ class OfflineControllerTests : public QObject {
 private:
     QString dataDirectory;
 private slots:
+    void audioOnlyCacheLoadsLyricsWhenOnline() {
+        OfflinePlaybackFixture fixture;fixture.denyLyrics=true;QString key;
+        {OfflineCache cache(localEndpoints(fixture.base()));key=cache.enqueue(cachedTrack("107"),"lossless",true,fixture.resolved());QTRY_COMPARE(cache.entry(key).value("lyricState").toString(),QString("failed"));}
+        fixture.denyLyrics=false;
+        PlayerController player(localEndpoints(fixture.base()));player.setVolume(0);player.playCached(key);
+        QTRY_VERIFY(player.ready()&&!player.busy());
+        QTRY_VERIFY(player.lyrics().contains("Original second"));
+        QVERIFY(player.translation().contains("Translated second"));
+        player.retryLyrics();QTRY_VERIFY(!player.lyricsLoading());
+        QVERIFY(player.lyrics().contains("Original second"));
+    }
+    void repeatedCachePollDoesNotResetLyricsRequest() {
+        QByteArray stamp;QJsonObject entry{{"key","song"},{"original",""},{"originalState","unknown"}};
+        QVERIFY(acceptCacheLyricSnapshot(stamp,entry,true));
+        for(int i=0;i<20;i++){entry["access"]=i;QVERIFY(!acceptCacheLyricSnapshot(stamp,entry,false));}
+        entry["originalState"]="failed";QVERIFY(!acceptCacheLyricSnapshot(stamp,entry,false,true));
+        entry["original"]="[00:00]Recovered";entry["originalState"]="available";
+        QVERIFY(acceptCacheLyricSnapshot(stamp,entry,false));QVERIFY(!acceptCacheLyricSnapshot(stamp,entry,false));
+    }
     void init() {
         QStandardPaths::setTestModeEnabled(true);
         QCoreApplication::setOrganizationName("FloatMusicTests");
