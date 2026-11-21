@@ -1,8 +1,30 @@
 #include "playercontroller.h"
+#include "audiofilepolicy.h"
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 static QString jsonMap(const QVariantMap &map){return QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(map)).toJson(QJsonDocument::Compact));}
+QStringList PlayerController::cachedOnlineTrackIds() const {
+    return m_offlineCache.usableSongIds().values();
+}
+QStringList PlayerController::offlineTrackIds() const {
+    const auto cached = m_offlineCache.usableSongIds();
+    QStringList result;
+    for (const auto &value : tracks()) {
+        const auto track = value.toMap();
+        const auto source = track.value("source").toString();
+        bool available = cached.contains(source + ':' + track.value("songId").toString());
+        if (source == "local") {
+            const auto path = track.value("path").toString();
+            QFile file(path);
+            available = QFileInfo(path).isFile() && file.open(QIODevice::ReadOnly)
+                && AudioFilePolicy::validate(QFileInfo(path).fileName(), file.size(), file.peek(16)).isEmpty();
+        }
+        if (available) result.append(track.value("id").toString());
+    }
+    return result;
+}
 QVariantList PlayerController::cacheEntries()const{
 #ifdef Q_OS_ANDROID
  QVariantList out;for(auto v:m_androidCacheEntries){auto x=v.toMap();const auto track=x.value("track").toMap();x["title"]=track.value("name");x["artist"]=track.value("artist");x["source"]=track.value("source");x["pendingDelete"]=x.value("deletePending");auto state=x.value("status").toString();x["state"]=state=="ready"?"complete":state;x["total"]=x.value("totalBytes");x["lyricState"]=x.value("originalState");x["progress"]=x.value("totalBytes").toLongLong()>0?x.value("bytes").toDouble()/x.value("totalBytes").toDouble():-1.;out.append(x);}return out;
@@ -33,7 +55,20 @@ void PlayerController::cacheTrack(const QVariantMap &track,bool manual){
 #endif
 }
 void PlayerController::cacheCurrentTrack(){cacheTrack(m_loadedTrack.isEmpty()?m_requestedTrack:m_loadedTrack,true);}
-int PlayerController::cacheTracks(const QVariantList &tracks){int count=0;for(auto t:tracks)if(!t.toMap().value("songId").toString().isEmpty()){cacheTrack(t.toMap(),true);++count;}return count;}
+int PlayerController::cacheTracks(const QVariantList &tracks) {
+#ifdef Q_OS_ANDROID
+    androidCommand("cacheTracks", QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(tracks)).toJson(QJsonDocument::Compact)));
+    return tracks.size();
+#else
+    const auto playingId = m_ready && !m_sessionDeferred && m_currentCacheKey.isEmpty() ? m_currentTrack : QString();
+    const int count = m_offlineCache.enqueueBatch(tracks, sourceQualities(), playingId);
+    if (count < 0) {
+        m_error = QStringLiteral("缓存索引保存失败");
+        emit changed();
+    }
+    return qMax(0, count);
+#endif
+}
 void PlayerController::playCached(const QString &key){
 #ifdef Q_OS_ANDROID
  androidCommand("cachePlay",key);

@@ -62,6 +62,7 @@ public:
     QList<QUrl> requests;
     QList<QByteArray> requestHeaders;
     int qqSearchStatus = 200, qqAudioStatus = 200, kuwoMobiStatus = 200;
+    bool restrictedSearchFixture = false;
     bool denyQqAudio = false, emptyQqLyrics = false, denyKuwo = false;
     QHash<QString, QJsonObject> qqLinks;
     QHash<QString, QJsonObject> kuwoLinks;
@@ -84,7 +85,11 @@ public:
                     QByteArray body; int status = 200, delay = 0; qint64 fullSize = 0;
                     const QString keyword = query.queryItemValue(query.hasQueryItem("keyword") ? "keyword" : query.hasQueryItem("s") ? "s" : "keywords", QUrl::FullyDecoded);
                     if (keyword == "slow") delay = 250;
-                    if (url.path() == "/music/tencent/search/song") {
+                    if (restrictedSearchFixture && url.path() == "/api/v3/song/detail") {
+                        body = R"({"code":200,"privileges":[{"id":42,"st":-200,"pl":0},{"id":43,"st":0,"pl":0,"fee":1},{"id":99,"st":-200}]})";
+                    } else if (restrictedSearchFixture && url.path() == "/api/search/get") {
+                        body = R"({"code":200,"result":{"songs":[{"id":42,"name":"Catalog only"},{"id":43,"name":"Membership","fee":1},{"id":44,"name":"Unknown","copyrightId":0}]}})";
+                    } else if (url.path() == "/music/tencent/search/song") {
                         status = qqSearchStatus;
                         body = QJsonDocument(QJsonObject{{"code", 0}, {"data", QJsonObject{{"list", QJsonArray{
                             QJsonObject{{"songMID", "004MpJjW07rAPl"}, {"title", keyword}, {"singer", "QQ singer"}, {"interval", 254}},
@@ -187,6 +192,22 @@ private slots:
         QCoreApplication::setOrganizationName("FloatMusicTests");
         QCoreApplication::setApplicationName("multisource-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
     }
+    void marksOnlyConfirmedRestrictionsWithoutRemovingResults() {
+        MultiSourceFixture fixture;
+        QVERIFY(fixture.listen(QHostAddress::LocalHost));
+        fixture.restrictedSearchFixture = true;
+        MusicApi api(fixture.endpoints());
+        QVERIFY(api.setBaseUrl(""));
+        QSignalSpy results(&api, &MusicApi::results);
+        api.search("rights", {"netease"});
+        QTRY_COMPARE(results.size(), 1);
+        const auto rows = results.first().first().toList();
+        QCOMPARE(rows.size(), 3);
+        QCOMPARE(rows[0].toMap().value("id").toString(), "netease:42");
+        QVERIFY(rows[0].toMap().value("unavailable").toBool());
+        QVERIFY(!rows[1].toMap().value("unavailable").toBool());
+        QVERIFY(!rows[2].toMap().value("unavailable").toBool());
+    }
     void combinedSearchKeepsPlatformIdentityAndSelectionOrder() {
         MultiSourceFixture fixture; QVERIFY(fixture.listen(QHostAddress::LocalHost));
         MusicApi api(fixture.endpoints()); QVERIFY(api.setBaseUrl("")); QSignalSpy spy(&api, &MusicApi::results);
@@ -199,7 +220,41 @@ private slots:
         QCOMPARE(tracks[0].toMap().value("duration").toDouble(), 11.0);
         QCOMPARE(tracks[1].toMap().value("duration").toDouble(), 254.0);
         for (const auto &track : tracks) { QCOMPARE(track.toMap().value("name").toString(), QStringLiteral("同名 & +")); QVERIFY(!track.toMap().value("sourceName").toString().isEmpty()); }
-        QCOMPARE(fixture.requests.size(), 3);
+        QCOMPARE(fixture.requests.size(), 4);
+    }
+    void distinguishesExplicitRightsDenialFromTransportFailure() {
+        MultiSourceFixture fixture;
+        QVERIFY(fixture.listen(QHostAddress::LocalHost));
+        auto endpoints = fixture.endpoints();
+        endpoints.injahow.clear();
+        MusicApi api(endpoints);
+        QVERIFY(api.setBaseUrl(""));
+        fixture.qqLinks["4"] = QJsonObject{{"code", 403}, {"message", QStringLiteral("由于版权限制，无法播放该歌曲。")}};
+        MusicApi::Audio audio;
+        bool done = false;
+        const auto resolve = [&] {
+            done = false;
+            api.resolveAudio("tencent", "004MpJjW07rAPl", "standard", [&](MusicApi::Audio value, QString error) {
+                audio = value;
+                done = !error.isEmpty();
+            });
+        };
+        resolve();
+        QTRY_VERIFY(done);
+        QVERIFY(audio.url.isEmpty());
+        QVERIFY(audio.copyrightRestricted);
+        fixture.qqAudioStatus = 403;
+        resolve();
+        QTRY_VERIFY(done);
+        QVERIFY(audio.copyrightRestricted);
+        fixture.qqLinks["4"] = QJsonObject{{"code", 403}, {"message", "Forbidden"}};
+        resolve();
+        QTRY_VERIFY(done);
+        QVERIFY(!audio.copyrightRestricted);
+        fixture.qqAudioStatus = 503;
+        resolve();
+        QTRY_VERIFY(done);
+        QVERIFY(!audio.copyrightRestricted);
     }
     void partialFailureAndStaleResultsAreHandled() {
         MultiSourceFixture fixture; QVERIFY(fixture.listen(QHostAddress::LocalHost)); fixture.qqSearchStatus = 503;

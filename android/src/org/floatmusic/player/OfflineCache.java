@@ -49,15 +49,85 @@ final class OfflineCache {
         if("queued".equals(entry.optString("status"))&&!entry.optBoolean("manual")){if(!automatic)put(row,"status","paused");else if(!onWifi)put(row,"status","waitingWifi");}
         JSONObject track=entry.optJSONObject("track"),metadata=new JSONObject();if(track!=null)for(String field:new String[]{"id","source","songId","name","artist","album","duration","sourceName"})if(track.has(field))put(metadata,field,track.opt(field));put(row,"track",metadata);long total=entry.optLong("totalBytes",-1);put(row,"progress",total>0?Math.min(1.0,entry.optDouble("bytes")/total):-1);result.put(row);
     }return result;}
+    synchronized Set<String> usableTrackIds(){
+        Set<String> result=new HashSet<>();
+        for(JSONObject entry:entries.values()){
+            if(!"ready".equals(entry.optString("status"))||entry.optBoolean("deletePending"))continue;
+            String id=TrackState.onlineIdentity(entry.optJSONObject("track"));
+            if(!id.isEmpty()&&!result.contains(id)&&validFile(entry,file(entry.optString("key"))))result.add(id);
+        }
+        return result;
+    }
     synchronized JSONObject settings(){JSONObject o=new JSONObject();put(o,"automatic",automatic);put(o,"onlyWifi",onlyWifi);put(o,"limitBytes",limit);return o;}
     synchronized JSONObject summary(){JSONObject o=new JSONObject();long manual=0,auto=0;int count=0;for(JSONObject e:entries.values())if("ready".equals(e.optString("status"))){if(e.optBoolean("manual"))manual+=e.optLong("bytes");else auto+=e.optLong("bytes");count++;}put(o,"bytes",manual+auto);put(o,"manualBytes",manual);put(o,"automaticBytes",auto);put(o,"count",count);put(o,"error",persistenceError);return o;}
     private synchronized boolean save(){try{JSONObject o=new JSONObject();put(o,"settings",settings());put(o,"entries",entries());File temp=new File(root,"index.part");try(FileOutputStream out=new FileOutputStream(temp)){out.write(o.toString().getBytes(StandardCharsets.UTF_8));out.getFD().sync();}Files.move(temp.toPath(),index.toPath(),StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);persistenceError="";return true;}catch(Exception e){persistenceError="缓存索引保存失败";return false;}}
     private void changed(){save();listener.changed();}
     synchronized String enqueue(JSONObject track,String quality,boolean manual){
-        if(closed||track==null||!AudioResolver.validPlatformId(track.optString("source"),track.optString("songId")))return "";
-        if(!manual&&!automatic)return "";String k=key(track,quality);JSONObject found=lookup(track,quality);if(found!=null&&matchesQuality(found,quality))k=found.optString("key");
-        JSONObject e=entries.get(k);if(e==null){e=new JSONObject();put(e,"key",k);put(e,"track",copy(track));put(e,"requestedQuality",quality);put(e,"requestedQualities",new JSONArray().put(quality));put(e,"quality",quality);put(e,"originalState","unknown");put(e,"translationState","unknown");put(e,"status","queued");put(e,"manual",manual);entries.put(k,e);}else{if(manual)put(e,"manual",true);if("cancelled".equals(e.optString("status"))||"failed".equals(e.optString("status")))put(e,"status","queued");}
-        put(e,"deletePending",false);changed();pump();return k;
+        String key=queueTrack(track,quality,manual,entries.values());
+        if(!key.isEmpty()){changed();pump();}
+        return key;
+    }
+    synchronized int enqueueBatch(JSONArray tracks,JSONObject qualities){
+        if(closed)return 0;
+        Map<String,List<JSONObject>> existing=new HashMap<>();
+        LinkedHashMap<String,JSONObject> previous=new LinkedHashMap<>();
+        for(JSONObject entry:entries.values()){
+            String id=TrackState.onlineIdentity(entry.optJSONObject("track"));
+            existing.computeIfAbsent(id,unused->new ArrayList<>()).add(entry);
+            previous.put(entry.optString("key"),copy(entry));
+        }
+        Set<String> seen=new HashSet<>();
+        int queued=0;
+        for(int i=0;i<tracks.length();i++){
+            JSONObject track=tracks.optJSONObject(i);
+            if(track==null)continue;
+            String id=TrackState.onlineIdentity(track);
+            if(id.isEmpty()||!seen.add(id))continue;
+            String queuedKey=queueTrack(track,TrackState.requestedQuality(track.optString("source"),qualities),true,
+                existing.getOrDefault(id,Collections.emptyList()));
+            if(!queuedKey.isEmpty())queued++;
+        }
+        if(queued==0)return 0;
+        if(!save()){
+            entries.clear();entries.putAll(previous);
+            listener.changed();
+            return -1;
+        }
+        listener.changed();pump();
+        return queued;
+    }
+    private String queueTrack(JSONObject track,String quality,boolean manual,Iterable<JSONObject> candidates){
+        if(closed||track==null||!AudioResolver.validPlatformId(track.optString("source"),track.optString("songId"))
+            ||!manual&&!automatic)return "";
+        String key=key(track,quality),id=TrackState.onlineIdentity(track);
+        for(JSONObject entry:candidates){
+            if(!id.equals(TrackState.onlineIdentity(entry.optJSONObject("track")))||!matchesQuality(entry,quality)
+                ||entry.optBoolean("deletePending")||!"ready".equals(entry.optString("status")))continue;
+            String candidate=entry.optString("key");
+            if(!validFile(entry,file(candidate))){
+                put(entry,"status","failed");
+                put(entry,"error","缓存文件丢失或损坏");
+                continue;
+            }
+            key=candidate;
+            put(entry,"access",System.currentTimeMillis());
+            break;
+        }
+        JSONObject entry=entries.get(key);
+        if(entry==null){
+            entry=new JSONObject();
+            put(entry,"key",key);put(entry,"track",copy(track));put(entry,"requestedQuality",quality);
+            put(entry,"requestedQualities",new JSONArray().put(quality));put(entry,"quality",quality);
+            put(entry,"originalState","unknown");put(entry,"translationState","unknown");
+            put(entry,"status","queued");put(entry,"manual",manual);
+            entries.put(key,entry);
+        }else{
+            if(manual)put(entry,"manual",true);
+            if("cancelled".equals(entry.optString("status"))||"failed".equals(entry.optString("status")))
+                put(entry,"status","queued");
+        }
+        put(entry,"deletePending",false);
+        return key;
     }
     synchronized JSONObject lookup(JSONObject track,String quality){JSONObject fallback=null;for(JSONObject e:entries.values()){JSONObject t=e.optJSONObject("track");if(t==null||!t.optString("source").equals(track.optString("source"))||!t.optString("songId").equals(track.optString("songId"))||e.optBoolean("deletePending")||!"ready".equals(e.optString("status")))continue;File f=file(e.optString("key"));if(!validFile(e,f)){put(e,"status","failed");put(e,"error","缓存文件丢失或损坏");continue;}if(matchesQuality(e,quality)){fallback=e;break;}if(fallback==null)fallback=e;}if(fallback==null){save();return null;}put(fallback,"access",System.currentTimeMillis());save();JSONObject result=copy(fallback);put(result,"path",file(fallback.optString("key")).getAbsolutePath());return result;}
     synchronized JSONObject lookupKey(String key){

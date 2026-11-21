@@ -126,6 +126,30 @@ private slots:
         settings.setValue("appearance/mode", 1);
         settings.sync();
     }
+    void localAudioPickerSubmitsEverySelection() {
+        QTemporaryDir files; QVERIFY(files.isValid());
+        const auto first = files.filePath("first.wav"), second = files.filePath("second.wav");
+        QVERIFY(writeWave(first)); QVERIFY(writeWave(second));
+        PlayerController controller;
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        engine.rootContext()->setContextProperty("player", &controller);
+        engine.load(QUrl::fromLocalFile(QStringLiteral(FLOATMUSIC_QML_FILE)));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        auto *picker = window->findChild<QObject *>("localAudioPicker"); QVERIFY(picker);
+        QCOMPARE(picker->property("fileMode").toInt(), 1); // FileDialog.OpenFiles
+        const QList<QUrl> selections{QUrl::fromLocalFile(first), QUrl::fromLocalFile(second)};
+        QVERIFY(picker->setProperty("currentFiles", QVariant::fromValue(selections)));
+        QCOMPARE(picker->property("selectedFiles").value<QList<QUrl>>(), selections);
+        QVERIFY(QMetaObject::invokeMethod(picker, "accepted"));
+        QTRY_COMPARE(controller.tracks().size(), 2);
+        QTRY_VERIFY(!controller.busy());
+        auto *summary = visualItem(window->contentItem(), "audioImportSummary"); QVERIFY(summary);
+        QVERIFY(summary->isVisible());
+        QCOMPARE(summary->property("text").toString(), QStringLiteral("已导入 2 首，跳过 0 个文件。"));
+        QCOMPARE(warnings.size(), 0);
+    }
     void moreNavigationAndEmptyQueue() {
         PlayerController controller;
         QQmlApplicationEngine engine;

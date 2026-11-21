@@ -14,6 +14,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -31,7 +32,7 @@ import org.json.JSONObject;
 /** Real views and isolated native store; only media-start commands are recorded at the service boundary. */
 public final class OverlayV12UiTest extends Instrumentation {
     static final String[] CASES={"more-navigation","queue-occurrences","queue-sort","queue-drag-refresh","history-actions",
-        "song-placement","sleep-presets","sleep-draft","notification-volume","small-scaled-scroll"};
+        "song-placement","sleep-presets","sleep-draft","notification-volume","small-scaled-scroll","playlist-filter","queue-jump","artist-browser"};
     private OverlayWindow overlay;
     private RecordingService service;
     private Context fixtureContext;
@@ -70,6 +71,7 @@ public final class OverlayV12UiTest extends Instrumentation {
                 if(scene.equals("queue-drag-refresh"))runOnMainSync(this::finishDrag);
                 if(scene.equals("notification-volume"))runOnMainSync(this::verifyNotificationVolume);
                 if(scene.equals("small-scaled-scroll")){runOnMainSync(this::forceSmallViewport);waitForIdleSync();runOnMainSync(this::verifySmallScroll);}
+                if(scene.equals("queue-jump")||scene.equals("playlist-filter")){waitForDraw();runOnMainSync(()->verifyJump(scene));}
                 if(screenshots)capture(scene);
                 report.append("PASS ").append(scene).append('\n');passed++;
             }catch(Throwable failure){report.append("FAIL ").append(scene).append(": ").append(failure).append('\n');}
@@ -99,8 +101,10 @@ public final class OverlayV12UiTest extends Instrumentation {
             setField(service,"destroyed",true);
             Constructor<?> ctor=Class.forName("org.floatmusic.player.PlaybackQueueStore").getDeclaredConstructor(File.class);ctor.setAccessible(true);store=ctor.newInstance(new File(files,"playback-queue.json"));
             setField(service,"playbackStore",store);
-            JSONArray tracks=tracks(scene.equals("queue-drag-refresh")||scene.equals("small-scaled-scroll")?95:3);
-            invoke(store,"replaceQueue",new Class<?>[]{JSONArray.class,int.class},tracks,1);
+            boolean jump=scene.equals("queue-jump");
+            JSONArray tracks=tracks(jump||scene.equals("queue-drag-refresh")||scene.equals("small-scaled-scroll")?95:3);
+            if(jump)tracks.put(89,track("netease:101","重复歌曲"));
+            invoke(store,"replaceQueue",new Class<?>[]{JSONArray.class,int.class},tracks,jump?89:1);
             invoke(store,"recordPlayed",new Class<?>[]{JSONObject.class,long.class},tracks.getJSONObject(0),1704067200000L);
             invoke(store,"recordPlayed",new Class<?>[]{JSONObject.class,long.class},track("tencent:101","QQ history"),1704067260000L);
             setField(service,"loadedTrack",tracks.getJSONObject(1));setField(service,"currentTrack",tracks.getJSONObject(1).getString("id"));setField(service,"ready",true);
@@ -139,7 +143,136 @@ public final class OverlayV12UiTest extends Instrumentation {
         else if(scene.equals("sleep-presets"))testSleepPresets();
         else if(scene.equals("sleep-draft"))testSleepDraft();
         else if(scene.equals("notification-volume")){invoke(overlay,"collapse");overlay.showVolumeFromNotification();}
+        else if(scene.equals("playlist-filter"))testPlaylistFilter();
+        else if(scene.equals("queue-jump"))testQueueJump();
+        else if(scene.equals("artist-browser"))testArtistBrowser();
         else open("queue");
+    }
+    private void testPlaylistFilter(){
+        try{
+            File local=new File(fixtureRoot,"playable.wav");
+            try(FileOutputStream out=new FileOutputStream(local)){out.write("RIFF\u0000\u0000\u0000\u0000WAVEfmt ".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));}
+            JSONArray tracks=new JSONArray().put(track("netease:301","Blue fixture"))
+                .put(track("local:playable.wav","Offline fixture").put("path",local.getAbsolutePath()))
+                .put(track("local:missing.wav","Missing fixture").put("path",new File(fixtureRoot,"missing.wav").getAbsolutePath()))
+                .put(track("netease:101","Current fixture")).put(track("tencent:301","Search fixture"));
+            overlay.refreshData(libraryFixture().put("activePlaylist","favorites").put("tracks",tracks));
+            invoke(overlay,"toggle",new Class<?>[]{String.class},"playlist");
+            EditText query=root().findViewWithTag("playlistFilter");query.setText("SEARCH   artist");
+            require(findText(root(),"Search fixture")!=null&&findText(root(),"Blue fixture")==null,"Favorites matches both title and artist terms");
+            findText(root(),"Search fixture").performClick();
+            JSONArray actions=new JSONArray(PlayerBridge.takeEvents());
+            expect("tencent:301",actions.getJSONObject(actions.length()-1).getString("value"),"filtered playback keeps the original song ID");
+            findDescription(root(),"排序 Search fixture").performClick();findText(popup(),"上移一首").performClick();
+            JSONObject move=libraryPayload();expect("moveTrack",move.getString("action"),"filtered sort action reaches the existing store");
+            require(move.getJSONObject("args").getInt("from")==4&&move.getJSONObject("args").getInt("to")==3,"filtered sort keeps the original position");
+            findText(root(),"多选歌曲").performClick();findText(root(),"全选 / 清空").performClick();
+            query=root().findViewWithTag("playlistFilter");query.setText("Blue");findText(root(),"全选 / 清空").performClick();
+            require(findText(root(),"已选 2")!=null,"filtered select-all retains selection from the preceding filter");
+            findText(root(),"全选 / 清空").performClick();require(findText(root(),"已选 1")!=null,"clearing the current filter's selection preserves hidden selections");
+            query.setText("fixture artist");CheckBox offline=root().findViewWithTag("playlistOfflineOnly");offline.performClick();
+            require(findText(root(),"Offline fixture")!=null&&findText(root(),"Missing fixture")==null&&findText(root(),"Current fixture")==null,"offline-only shows only the verified local file");
+            require(findDescription(root(),"Offline fixture，可离线")!=null,"offline availability is exposed in the row description");
+            View jump=root().findViewWithTag("jumpCurrentTrack");require(jump.isShown(),"jump is available when filters hide the current song");jump.performClick();
+            require(query.length()==0&&!offline.isChecked()&&findText(root(),"已选 1")!=null,"jump clears hiding filters and preserves selection");
+        }catch(Exception error){throw new RuntimeException(error);}
+    }
+    private void testQueueJump(){
+        open("queue");
+        require((Integer)field(overlay,"queuePage")==0,"opening the queue keeps the first page while playback is on a later page");
+        View first=findDescription(root(),"播放队列第 1 首");require(first!=null&&!first.getContentDescription().toString().contains("正在播放"),"the earlier occurrence is not active");
+        View jump=root().findViewWithTag("jumpCurrentTrack");require(jump.isShown(),"the jump arrow remains available across pages");jump.performClick();
+    }
+    private void verifyJump(String scene){
+        View row=scene.equals("queue-jump")?findDescription(root(),"播放队列第 90 首"):findDescription(root(),"Current fixture");
+        require(row!=null&&row.getContentDescription().toString().contains(scene.equals("queue-jump")?"正在播放":"当前歌曲"),"jump locates the active row");
+        Rect visible=new Rect();
+        ScrollView inner=(ScrollView)field(overlay,"detailScroll"),outer=(ScrollView)field(overlay,"scroll");
+        int[] rowAt=new int[2],innerAt=new int[2]; row.getLocationOnScreen(rowAt); inner.getLocationOnScreen(innerAt);
+        require(row.getGlobalVisibleRect(visible)&&visible.height()>0,"jump scrolls the active row into the actual viewport"
+            +" (row y="+rowAt[1]+", inner y="+innerAt[1]+", inner height="+inner.getHeight()
+            +", scroll="+inner.getScrollY()+" / "+outer.getScrollY()+")");
+        if(scene.equals("queue-jump")){
+            require((Integer)field(overlay,"queuePage")==1,"the jump loads the exact occurrence's page");
+            try{row.performClick();expect(entries().getJSONObject(89).getString("queueId"),service.last("playQueueEntry"),"jumped queue row plays the exact occurrence");}
+            catch(Exception error){throw new RuntimeException(error);}
+        }
+    }
+    private void testArtistBrowser(){
+        try{
+            open("search");((EditText)field(overlay,"searchInput")).setText("Song draft");findText(root(),"歌手").performClick();
+            EditText artist=(EditText)field(overlay,"searchInput");require(artist.length()==0,"artist browsing has a separate draft");artist.setText("Fixture singer");((Button)field(overlay,"searchButton")).performClick();
+            JSONObject search=artistPayload("search");
+            expect("Fixture singer",search.getString("query"),"artist search sends the query through the library bridge");
+            JSONObject result=new JSONObject().put("id","123").put("source","netease").put("name","Fixture <b>Singer</b>");
+            JSONObject state=new JSONObject().put("searchToken","older-request").put("results",new JSONArray().put(result));
+            JSONObject ui=libraryFixture().put("musicArtists",state);
+            ui.getJSONArray("playlists").put(new JSONObject().put("id","favorites").put("name","收藏夹").put("trackCount",0));
+            overlay.refreshData(ui);
+            require(findDescription(root(),"查看歌手")==null,"a late result from the previous artist search cannot be opened");
+            String token=search.getString("searchToken");
+            require(!token.isEmpty(),"artist search carries a bridge acknowledgement token");
+            state.put("searchToken",token);
+            overlay.refreshData(ui);findDescription(root(),"查看歌手").performClick();
+            JSONObject open=artistPayload("open");expect("123",open.getString("id"),"artist detail keeps the provider ID");expect("netease",open.getString("source"),"artist detail keeps the provider");
+            JSONObject profile=new JSONObject(result.toString()).put("description","<b>Plain biography</b>").put("hasMore",true)
+                .put("tracks",new JSONArray().put(track("netease:101","Current work")));
+            state.put("detail",profile);overlay.refreshData(ui);
+            require(findText(root(),"<b>Plain biography</b>")!=null,"artist detail displays literal biography");
+            findText(root(),"显示全部作品").performClick();artistPayload("loadAll");
+            findText(root(),"Current work").performClick();expect("netease:101",artistPayload("play").getString("id"),"artist work playback keeps the source-qualified track ID");
+            EditText works=root().findViewWithTag("artistWorkFilter");
+            works.setText("ENCORE moonrise");artistPayload("loadAll");
+            require(findText(root(),"Current work")==null,"work search filters out unrelated results");
+            JSONArray complete=new JSONArray(profile.getJSONArray("tracks").toString())
+                .put(track("netease:102","Distant Encore").put("album","Moonrise"));
+            profile.put("hasMore",false).put("tracks",complete);
+            overlay.refreshData(ui);
+            require(findText(root(),"Distant Encore")!=null,"search includes works arriving on a later page");
+            require(!((TextView)findText(root(),"Distant Encore")).getText().toString().contains("不可用"),
+                "unknown track availability does not show a restriction");
+            ui.put("unavailableTrackIds",new JSONArray().put("netease:102"));overlay.refreshData(ui);
+            require(((TextView)findText(root(),"Distant Encore")).getText().toString().contains("不可用"),
+                "a confirmed playback restriction updates the visible row");
+            complete.getJSONObject(1).put("unavailable",true);
+            ui.remove("unavailableTrackIds");overlay.refreshData(ui);
+            require(((TextView)findText(root(),"Distant Encore")).getText().toString().contains("不可用"),
+                "a catalog-restricted track stays listed with an unavailable label");
+            ui.put("verifiedOnlineTrackIds",new JSONArray().put("netease:102"));overlay.refreshData(ui);
+            require(!((TextView)findText(root(),"Distant Encore")).getText().toString().contains("不可用"),
+                "verified playback overrides a stale catalog restriction");
+            findText(root(),"导入搜索结果").performClick();
+            findText(popup(),"收藏夹").performClick();
+            JSONObject placement=artistPayload("import");
+            expect("favorites",placement.getString("target"),"works can be imported into Favorites");
+            expect("ENCORE moonrise",placement.getString("query"),"import uses the visible filtered scope");
+            expect("123",placement.getString("id"),"import retains the opened artist identity");
+            View jump=root().findViewWithTag("jumpCurrentTrack");
+            require(jump.isShown(),"artist jump remains available when the current work is filtered out");
+            jump.performClick();
+            require(works.length()==0&&findText(root(),"Current work")!=null&&findText(root(),"Distant Encore")!=null,
+                "jumping clears the artist filter and reveals the current work");
+            findText(root(),"返回搜索").performClick();artistPayload("back");require(findDescription(root(),"查看歌手")!=null,"returning to search retains artist results");
+            findText(root(),"歌曲").performClick();artistPayload("close");expect("Song draft",((EditText)field(overlay,"searchInput")).getText().toString(),"artist browsing preserves the previous song query");
+        }catch(Exception error){throw new RuntimeException(error);}
+    }
+    private JSONObject libraryPayload()throws Exception{
+        JSONArray events=new JSONArray(PlayerBridge.takeEvents());
+        for(int i=events.length()-1;i>=0;i--){JSONObject event=events.getJSONObject(i);if(event.getString("action").equals("libraryAction"))return new JSONObject(event.getString("value"));}
+        throw new AssertionError("No library command was emitted: "+events);
+    }
+    private JSONObject artistPayload(String action)throws Exception{
+        JSONObject outer=libraryPayload();expect("artist",outer.getString("action"),"artist action uses the independent browser route");
+        JSONObject inner=outer.getJSONObject("args");expect(action,inner.getString("action"),"artist action uses the expected command");return inner.getJSONObject("args");
+    }
+    private void waitForDraw()throws Exception{
+        java.util.concurrent.CountDownLatch drawn=new java.util.concurrent.CountDownLatch(1);
+        runOnMainSync(()->{
+            View view=root();view.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener(){
+                public boolean onPreDraw(){view.getViewTreeObserver().removeOnPreDrawListener(this);drawn.countDown();return true;}
+            });view.postInvalidateOnAnimation();
+        });
+        require(drawn.await(3,java.util.concurrent.TimeUnit.SECONDS),"overlay completed a layout frame");
     }
     private void testMore(){
         invoke(overlay,"toggle",new Class<?>[]{String.class},"more");

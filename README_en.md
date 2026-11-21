@@ -6,9 +6,9 @@
 
 **Keep music close at hand.** FloatMusic is a floating music player for Windows and Android. It rests as a draggable music-note icon; clicking it opens a player card so you can control playback, read lyrics, and change tracks while using other apps.
 
-Current version: **1.7 · Windows and Android preview**. Both platforms use `1.7.0-preview.3`; Android version code is 33. The release preserves the user-accepted packages. Get source and downloads from the [1.7 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.7.0-preview).
+Current version: **1.8 · Windows and Android preview**. Both platforms use `1.8.0-preview.3`; Android version code is 36. The release preserves the user-accepted packages. Get source and downloads from the [1.8 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.8.0-preview).
 
-Version 1.7 adds song details and readable comments, with the current metadata source shown and an entry to switch it. All song lists now display artwork, with an option to hide it. Matching information and download icons sit beside the title on both platforms. Current lyrics reveal their highlight from left to right in both the player and independent floating lyrics; the effect can be turned off. See the [1.7 release notes](docs/1.7-发布说明.md).
+Version 1.8 adds library organization. Search Favorites and playlists by song or artist, check offline badges, and filter tracks available offline before heading out. Import multiple local audio files at once. Artist search opens biographies and paginated works, with full-catalog loading, work search, and playlist import. Lists highlight the current track and provide an arrow to reach it. Confirmed copyright restrictions receive an Unavailable label. See the [1.8 release notes](docs/1.8-发布说明.md#english).
 
 Local audio and bilingual lyric caching, offline playback, and unified management remain available. Use the download icon beside the title to save a track permanently. Automatic cache defaults to 1 GB with least-recently-used cleanup and Wi-Fi only on Android. Settings → Local cache provides progress, lyric fetching and storage cleanup. Independent lyrics retain the curved center-to-edge fade and blank-row filtering. See the [offline cache notes](docs/1.6-本地缓存与离线播放.md).
 
@@ -16,6 +16,10 @@ The separate playback queue, listening history, and sleep timer remain available
 
 ## Main features
 
+- **Library organization**: Search Favorites and playlists by song or artist. Offline badges and an **Available offline** filter verify local audio and completed cache files. Select multiple local audio files for import, with per-file validation and a summary of imported and skipped items.
+- **Artist profiles and works**: Switch search to **Artists**, select libraries, and open a biography and works. Load all available pages, search works by title, artist or album, and play, enqueue, save offline or import them into a chosen playlist. Source limits and loading failures retain already loaded results with feedback.
+- **Find the current track**: Playlists, search results, artist works and queues highlight the current track. An arrow reveals it across pages and clears a playlist or work filter when needed. Queue navigation targets the exact playing occurrence when a track appears more than once.
+- **Track availability**: Explicit catalog restrictions or confirmed copyright denials display **Unavailable**. Network failures remain retryable, and verified playback or a usable local cache updates the displayed status.
 - **Details and comments**: Read artwork, album, available release dates and comment counts, plus hot and latest comments. Expand long comments and load more. View the current source and confirm a matching version when switching it, without changing playback. Missing counts are not shown as zero.
 - **Consistent artwork**: Search, playlists, rankings, queue, history and cache lists display artwork. Missing images are fetched asynchronously, with a consistent fallback. Turn off **Show song artwork** in Settings → General & appearance.
 - **Lyric color progress**: Highlight color reveals from left to right as each line plays, including wrapped and bilingual lyrics. Pause, seeking and timing adjustments stay synchronized. Disable **Lyric color progress** in player or floating lyric settings to restore whole-line highlighting. Line timestamps provide a uniform reveal within each line.
@@ -41,13 +45,13 @@ The separate playback queue, listening history, and sleep timer remain available
 
 ## Download and run
 
-This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.7 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.7.0-preview):
+This repository contains source code. **Code → Download ZIP downloads source code, not an installable package.** Download the package for your platform from the [1.8 Release](https://github.com/chensiray/FloatMusic/releases/tag/v1.8.0-preview):
 
 | Platform | Download | How to use |
 |---|---|---|
-| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.7.0-preview/FloatMusic-1.7.0-preview.3-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
-| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.7.0-preview/FloatMusic-1.7.0-preview.3-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
-| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.7.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
+| Windows x64 | [Complete runtime ZIP](https://github.com/chensiray/FloatMusic/releases/download/v1.8.0-preview/FloatMusic-1.8.0-preview.3-windows-x64.zip) | Extract the complete directory and run `FloatMusic.exe`; keep all DLLs and plugins |
+| Android ARM64 | [APK installer](https://github.com/chensiray/FloatMusic/releases/download/v1.8.0-preview/FloatMusic-1.8.0-preview.3-android-arm64-v8a.apk) | Android 9 or later; an older build with the same signature can be updated in place |
+| File checksums | [SHA256SUMS.txt](https://github.com/chensiray/FloatMusic/releases/download/v1.8.0-preview/SHA256SUMS.txt) | Check the downloaded files' SHA256 hashes |
 
 Other versions are listed under [Releases](https://github.com/chensiray/FloatMusic/releases). To compile the app yourself, see the [build guide](docs/DEVELOPMENT.md).
 
@@ -124,6 +128,11 @@ Open the management panel on the playlist page to create, rename, edit descripti
 
 | Goal | Operation |
 |---|---|
+| Search a playlist | Enter a song or artist name to filter the current playlist or Favorites; actions retain the original track identity |
+| Check offline music before a trip | Select **Available offline**; badges verify local audio and completed cache files |
+| Import multiple local tracks | Choose local audio under **More → Import music**, then select multiple files in the file picker |
+| Import artist works | Open an artist under **Search music → Artists**, load all works or enter a work query, then choose an import destination |
+| Find the playing track | Click the list's navigation arrow to reveal the highlighted track, clearing a playlist or work filter when needed |
 | Reorder tracks | Drag the handle on the right of a track on Windows; on Android, press and hold the handle before dragging, or use move-up/down actions |
 | Organize multiple tracks | Enter selection mode and check tracks to move, copy, remove, or export. Moving and copying preserve order and merge duplicates in the destination playlist |
 | Import an online playlist | Switch search to Playlists (歌单), open its details, and choose a destination |
@@ -174,9 +183,9 @@ Local imports save an audio copy in the app data directory. The original file is
 
 ## Current limitations and feedback
 
-Playlists support bulk JSON import and drag reordering; online tracks support manual saves and automatic offline caching. Bulk audio-file import and local LRC import are not currently supported. Public metadata and comment interfaces may change, and some sources do not provide comments or statistics. Phone power-saving policies, screen sizes, and Bluetooth devices still need ongoing compatibility work.
+Playlists support bulk JSON and local audio import, filtering and drag reordering; online tracks support manual saves and automatic offline caching. Local LRC import is pending. Artist catalog completeness and public metadata and comment capabilities depend on the source; biographies, comments or counts may be unavailable. Phone power-saving policies, screen sizes, and Bluetooth devices still need ongoing compatibility work.
 
-Version 1.7's build, desktop regression, Android emulator checks and user acceptance, along with earlier online API samples, are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
+Version 1.8's build, desktop regression, Android emulator checks and user acceptance, along with earlier online API samples, are in the [verification notes](VERIFICATION.md). Third-party services can time out, rate-limit requests, or lack songs. Passing limited samples does not mean every track will always play. Kugou has not produced verified playable results and is not included in this release. Coverage of other devices and Android background scenarios still needs to expand.
 
 To report a problem, open an [Issue](https://github.com/chensiray/FloatMusic/issues) and include the app version, OS/device model, reproduction steps, and actual behavior.
 

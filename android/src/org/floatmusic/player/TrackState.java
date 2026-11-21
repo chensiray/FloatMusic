@@ -7,6 +7,13 @@ final class TrackState {
     static boolean online(String source) {
         return "netease".equals(source)||"tencent".equals(source)||"kuwo".equals(source);
     }
+    static String onlineIdentity(JSONObject track) {
+        if(track==null)return "";
+        String source=track.optString("source");
+        if(!online(source))return "";
+        String prefix=source+":",songId=track.optString("songId"),id=track.optString("id");
+        return !songId.isEmpty()?prefix+songId:id.startsWith(prefix)&&id.length()>prefix.length()?id:"";
+    }
     static JSONObject normalize(JSONObject track) {
         if(track==null)return null;
         String source=track.optString("source"),id=track.optString("id");

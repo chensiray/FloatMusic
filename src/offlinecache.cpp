@@ -53,25 +53,132 @@ OfflineCache::OfflineCache(const MusicApi::Endpoints &e,const QString &d,QObject
  QTimer::singleShot(0,this,&OfflineCache::pump);
 }
 OfflineCache::~OfflineCache(){m_stopping=true;++m_generation;if(m_reply){disconnect(m_reply,nullptr,this,nullptr);m_reply->abort();}m_file.close();if(!m_active.isEmpty()){QFile::remove(path(m_active,".part"));if(m_entries.contains(m_active))m_entries[m_active]["state"]="queued";}save();}
+void OfflineCache::setBaseUrl(const QString &url) {
+    const auto key = m_active;
+    const bool resolving = m_entries.value(key).value("state") == "resolving";
+    // Changing the API aborts its reply synchronously. Keep that cancellation
+    // from changing the queued download into a failure.
+    if (resolving) ++m_generation;
+    if (!m_api.setBaseUrl(url)) {
+        if (resolving) --m_generation;
+        return;
+    }
+    if (resolving) {
+        m_entries[key]["state"] = "queued";
+        m_active.clear();
+        pump();
+    }
+}
 bool OfflineCache::save(){if(!m_enabled)return false;QJsonObject aliases;for(auto i=m_aliases.begin();i!=m_aliases.end();++i)aliases[i.key()]=i.value();if(!QDir(m_directory).exists())return false;QSaveFile f(m_directory+"/index.json");if(!f.open(QIODevice::WriteOnly))return false;auto bytes=QJsonDocument(QJsonObject{{"version",1},{"aliases",aliases},{"settings",QJsonObject::fromVariantMap(m_settings)},{"entries",QJsonArray::fromVariantList([this]{QVariantList out;for(const auto &value:m_entries)out.append(value);return out;}())}}).toJson();return f.write(bytes)==bytes.size()&&f.commit();}
 QVariantList OfflineCache::entries()const{QVariantList out;for(auto x:m_entries){x.remove("lyrics");x.remove("translation");out.append(x);}return out;}
+QSet<QString> OfflineCache::usableSongIds() const {
+    QSet<QString> result;
+    for (auto it = m_entries.cbegin(); it != m_entries.cend(); ++it) {
+        const auto &entry = it.value();
+        if (entry.value("state") != "complete" || entry.value("pendingDelete").toBool()) continue;
+        const auto track = entry.value("track").toMap();
+        const auto source = track.value("source").toString();
+        const auto songId = track.value("songId").toString();
+        const auto id = source + ':' + songId;
+        if (source.isEmpty() || songId.isEmpty() || result.contains(id)) continue;
+        const auto filename = path(it.key(), ".audio");
+        if (validFile(filename, entry.value("bytes").toLongLong()) && unchangedFile(entry, filename))
+            result.insert(id);
+    }
+    return result;
+}
 QVariantMap OfflineCache::summary()const{qint64 a=0,m=0;for(auto x:m_entries){const QFileInfo file(path(x.value("key").toString(),".audio"));if(file.exists()){if(x.value("manual").toBool())m+=file.size();else a+=file.size();}}return {{"totalBytes",a+m},{"manualBytes",m},{"automaticBytes",a},{"count",m_entries.size()}};}
 bool OfflineCache::validFile(const QString &p,qint64 expected)const{QFile f(p);if(!f.open(QIODevice::ReadOnly)||f.size()<12||(expected>=0&&f.size()!=expected))return false;auto h=f.read(64);return h.startsWith("ID3")||h.startsWith("fLaC")||h.startsWith("OggS")||(h.startsWith("RIFF")&&h.mid(8,4)=="WAVE")||h.mid(4,4)=="ftyp"||(uchar(h[0])==255&&(uchar(h[1])&0xe0)==0xe0);}
-QString OfflineCache::enqueue(const QVariantMap &t,const QString &q,bool manual,const MusicApi::Audio &audio){if(t.value("songId").toString().isEmpty()||(!manual&&!m_settings.value("automaticEnabled").toBool()))return {};
- for(auto i=m_entries.begin();i!=m_entries.end();++i){auto x=i.value();if(x.value("track").toMap().value("source")==t.value("source")&&x.value("track").toMap().value("songId")==t.value("songId")&&(x.value("requestedQuality")==q||x.value("requestedQualities").toStringList().contains(q)||x.value("quality")==q)&&!x.value("pendingDelete").toBool()){auto key=i.key();if(manual)promote(key);if(x.value("state")=="failed"||x.value("state")=="cancelled"){if(audio.url.isValid())m_audio[key]=audio;retry(key);}return key;}}
- auto k=identity(t,audio.quality.isEmpty()?q:audio.quality);
- if(m_entries.contains(k)){
-   auto &existing=m_entries[k];
-   auto requests=existing.value("requestedQualities").toStringList();
-   requests.append(existing.value("requestedQuality").toString());requests.append(q);requests.removeDuplicates();
-   existing["requestedQualities"]=requests;
-   if(manual){existing["manual"]=true;existing["pendingDelete"]=false;existing.remove("removeAttempts");}
-   if(existing.value("state")=="failed"||existing.value("state")=="cancelled"){
-     if(audio.url.isValid())m_audio[k]=audio;retry(k);
-   }
-   save();emit changed();return k;
- }
- QVariantMap x{{"key",k},{"track",t},{"title",t.value("name")},{"artist",t.value("artist")},{"source",t.value("source")},{"requestedQuality",q},{"requestedQualities",QStringList{q}},{"quality",audio.quality.isEmpty()?q:audio.quality},{"manual",manual},{"state","queued"},{"bytes",0},{"total",-1},{"progress",-1},{"lyricState","unknown"},{"translationState","unknown"},{"lastAccess",QDateTime::currentMSecsSinceEpoch()},{"path",path(k,".audio")}};m_entries[k]=x;if(audio.url.isValid())m_audio[k]=audio;save();emit changed();QTimer::singleShot(0,this,&OfflineCache::pump);return k;}
+QString OfflineCache::enqueue(const QVariantMap &track, const QString &quality, bool manual, const MusicApi::Audio &audio) {
+    const auto key = queueTrack(track, quality, manual, audio, m_entries.keys());
+    if (!key.isEmpty()) {
+        save();
+        emit changed();
+        QTimer::singleShot(0, this, &OfflineCache::pump);
+    }
+    return key;
+}
+
+int OfflineCache::enqueueBatch(const QVariantList &tracks, const QVariantMap &qualities, const QString &playingId) {
+    const auto previous = m_entries;
+    QHash<QString, QStringList> bySong;
+    for (auto it = previous.cbegin(); it != previous.cend(); ++it) {
+        const auto track = it.value().value("track").toMap();
+        bySong[track.value("source").toString() + ':' + track.value("songId").toString()].append(it.key());
+    }
+    QString playingKey;
+    QSet<QString> seen;
+    int queued = 0;
+    for (const auto &item : tracks) {
+        const auto track = item.toMap();
+        const auto source = track.value("source").toString();
+        const auto id = source + ':' + track.value("songId").toString();
+        if (seen.contains(id)) continue;
+        seen.insert(id);
+        const auto quality = qualities.value(source, "standard").toString();
+        const auto key = queueTrack(track, quality, true, {}, bySong.value(id));
+        if (key.isEmpty()) continue;
+        ++queued;
+        if (!playingId.isEmpty() && track.value("id").toString() == playingId) playingKey = key;
+    }
+    if (!queued) return 0;
+    if (!save()) {
+        m_entries = previous;
+        return -1;
+    }
+    if (!playingKey.isEmpty()) setInUse(playingKey);
+    emit changed();
+    QTimer::singleShot(0, this, &OfflineCache::pump);
+    return queued;
+}
+
+QString OfflineCache::queueTrack(const QVariantMap &track, const QString &quality, bool manual,
+                                 const MusicApi::Audio &audio, const QStringList &existingKeys) {
+    if (track.value("songId").toString().isEmpty() || (!manual && !m_settings.value("automaticEnabled").toBool()))
+        return {};
+    auto key = identity(track, audio.quality.isEmpty() ? quality : audio.quality);
+    bool addQuality = true;
+    for (const auto &candidate : existingKeys) {
+        const auto entry = m_entries.value(candidate);
+        const auto saved = entry.value("track").toMap();
+        if (entry.value("pendingDelete").toBool() || saved.value("source") != track.value("source")
+            || saved.value("songId") != track.value("songId")) continue;
+        if (entry.value("requestedQuality") != quality && entry.value("quality") != quality
+            && !entry.value("requestedQualities").toStringList().contains(quality)) continue;
+        key = candidate;
+        addQuality = false;
+        break;
+    }
+    if (m_entries.contains(key)) {
+        auto &entry = m_entries[key];
+        if (addQuality) {
+            auto requests = entry.value("requestedQualities").toStringList();
+            requests.append(entry.value("requestedQuality").toString());
+            requests.append(quality);
+            requests.removeDuplicates();
+            entry["requestedQualities"] = requests;
+        }
+        if (manual) {
+            entry["manual"] = true;
+            entry["pendingDelete"] = false;
+            entry.remove("removeAttempts");
+        }
+        if (key != m_active && !entry.value("pendingDelete").toBool()
+            && (entry.value("state") == "failed" || entry.value("state") == "cancelled")) {
+            if (audio.url.isValid()) m_audio[key] = audio;
+            entry["state"] = "queued";
+            entry["error"] = QString();
+        }
+        return key;
+    }
+    m_entries[key] = {{"key", key}, {"track", track}, {"title", track.value("name")}, {"artist", track.value("artist")},
+        {"source", track.value("source")}, {"requestedQuality", quality}, {"requestedQualities", QStringList{quality}},
+        {"quality", audio.quality.isEmpty() ? quality : audio.quality}, {"manual", manual}, {"state", "queued"},
+        {"bytes", 0}, {"total", -1}, {"progress", -1}, {"lyricState", "unknown"}, {"translationState", "unknown"},
+        {"lastAccess", QDateTime::currentMSecsSinceEpoch()}, {"path", path(key, ".audio")}};
+    if (audio.url.isValid()) m_audio[key] = audio;
+    return key;
+}
 void OfflineCache::pump(){if(!m_enabled||m_stopping||!m_active.isEmpty())return;for(auto i=m_entries.begin();i!=m_entries.end();++i){if(i.value().value("state")!="queued")continue;if(!i.value().value("manual").toBool()&&!m_settings.value("automaticEnabled").toBool())continue;auto k=i.key();m_active=k;auto generation=++m_generation;m_entries[k]["state"]="resolving";save();emit changed();if(m_audio.contains(k)){download(k,m_audio.take(k));return;}auto t=i.value().value("track").toMap();m_api.resolveAudio(t.value("source").toString(),t.value("songId").toString(),i.value().value("requestedQuality").toString(),[this,k,generation](MusicApi::Audio a,QString error){if(generation!=m_generation||m_active!=k)return;if(!error.isEmpty()){finish(k,error);return;}download(k,a);},{},t.value("duration").toDouble());return;}}
 bool OfflineCache::reserve(const QString &k,qint64 bytes){auto limit=m_settings.value("automaticLimitBytes").toLongLong();if(m_entries.value(k).value("manual").toBool())return true;if(bytes>limit)return false;auto used=[&]{qint64 n=0;for(auto i=m_entries.begin();i!=m_entries.end();++i)if(i.key()!=k&&!i.value().value("manual").toBool()&&(i.value().value("state")=="complete"||i.value().value("pendingDelete").toBool()))n+=QFileInfo(path(i.key(),".audio")).size();return n;};while(used()+bytes>limit){QString oldest;qint64 time=LLONG_MAX;for(auto i=m_entries.begin();i!=m_entries.end();++i)if(i.key()!=k&&i.key()!=m_inUse&&!i.value().value("manual").toBool()&&(i.value().value("state")=="complete"||i.value().value("pendingDelete").toBool())&&i.value().value("lastAccess").toLongLong()<time){oldest=i.key();time=i.value().value("lastAccess").toLongLong();}if(oldest.isEmpty())return false;remove(oldest);if(m_entries.contains(oldest))return false;}return true;}
 void OfflineCache::download(const QString &requestedKey,const MusicApi::Audio &a){

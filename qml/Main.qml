@@ -136,10 +136,20 @@ ApplicationWindow {
         settingsPage = page
         Qt.callLater(function() { settingsScroll.contentItem.contentY = 0 })
     }
-    onDetailChanged: if (detail !== "settings") settingsPage = ""
+    onDetailChanged: {
+        if (detail !== "settings") settingsPage = ""
+        if (detail !== "search" && artistProfileOpen) closeArtistProfile()
+        if (detail === "search") refreshOnlineCache(true)
+    }
     property bool selectingTracks: false
     property var selectedTrackIds: []
     property string searchKind: "songs"
+    property bool artistProfileOpen: false
+    property var selectedArtist: ({})
+    readonly property var artistState: player.musicArtists ? player.musicArtists.state : ({})
+    readonly property bool searchRunning: searchKind === "artists" ? !!artistState.searching
+        : searchKind === "playlists" ? player.playlistSearching : player.searching
+    onSearchKindChanged: if (artistProfileOpen) closeArtistProfile()
     property bool showingOnlinePlaylist: false
     property string onlinePlaylistSource: "search"
     readonly property var activeList: {
@@ -218,7 +228,7 @@ ApplicationWindow {
     visible: false
     width: Math.ceil(baseWidth * contentScale)
     height: Math.min(Math.max(160, workArea.height - 16), Math.ceil((musicDetailsPopup.opened ? Math.max(620, shell.implicitHeight) : shell.implicitHeight) * contentScale))
-    title: root.t("浮音 1.7.0-preview.3 · 桌面预览")
+    title: root.t("浮音 1.8.0-preview.3 · 桌面预览")
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     font.family: "Microsoft YaHei UI"; font.pixelSize: 14
@@ -271,6 +281,7 @@ ApplicationWindow {
     function openOnlinePlaylist(id, source) {
         onlinePlaylistSource = source
         showingOnlinePlaylist = true
+        refreshOnlineCache(true)
         player.libraryAction("openOnline", { id: id })
         Qt.callLater(function() { onlineTracks.positionViewAtBeginning() })
     }
@@ -292,6 +303,12 @@ ApplicationWindow {
         selectedTrackIds = ids
     }
     function clearTrackSelection() { selectedTrackIds = []; selectingTracks = false }
+    function trackIndex(tracks, id, key) {
+        if (!id || !tracks) return -1
+        for (var i = 0; i < tracks.length; ++i)
+            if (tracks[i][key || "id"] === id) return i
+        return -1
+    }
     function playlistTargets(includeNew, excludeCurrent) {
         var list = []
         for (var i = 0; i < player.playlists.length; ++i) {
@@ -307,17 +324,31 @@ ApplicationWindow {
         return player.activePlaylist === id
     }
     function startSearch() {
-        if (player.searchSources.length === 0 || (searchKind === "songs" ? player.searching : player.playlistSearching)) return
+        if (player.searchSources.length === 0 || searchRunning) return
         showingOnlinePlaylist = false
-        if (searchKind === "playlists") player.libraryAction("searchPlaylists", { query: keywords.text })
+        if (searchKind === "artists") player.musicArtists.action("search", { query: keywords.text })
+        else if (searchKind === "playlists") player.libraryAction("searchPlaylists", { query: keywords.text })
         else player.search(keywords.text)
-        Qt.callLater(function() { (root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning() })
+        Qt.callLater(function() { root.activeSearchView().positionViewAtBeginning() })
+    }
+    function activeSearchView() { return searchKind === "artists" ? artistResults : searchKind === "playlists" ? playlistResults : results }
+    function openArtistProfile(artist) {
+        selectedArtist = artist
+        refreshOnlineCache(true)
+        artistWorks.query = ""
+        artistProfileOpen = true
+        player.libraryAction("artist", { action: "open", args: { id: artist.id, source: artist.source } })
+        Qt.callLater(function() { artistWorks.positionViewAtBeginning() })
+    }
+    function closeArtistProfile() {
+        artistProfileOpen = false
+        player.musicArtists.action("back", {})
     }
     function toggleSearchSource(source) {
         var sources = player.searchSources.slice(), at = sources.indexOf(source)
         if (at >= 0) sources.splice(at, 1); else sources.push(source)
         player.searchSources = sources
-        Qt.callLater(function() { (root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning() })
+        Qt.callLater(function() { root.activeSearchView().positionViewAtBeginning() })
     }
     function musicSourceName(source) {
         if (source === "netease") return root.t("网易云")
@@ -334,6 +365,18 @@ ApplicationWindow {
         if (track.source === "tencent") return root.t("QQ音乐")
         if (track.source === "kuwo") return root.t("酷我音乐")
         return root.t("本地")
+    }
+    property var cachedOnlineTracks: ({})
+    property string onlineCacheStamp: ""
+    function refreshOnlineCache(force) {
+        var stamp = player.cacheEntries.filter(function(entry) {
+            return entry.state === "complete" && !entry.pendingDelete
+        }).map(function(entry) { return entry.key }).join("\n")
+        if (!force && stamp === onlineCacheStamp) return
+        onlineCacheStamp = stamp
+        var ids = Object.create(null)
+        player.cachedOnlineTrackIds().forEach(function(id) { ids[id] = true })
+        cachedOnlineTracks = ids
     }
     function openTrackMenu(track, sourceId, index) {
         trackMenu.track = track
@@ -383,6 +426,15 @@ ApplicationWindow {
         transferTarget.currentIndex = Math.max(0, transferTarget.indexOfValue(player.activePlaylist))
         targetSheet.open()
     }
+    function showArtistImport(trackId) {
+        targetSheet.mode = "artist"
+        targetSheet.artistRequest = { source: selectedArtist.source, id: selectedArtist.id,
+                                     query: artistWorks.query, trackId: trackId || "" }
+        targetSheet.artistCount = trackId ? 1 : artistWorks.count
+        targetSheet.targets = playlistTargets(true, false)
+        transferTarget.currentIndex = Math.max(0, transferTarget.indexOfValue(player.activePlaylist))
+        targetSheet.open()
+    }
     function showImport() {
         importSheet.targets = playlistTargets(true, false)
         importTarget.currentIndex = Math.max(0, importTarget.indexOfValue(player.activePlaylist))
@@ -422,6 +474,7 @@ ApplicationWindow {
                 lastPlaylist = player.activePlaylist
                 root.clearTrackSelection()
                 filter.text = ""
+                songs.offlineOnly = false
                 Qt.callLater(function() { songs.positionViewAtBeginning() })
                 // Async imports may select a newly created list while an old menu is open.
                 selectionMenu.close(); trackMenu.close(); targetSheet.close(); descriptionSheet.close()
@@ -431,6 +484,11 @@ ApplicationWindow {
                 root.selectedTrackIds = root.selectedTrackIds.filter(function(id) { return available.indexOf(id) >= 0 })
             }
             lists.updateSelection()
+            if (songs.visible) songs.refreshOffline(true)
+        }
+        function onCacheChanged() {
+            root.refreshOnlineCache(false)
+            if (songs.visible) songs.refreshOffline(false)
         }
     }
     function clock(ms) { var s = Math.floor(ms / 1000); return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60 }
@@ -474,7 +532,7 @@ ApplicationWindow {
             if (desktopLyrics.visible) { desktopLyrics.refreshArea(); root.fitWindow(desktopLyrics) }
         }
     }
-    Shortcut { sequence: "Ctrl+F"; enabled: root.visible && !root.sheetOpen; onActivated: {root.showingOnlinePlaylist=false;root.openDetail("search");Qt.callLater(function(){(root.searchKind === "playlists" ? playlistResults : results).positionViewAtBeginning();keywords.forceActiveFocus()})} }
+    Shortcut { sequence: "Ctrl+F"; enabled: root.visible && !root.sheetOpen; onActivated: { if (root.artistProfileOpen) root.closeArtistProfile(); root.openDetail("search"); Qt.callLater(function() { root.activeSearchView().positionViewAtBeginning(); keywords.forceActiveFocus() }) } }
     Shortcut { sequence: "Ctrl+O"; enabled: root.visible && !root.sheetOpen; onActivated: root.chooseMusic() }
     readonly property bool sheetOpen: musicDetailsPopup.opened || cachePane.modalOpen || playbackMenu.opened || lyricTiming.opened || libraryMenu.opened || selectionMenu.opened || targetSheet.opened || importSheet.opened || exportSheet.opened || descriptionSheet.opened || playlistDialog.opened || deleteDialog.opened || removeDialog.opened || trackMenu.opened || queueMenu.opened || historyMenu.opened || playbackRemoval.opened || shortcutCapture.opened
     Shortcut { sequence: "Escape"; enabled: root.visible && !root.sheetOpen; onActivated: {if(root.selectingTracks)root.clearTrackSelection();else if(root.showingOnlinePlaylist)root.closeOnlinePlaylist();else if(root.detail === "settings" && root.settingsPage)root.openSettingsPage("");else if(root.detail.length)root.detail="";else if(root.section.length)root.section="";else root.collapse()} }
@@ -619,10 +677,46 @@ ApplicationWindow {
     component TrackMetadata: RowLayout {
         id: metadata
         required property var track
+        property bool offline: false
+        property bool unavailable: false
         spacing: 6
         Copy { objectName: "trackSourceName"; text: root.trackSourceName(metadata.track); color: root.muted; font.pixelSize: 12; Layout.minimumWidth: implicitWidth; Layout.preferredWidth: implicitWidth }
         Copy { text: "·"; color: root.muted; font.pixelSize: 12; Accessible.ignored: true }
         Copy { text: metadata.track.artist || root.t("本地音频"); Layout.fillWidth: true; Layout.minimumWidth: 0; color: root.muted; font.pixelSize: 12 }
+        Copy {
+            objectName: "offlineBadge-" + metadata.track.id
+            visible: metadata.offline; text: root.t("可离线"); color: root.accent; font.pixelSize: 11
+            Layout.minimumWidth: implicitWidth
+        }
+        Copy {
+            objectName: "unavailableBadge-" + metadata.track.id
+            visible: metadata.unavailable; text: root.t("不可用"); color: root.danger; font.pixelSize: 11
+            Layout.minimumWidth: implicitWidth
+        }
+    }
+    component CurrentTrackJump: Action {
+        id: jump
+        required property ListView list
+        required property int targetIndex
+        property bool filteredOut: false
+        signal revealRequested()
+        readonly property Item targetRow: {
+            var position = list.contentY
+            return targetIndex >= 0 && targetIndex < list.count ? list.itemAtIndex(targetIndex) : null
+        }
+        readonly property bool inView: !!targetRow && targetRow.y >= list.contentY
+            && targetRow.y + targetRow.height <= list.contentY + list.height
+        anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 8
+        z: 4
+        visible: list.visible && (filteredOut || (targetIndex >= 0 && !inView))
+        selected: true
+        glyph: {
+            if (targetRow) return targetRow.y < list.contentY ? "up" : "down"
+            var first = list.indexAt(list.contentX + 12, list.contentY + Math.min(10, list.height / 2))
+            return first > targetIndex && targetIndex >= 0 ? "up" : "down"
+        }
+        Accessible.name: root.t("定位当前歌曲"); ToolTip.text: Accessible.name
+        onClicked: revealRequested()
     }
     component MenuEntry: Action {
         id: entry
@@ -891,6 +985,7 @@ ApplicationWindow {
         id: song
         required property var track
         property string extraText: ""
+        property string extraLabel: root.t("加入当前歌单")
         property string playObjectName: ""
         property string menuObjectName: ""
         property string note: ""
@@ -900,9 +995,14 @@ ApplicationWindow {
         signal removeRequested()
         signal menuRequested()
         property bool removable: false
+        readonly property bool current: player.currentTrack === track.id
+        readonly property bool offline: !!root.cachedOnlineTracks[track.id]
+        readonly property bool unavailable: !offline && !(current && player.ready)
+            && (player.unavailableTrackIds.indexOf(track.id) >= 0
+                || track.unavailable === true && player.verifiedOnlineTrackIds.indexOf(track.id) < 0)
         width: ListView.view ? ListView.view.width : 320
         height: note.length ? 76 : 58; radius: 8
-        color: player.currentTrack === track.id ? root.selection : songHover.hovered ? root.backdrop : "transparent"
+        color: current ? root.selection : songHover.hovered ? root.backdrop : "transparent"
         HoverHandler { id: songHover }
         RowLayout {
             anchors.fill: parent; anchors.margins: 6; spacing: 8
@@ -910,20 +1010,21 @@ ApplicationWindow {
             SongCover { track: song.track; Layout.preferredWidth: 40; Layout.preferredHeight: 40 }
             ColumnLayout {
                 Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
-                Copy { Layout.fillWidth: true; text: song.track.name; font.weight: Font.DemiBold }
-                TrackMetadata { Layout.fillWidth: true; Layout.minimumWidth: 0; track: song.track }
+                Copy { Layout.fillWidth: true; text: song.track.name; font.weight: Font.DemiBold; color: song.current ? root.accent : root.ink }
+                TrackMetadata { Layout.fillWidth: true; Layout.minimumWidth: 0; track: song.track; offline: song.offline; unavailable: song.unavailable }
                 Copy { visible: song.note.length > 0; Layout.fillWidth: true; text: song.note; font.pixelSize: 12; color: root.muted }
             }
-            Action { objectName: song.playObjectName; glyph: "play"; quiet: true; enabled: !player.busy; Accessible.name: root.t("播放 ") + song.track.name + "，" + root.trackSourceName(song.track); ToolTip.text: Accessible.name; onClicked: song.playRequested() }
-            Action { visible: song.extraText.length > 0; glyph: "add"; quiet: true; Accessible.name: root.t("加入当前歌单"); ToolTip.text: root.t("加入当前歌单"); onClicked: song.extraRequested() }
+            Action { objectName: song.playObjectName; glyph: "play"; quiet: true; enabled: !player.busy; Accessible.name: (song.current ? root.t("当前歌曲，") : root.t("播放 ")) + song.track.name + "，" + root.trackSourceName(song.track) + (song.unavailable ? " · " + root.t("不可用") : ""); ToolTip.text: Accessible.name; onClicked: song.playRequested() }
+            Action { visible: song.extraText.length > 0; glyph: "add"; quiet: true; Accessible.name: song.extraLabel; ToolTip.text: song.extraLabel; onClicked: song.extraRequested() }
             Action { visible: song.removable; glyph: "close"; quiet: true; Accessible.name: root.t("移除 ") + song.track.name; ToolTip.text: Accessible.name; onClicked: song.removeRequested() }
             Action { objectName: song.menuObjectName; glyph: "more"; quiet: true; Accessible.name: root.t("操作 ") + song.track.name; ToolTip.text: Accessible.name; onClicked: song.menuRequested() }
         }
     }
     FileDialog {
-        id: picker; title: root.t("导入音频 · 最大 30 MiB")
+        id: picker; objectName: "localAudioPicker"; title: root.t("导入音频 · 每个文件最大 30 MiB")
+        fileMode: FileDialog.OpenFiles
         nameFilters: [root.t("音频文件 (*.mp3 *.wav *.flac *.ogg *.m4a *.aac)")]
-        onAccepted: player.importFile(selectedFile)
+        onAccepted: player.importFiles(selectedFiles)
     }
     Window {
         id: floating; objectName: "floatingIcon"; transientParent: null
@@ -1068,6 +1169,7 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                     }
                     Hint { visible: player.busy; text: root.t(player.status) }
+                    Hint { objectName: "audioImportSummary"; visible: text.length > 0; text: root.t(player.importMessage); Layout.fillWidth: true }
                     RowLayout {
                         visible: root.t(player.error).length>0; Layout.fillWidth: true
                         Hint { objectName: "playbackError"; text: root.t(player.error); color: root.danger; maximumLineCount: 4; elide: Text.ElideRight }
@@ -1290,15 +1392,20 @@ ApplicationWindow {
                                     onClicked: descriptionButton.expanded = !descriptionButton.expanded
                                 }
                                 RowLayout {
-                                    visible: !root.selectingTracks; Layout.fillWidth: true; spacing: 6
-                                    Field { id: filter; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: root.t("筛选歌名或歌手"); Accessible.name: root.t("筛选当前歌单") }
-                                    Action { text: root.t("多选"); quiet: true; enabled: player.tracks.length > 0; onClicked: { filter.text = ""; root.selectingTracks = true } }
+                                    Layout.fillWidth: true; spacing: 6
+                                    Field { id: filter; objectName: "playlistFilter"; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: root.t("歌单内搜索歌名或歌手"); Accessible.name: root.t("筛选当前歌单") }
+                                    Action {
+                                        objectName: "playlistOfflineOnly"; text: root.t("仅离线"); selected: songs.offlineOnly
+                                        onClicked: { songs.refreshOffline(true); songs.offlineOnly = !songs.offlineOnly }
+                                    }
+                                    Action { visible: !root.selectingTracks; text: root.t("多选"); quiet: true; enabled: songs.count > 0; onClicked: root.selectingTracks = true }
                                 }
                                 RowLayout {
                                     visible: root.selectingTracks; Layout.fillWidth: true; spacing: 4
                                     Action {
-                                        text: root.t("全选"); quiet: true; enabled: root.selectedTrackIds.length < player.tracks.length
-                                        onClicked: root.selectedTrackIds = player.tracks.map(function(t) { return t.id })
+                                        text: root.t("全选"); quiet: true
+                                        enabled: songs.model.some(function(track) { return !root.hasSelected(track.id) })
+                                        onClicked: root.selectedTrackIds = root.selectedTrackIds.concat(songs.model.filter(function(track) { return !root.hasSelected(track.id) }).map(function(track) { return track.id }))
                                     }
                                     Action { text: root.t("清空"); quiet: true; enabled: root.selectedTrackIds.length > 0; onClicked: root.selectedTrackIds = [] }
                                     Copy { text: root.t("已选 ") + root.selectedTrackIds.length; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
@@ -1312,11 +1419,45 @@ ApplicationWindow {
                                 id: songs; objectName: "playlistView"; Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 58; clip: true
                                 headerPositioning: ListView.InlineHeader
                                 header: Item { width: songs.width - 12; height: playlistTools.implicitHeight + 8 }
-                                model: player.tracks.filter(function(t) { return (t.name + " " + (t.artist || "")).toLowerCase().indexOf(filter.text.trim().toLowerCase()) >= 0 })
+                                property bool offlineOnly: false
+                                property var offlineIds: []
+                                property var offlineById: ({})
+                                property string cacheStamp: ""
+                                readonly property int playingIndex: root.trackIndex(model, player.currentTrack)
+                                readonly property int unfilteredPlayingIndex: root.trackIndex(player.tracks, player.currentTrack)
+                                function refreshOffline(force) {
+                                    var stamp = player.cacheEntries.filter(function(entry) {
+                                        return entry.state === "complete" && !entry.pendingDelete
+                                    }).map(function(entry) { return entry.key }).join("\n")
+                                    if (!force && stamp === cacheStamp) return
+                                    cacheStamp = stamp
+                                    var available = player.offlineTrackIds()
+                                    if (available.length === offlineIds.length && available.every(function(id, i) { return offlineIds[i] === id })) return
+                                    var next = Object.create(null)
+                                    available.forEach(function(id) { next[id] = true })
+                                    offlineIds = available
+                                    offlineById = next
+                                }
+                                function revealCurrent() {
+                                    if (playingIndex < 0) { filter.clear(); offlineOnly = false }
+                                    Qt.callLater(function() {
+                                        if (songs.visible && songs.playingIndex >= 0)
+                                            songs.positionViewAtIndex(songs.playingIndex, ListView.Center)
+                                    })
+                                }
+                                model: {
+                                    var query = filter.text.trim().toLowerCase()
+                                    var terms = query.length ? query.split(/\s+/) : []
+                                    return player.tracks.filter(function(track) {
+                                        if (songs.offlineOnly && !songs.offlineById[track.id]) return false
+                                        var words = (track.name + " " + (track.artist || "")).toLowerCase()
+                                        return terms.every(function(term) { return words.indexOf(term) >= 0 })
+                                    })
+                                }
                                 property int dragFrom: -1
                                 property int dragTo: -1
                                 property real dragPointerY: 0
-                                readonly property bool reorderEnabled: !root.selectingTracks && filter.text.trim().length === 0
+                                readonly property bool reorderEnabled: !root.selectingTracks && !offlineOnly && filter.text.trim().length === 0
                                 boundsBehavior: Flickable.StopAtBounds
                                 // Keep the pressed delegate alive while edge-scrolling a long playlist.
                                 currentIndex: dragFrom
@@ -1332,8 +1473,14 @@ ApplicationWindow {
                                         player.libraryAction("moveTrack", { from: from, to: to })
                                 }
                                 onModelChanged: endReorder(false)
-                                onVisibleChanged: if (!visible) endReorder(false)
+                                onVisibleChanged: { if (visible) refreshOffline(true); else endReorder(false) }
                                 ScrollBar.vertical: ScrollBar {}
+                                CurrentTrackJump {
+                                    parent: songs; objectName: "jumpToCurrentPlaylistTrack"
+                                    list: songs; targetIndex: songs.playingIndex
+                                    filteredOut: songs.playingIndex < 0 && songs.unfilteredPlayingIndex >= 0
+                                    onRevealRequested: songs.revealCurrent()
+                                }
                                 Timer {
                                     interval: 45; repeat: true; running: songs.dragFrom >= 0
                                     onTriggered: {
@@ -1348,9 +1495,11 @@ ApplicationWindow {
                                     id: libraryTrack
                                     required property var modelData
                                     required property int index
+                                    objectName: "libraryTrack-" + modelData.id
                                     readonly property bool selected: root.hasSelected(modelData.id)
+                                    readonly property bool current: player.currentTrack === modelData.id
                                     width: songs.width - 10; height: 58; radius: 8
-                                    color: selected || player.currentTrack === modelData.id ? root.selection : trackHover.hovered ? root.backdrop : "transparent"
+                                    color: selected || current ? root.selection : trackHover.hovered ? root.backdrop : "transparent"
                                     opacity: songs.dragFrom === index ? 0.6 : 1
                                     HoverHandler { id: trackHover }
                                     Rectangle {
@@ -1393,13 +1542,13 @@ ApplicationWindow {
                                         Button {
                                             id: trackTap
                                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.fillHeight: true; padding: 4
-                                            Accessible.name: (root.selectingTracks ? root.t("选择 ") : root.t("播放 ")) + libraryTrack.modelData.name + "，" + root.trackSourceName(libraryTrack.modelData)
+                                            Accessible.name: (root.selectingTracks ? root.t("选择 ") : libraryTrack.current ? root.t("当前歌曲，") : root.t("播放 ")) + libraryTrack.modelData.name + "，" + root.trackSourceName(libraryTrack.modelData)
                                             contentItem: ColumnLayout {
                                                 spacing: 4
                                                 scale: appearance.animationsEnabled && trackTap.down ? 0.97 : 1
                                                 Behavior on scale { enabled: appearance.animationsEnabled; NumberAnimation { duration: trackTap.down ? 80 : 150; easing.type: Easing.OutCubic } }
-                                                Copy { text: libraryTrack.modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold }
-                                                TrackMetadata { track: libraryTrack.modelData; Layout.fillWidth: true; Layout.minimumWidth: 0 }
+                                                Copy { text: libraryTrack.modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold; color: libraryTrack.current ? root.accent : root.ink }
+                                                TrackMetadata { track: libraryTrack.modelData; offline: !!songs.offlineById[track.id]; Layout.fillWidth: true; Layout.minimumWidth: 0 }
                                             }
                                             background: Rectangle { color: "transparent"; radius: 8; border.width: parent.activeFocus ? 2 : 0; border.color: root.accent }
                                             onClicked: { if (root.selectingTracks) root.toggleTrack(libraryTrack.modelData.id); else if (!player.busy) player.playTrack(libraryTrack.modelData.id) }
@@ -1452,18 +1601,22 @@ ApplicationWindow {
                                 Item {
                                     ColumnLayout {
                                         id: searchTools
-                                        parent: root.searchKind === "playlists" ? playlistResults.headerItem : results.headerItem
+                                        parent: {
+                                            var view = root.activeSearchView()
+                                            return view ? view.headerItem : null
+                                        }
                                         width: parent ? parent.width : 0; spacing: 6
                                         RowLayout {
                                             Layout.fillWidth: true
                                             Action { glyph: "back"; text: root.t("更多"); quiet: true; onClicked: root.detail = "" }
                                             Item { Layout.fillWidth: true }
-                                            Copy { text: root.searchKind === "songs" ? root.t("搜索音乐") : root.t("搜索歌单"); font.weight: Font.DemiBold }
+                                            Copy { text: root.t(root.searchKind === "artists" ? "搜索歌手" : root.searchKind === "playlists" ? "搜索歌单" : "搜索音乐"); font.weight: Font.DemiBold }
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 6
                                             Action { text: root.t("歌曲"); selected: root.searchKind === "songs"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "songs" }
                                             Action { text: root.t("歌单"); selected: root.searchKind === "playlists"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "playlists" }
+                                            Action { objectName: "artistSearchTab"; text: root.t("歌手"); selected: root.searchKind === "artists"; quiet: true; Layout.fillWidth: true; onClicked: root.searchKind = "artists" }
                                         }
                                         Flow {
                                             objectName: "searchSourceChoices"; Layout.fillWidth: true; spacing: 6
@@ -1473,21 +1626,26 @@ ApplicationWindow {
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 6
-                                            Field { id: keywords; objectName: "searchInput"; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: root.searchKind === "songs" ? root.t("输入歌名或歌手") : root.t("输入歌单名称"); Accessible.name: placeholderText; onAccepted: root.startSearch() }
-                                            Action { objectName: "searchButton"; glyph: "search"; text: (root.searchKind === "songs" ? player.searching : player.playlistSearching) ? root.t("搜索中") : root.t("搜索"); enabled: player.searchSources.length > 0 && !(root.searchKind === "songs" ? player.searching : player.playlistSearching); onClicked: root.startSearch() }
+                                            Field { id: keywords; objectName: "searchInput"; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: root.t(root.searchKind === "artists" ? "输入歌手名" : root.searchKind === "playlists" ? "输入歌单名称" : "输入歌名或歌手"); Accessible.name: placeholderText; onAccepted: root.startSearch() }
+                                            Action { objectName: "searchButton"; glyph: "search"; text: root.searchRunning ? root.t("搜索中") : root.t("搜索"); enabled: player.searchSources.length > 0 && !root.searchRunning; onClicked: root.startSearch() }
                                         }
-                                        Hint { text: root.searchKind === "songs" ? root.t(player.searchMessage) : root.t(player.playlistSearchMessage); visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
+                                        Hint { text: root.t(root.searchKind === "artists" ? root.artistState.searchError : root.searchKind === "playlists" ? player.playlistSearchMessage : player.searchMessage); visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                                         Hint { text: root.t(player.playbackMessage); visible: text.length > 0; maximumLineCount: 2; elide: Text.ElideRight }
                                     }
                                     StackLayout {
                                         anchors.fill: parent
-                                        currentIndex: root.searchKind === "playlists" ? 1 : 0
+                                        currentIndex: root.searchKind === "artists" ? 2 : root.searchKind === "playlists" ? 1 : 0
                                         ListView {
                                             id: results; objectName: "searchResults"; clip: true
                                             boundsBehavior: Flickable.StopAtBounds
                                             headerPositioning: ListView.InlineHeader
                                             header: Item { width: results.width - 12; height: root.searchKind === "songs" ? searchTools.implicitHeight + 8 : 0 }
                                             model: player.searchResults; ScrollBar.vertical: ScrollBar {}
+                                            CurrentTrackJump {
+                                                parent: results; objectName: "jumpToCurrentSearchTrack"
+                                                list: results; targetIndex: root.trackIndex(results.model, player.currentTrack)
+                                                onRevealRequested: results.positionViewAtIndex(targetIndex, ListView.Center)
+                                            }
                                             delegate: SongRow {
                                                 required property var modelData; required property int index
                                                 track: modelData; extraText: "+"
@@ -1538,6 +1696,135 @@ ApplicationWindow {
                                             footer: Item {
                                                 width: playlistResults.width; height: playlistResults.count === 0 ? 80 : 0
                                                 Hint { anchors.centerIn: parent; width: parent.width; horizontalAlignment: Text.AlignHCenter; visible: playlistResults.count === 0; text: player.playlistSearching ? root.t("正在查找歌单…") : player.searchSources.length === 0 ? root.t("勾选曲库后即可搜索歌单") : root.t("输入歌单名称，发现想听的音乐") }
+                                            }
+                                        }
+                                        StackLayout {
+                                            currentIndex: root.artistProfileOpen ? 1 : 0
+                                            ListView {
+                                                id: artistResults; objectName: "artistSearchResults"; clip: true
+                                                model: root.artistState.results || []
+                                                boundsBehavior: Flickable.StopAtBounds
+                                                headerPositioning: ListView.InlineHeader
+                                                header: Item { width: artistResults.width - 12; height: root.searchKind === "artists" ? searchTools.implicitHeight + 8 : 0 }
+                                                ScrollBar.vertical: ScrollBar {}
+                                                delegate: PressRow {
+                                                    required property var modelData
+                                                    required property int index
+                                                    objectName: "artistResult_" + index
+                                                    width: artistResults.width - 10; height: 58
+                                                    Accessible.name: root.t("查看歌手") + " " + modelData.name + " · " + root.onlineSourceName(modelData)
+                                                    contentItem: RowLayout {
+                                                        ColumnLayout {
+                                                            Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 2
+                                                            Copy { text: modelData.name; Layout.fillWidth: true; font.weight: Font.DemiBold }
+                                                            Copy { text: root.onlineSourceName(modelData); Layout.fillWidth: true; font.pixelSize: 12; color: root.muted }
+                                                        }
+                                                        Glyph { kind: "forward"; tint: root.muted; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
+                                                    }
+                                                    onClicked: root.openArtistProfile(modelData)
+                                                }
+                                                footer: Item {
+                                                    width: artistResults.width; height: artistResults.count === 0 ? 76 : 0
+                                                    Hint {
+                                                        anchors.centerIn: parent; width: parent.width - 16; visible: artistResults.count === 0
+                                                        horizontalAlignment: Text.AlignHCenter
+                                                        text: root.t(root.artistState.searching ? "搜索中" : "输入歌手名查找资料与作品。")
+                                                    }
+                                                }
+                                            }
+                                            ListView {
+                                                id: artistWorks; objectName: "artistWorksList"; clip: true
+                                                readonly property var profile: root.artistState.detail || ({})
+                                                property string query: ""
+                                                readonly property bool searchingWorks: query.trim().length > 0
+                                                readonly property bool complete: !!profile.id && !profile.hasMore && !root.artistState.worksLoading
+                                                readonly property var allTracks: profile.tracks || []
+                                                model: searchingWorks && allTracks.length ? player.musicArtists.filteredWorks(query) : allTracks
+                                                boundsBehavior: Flickable.StopAtBounds
+                                                ScrollBar.vertical: ScrollBar {}
+                                                CurrentTrackJump {
+                                                    parent: artistWorks; objectName: "jumpToCurrentArtistTrack"
+                                                    list: artistWorks; targetIndex: root.trackIndex(artistWorks.model, player.currentTrack)
+                                                    filteredOut: targetIndex < 0 && root.trackIndex(artistWorks.allTracks, player.currentTrack) >= 0
+                                                    onRevealRequested: {
+                                                        if (filteredOut) artistWorks.query = ""
+                                                        Qt.callLater(function() {
+                                                            var index = root.trackIndex(artistWorks.model, player.currentTrack)
+                                                            if (artistWorks.visible && index >= 0)
+                                                                artistWorks.positionViewAtIndex(index, ListView.Center)
+                                                        })
+                                                    }
+                                                }
+                                                header: ColumnLayout {
+                                                    width: artistWorks.width - 12; spacing: 6
+                                                    RowLayout {
+                                                        Layout.fillWidth: true; spacing: 6
+                                                        Action { objectName: "artistProfileBack"; glyph: "back"; quiet: true; Accessible.name: root.t("搜索歌手"); ToolTip.text: Accessible.name; onClicked: root.closeArtistProfile() }
+                                                        Copy { objectName: "artistProfileName"; text: artistWorks.profile.name || root.selectedArtist.name || root.t("歌手资料"); Layout.fillWidth: true; Layout.minimumWidth: 0; font.weight: Font.DemiBold }
+                                                        Copy { text: root.onlineSourceName(root.selectedArtist); color: root.accent; font.pixelSize: 12 }
+                                                    }
+                                                    Hint { visible: !!root.artistState.loading; text: root.t("正在加载歌手资料…") }
+                                                    ExpandableDescription {
+                                                        visible: !root.artistState.loading && !!artistWorks.profile.description
+                                                        fullText: artistWorks.profile.description || ""
+                                                        contextKey: root.selectedArtist.source + ":" + root.selectedArtist.id
+                                                        textName: "artistBiography"; browsing: artistWorks.dragging || artistWorks.flicking
+                                                    }
+                                                    Hint { visible: !root.artistState.loading && !artistWorks.profile.description; text: root.t("暂无歌手简介。") }
+                                                    Hint { visible: !!root.artistState.detailError; text: root.t(root.artistState.detailError) }
+                                                    Action { visible: !!root.artistState.detailError && !root.artistState.loading; text: root.t("重试"); quiet: true; onClicked: root.openArtistProfile(root.selectedArtist) }
+                                                    Copy { visible: !!artistWorks.profile.id; text: root.t(artistWorks.searchingWorks ? "搜索结果" : "作品") + " · " + artistWorks.count + root.t(" 首"); font.weight: Font.DemiBold }
+                                                    Field {
+                                                        objectName: "artistWorkFilter"; Layout.fillWidth: true
+                                                        visible: !!artistWorks.profile.id; maximumLength: 200
+                                                        placeholderText: root.t("搜索作品、歌手或专辑"); Accessible.name: placeholderText
+                                                        text: artistWorks.query
+                                                        onTextChanged: {
+                                                            if (artistWorks.query === text) return
+                                                            artistWorks.query = text
+                                                            artistWorks.positionViewAtBeginning()
+                                                            if (artistWorks.searchingWorks && !root.artistState.worksError)
+                                                                player.musicArtists.action("loadAll")
+                                                        }
+                                                    }
+                                                    Action {
+                                                        objectName: "showAllArtistWorks"; Layout.fillWidth: true
+                                                        visible: !!artistWorks.profile.hasMore && !root.artistState.worksLoading
+                                                        text: root.t(root.artistState.worksError ? "重试加载作品" : "显示全部作品")
+                                                        onClicked: player.musicArtists.action("loadAll")
+                                                    }
+                                                    Hint { visible: !!root.artistState.worksLoading; text: root.t("正在加载作品…") }
+                                                    Hint { visible: !!root.artistState.worksError; text: root.t(root.artistState.worksError) }
+                                                    RowLayout {
+                                                        Layout.fillWidth: true; visible: artistWorks.count > 0; spacing: 6
+                                                        Action {
+                                                            glyph: "play"; quiet: true; enabled: artistWorks.count > 0 && !player.busy
+                                                            Accessible.name: root.t("播放第一首"); ToolTip.text: Accessible.name
+                                                            onClicked: player.libraryAction("artist", { action: "play", args: { id: artistWorks.model[0].id } })
+                                                        }
+                                                        Action {
+                                                            objectName: "importArtistWorks"; Layout.fillWidth: true
+                                                            text: root.t(artistWorks.searchingWorks ? "导入搜索结果" : "导入作品")
+                                                            enabled: artistWorks.complete && artistWorks.count > 0
+                                                            onClicked: root.showArtistImport()
+                                                        }
+                                                        Action {
+                                                            text: root.t("缓存"); enabled: artistWorks.complete && artistWorks.count > 0
+                                                            onClicked: { player.cacheTracks(artistWorks.model); root.openDetail("settings"); root.openSettingsPage("cache") }
+                                                        }
+                                                    }
+                                                    Hint { visible: artistWorks.complete && artistWorks.count === 0; text: root.t(artistWorks.searchingWorks ? "没有符合条件的作品。" : "暂无可播放的作品。") }
+                                                    Hint { text: root.t(player.libraryMessage); visible: text.length > 0 }
+                                                }
+                                                delegate: SongRow {
+                                                    required property var modelData
+                                                    required property int index
+                                                    track: modelData; menuObjectName: "artistWorkMenu_" + index
+                                                    extraText: "+"; extraLabel: root.t("加入歌单")
+                                                    onExtraRequested: root.showArtistImport(modelData.id)
+                                                    onPlayRequested: player.libraryAction("artist", { action: "play", args: { id: modelData.id } })
+                                                    onMenuRequested: root.openTrackMenu(modelData)
+                                                }
                                             }
                                         }
                                     }
@@ -1873,7 +2160,7 @@ ApplicationWindow {
                                         }
                                         }
                                         ColumnLayout { property string settingsKey: "about"; visible: root.settingsPage === "about"; Layout.fillWidth: true; spacing: 8
-                                        SettingsHeading { label: root.t("浮音 1.7.0-preview.3"); glyph: "info"; Layout.topMargin: 0 }
+                                        SettingsHeading { label: root.t("浮音 1.8.0-preview.3"); glyph: "info"; Layout.topMargin: 0 }
                                         Hint { text: root.t("Windows 桌面预览 · 拖动顶部移动窗口\nCtrl+F 搜索 · Ctrl+O 导入 · Esc 返回或收起") }
                                         }
                                     }
@@ -1976,6 +2263,12 @@ ApplicationWindow {
                                     ListView {
                                         id: onlineTracks; objectName: "onlinePlaylistTracks"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
                                         model: player.onlinePlaylistLoading ? [] : (player.onlinePlaylist.tracks || [])
+                                        readonly property int playingIndex: root.trackIndex(model, player.currentTrack)
+                                        CurrentTrackJump {
+                                            parent: onlineTracks; objectName: "jumpToCurrentOnlineTrack"
+                                            list: onlineTracks; targetIndex: onlineTracks.playingIndex
+                                            onRevealRequested: onlineTracks.positionViewAtIndex(targetIndex, ListView.Center)
+                                        }
                                         ScrollBar.vertical: ScrollBar {}
                                         headerPositioning: ListView.InlineHeader
                                         boundsBehavior: Flickable.StopAtBounds
@@ -2032,6 +2325,12 @@ ApplicationWindow {
                                     ListView {
                                         id: queueView; objectName: "queueView"; anchors.fill: parent; clip: true
                                         model: player.queueEntries
+                                        readonly property int playingIndex: root.trackIndex(model, player.currentQueueEntry, "queueId")
+                                        CurrentTrackJump {
+                                            parent: queueView; objectName: "jumpToCurrentQueueTrack"
+                                            list: queueView; targetIndex: queueView.playingIndex
+                                            onRevealRequested: queueView.positionViewAtIndex(targetIndex, ListView.Center)
+                                        }
                                         headerPositioning: ListView.InlineHeader
                                         header: Item { width: queueView.width - 12; height: queueTools.implicitHeight + 8 }
                                         boundsBehavior: Flickable.StopAtBounds
@@ -2151,6 +2450,12 @@ ApplicationWindow {
                                     ListView {
                                         id: historyView; objectName: "historyView"; anchors.fill: parent; clip: true
                                         model: player.historyEntries
+                                        readonly property int playingIndex: root.trackIndex(model, player.currentTrack)
+                                        CurrentTrackJump {
+                                            parent: historyView; objectName: "jumpToCurrentHistoryTrack"
+                                            list: historyView; targetIndex: historyView.playingIndex
+                                            onRevealRequested: historyView.positionViewAtIndex(targetIndex, ListView.Center)
+                                        }
                                         headerPositioning: ListView.InlineHeader
                                         header: Item { width: historyView.width - 12; height: historyTools.implicitHeight + 8 }
                                         boundsBehavior: Flickable.StopAtBounds
@@ -2386,21 +2691,29 @@ ApplicationWindow {
         }
     }
     LibrarySheet {
-        id: targetSheet; heading: mode === "online" ? root.t("导入在线歌单") : mode === "move" ? root.t("移动歌曲") : root.t("复制歌曲")
+        id: targetSheet; heading: mode === "artist" ? root.t("导入作品") : mode === "online" ? root.t("导入在线歌单") : mode === "move" ? root.t("移动歌曲") : root.t("复制歌曲")
         property string sourceId: ""
         property string mode: "copy"
         property var ids: []
         property var targets: []
-        Hint { text: targetSheet.mode === "online" ? root.t("选择导入位置。已有歌曲会自动跳过，新建歌单会保留原名称和简介。") : root.t("将 ") + targetSheet.ids.length + root.t(" 首歌曲") + (targetSheet.mode === "move" ? root.t("移动") : root.t("复制")) + root.t("到目标歌单，自动跳过已有歌曲。") }
+        property var artistRequest: ({})
+        property int artistCount: 0
+        Hint { text: targetSheet.mode === "artist" ? targetSheet.artistCount + root.t(" 首歌曲") + " · " + root.t("导入目标会在选择时固定；重复歌曲自动跳过。") : targetSheet.mode === "online" ? root.t("选择导入位置。已有歌曲会自动跳过，新建歌单会保留原名称和简介。") : root.t("将 ") + targetSheet.ids.length + root.t(" 首歌曲") + (targetSheet.mode === "move" ? root.t("移动") : root.t("复制")) + root.t("到目标歌单，自动跳过已有歌曲。") }
         Copy { text: root.t("目标歌单") }
-        Choice { id: transferTarget; Layout.fillWidth: true; model: targetSheet.targets; textRole: "name"; valueRole: "id"; Accessible.name: root.t("目标歌单") }
+        Choice { id: transferTarget; objectName: "playlistTransferTarget"; Layout.fillWidth: true; model: targetSheet.targets; textRole: "name"; valueRole: "id"; Accessible.name: root.t("目标歌单") }
         Hint { visible: targetSheet.targets.length === 0; text: root.t("请先在歌单管理中新建一个歌单。") }
         Action {
-            text: targetSheet.mode === "online" ? root.t("导入歌单") : targetSheet.mode === "move" ? root.t("移动") : root.t("复制")
+            objectName: "confirmPlaylistTransfer"
+            text: targetSheet.mode === "artist" ? root.t("导入") : targetSheet.mode === "online" ? root.t("导入歌单") : targetSheet.mode === "move" ? root.t("移动") : root.t("复制")
             selected: true; Layout.fillWidth: true; enabled: transferTarget.currentIndex >= 0
             onClicked: {
                 var target = transferTarget.currentValue
                 if (targetSheet.mode === "online") player.libraryAction("addOnline", { target: target })
+                else if (targetSheet.mode === "artist") {
+                    var request = targetSheet.artistRequest
+                    request.target = target
+                    player.libraryAction("artist", { action: "import", args: request })
+                }
                 else if (root.usePlaylist(targetSheet.sourceId)) {
                     player.libraryAction("transfer", { ids: targetSheet.ids, target: target, move: targetSheet.mode === "move" })
                     root.clearTrackSelection()

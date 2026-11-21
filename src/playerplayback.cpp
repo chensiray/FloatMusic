@@ -130,6 +130,7 @@ void PlayerController::clearPlaybackQueue() {
         || (!m_requestedQueueEntry.isEmpty() && m_requestedQueueEntry != m_loadedQueueEntry)) {
         // A pending selection must not recreate the queue after this clear.
         ++m_loadGeneration;
+        if (m_importCancelled) m_importCancelled->store(true);
         m_mediaTimeout.stop();
         m_pendingQueueSnapshot.clear(); m_pendingQueueIndex = -1;
         m_requestedTrack = m_loadedTrack; m_requestedQueueEntry = m_loadedQueueEntry;

@@ -50,6 +50,70 @@ public final class OverlayV12ContractTest {
         System.out.println("PASS history source and played time captions");
         localizedDynamicStatus();
         allLyricsCopyContent();
+        offlineLibraryFiles();
+        playlistFilterPositions();
+        repeatedQueueJumpPosition();
+    }
+    private static void offlineLibraryFiles() throws Exception {
+        java.nio.file.Path directory=java.nio.file.Files.createTempDirectory("floatmusic-library-files");
+        byte[] audio="RIFF\u0000\u0000\u0000\u0000WAVEfmt ".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+        JSONObject track=entry("a","netease:101");
+        String key=OfflineCache.key(track,"lossless");
+        java.nio.file.Path cached=directory.resolve(key+".audio"), index=directory.resolve("index.json");
+        java.nio.file.Path local=directory.resolve("fixture.wav");
+        java.nio.file.Files.write(cached,audio);
+        JSONObject cacheEntry=new JSONObject().put("key",key).put("track",track).put("status","ready").put("quality","lossless").put("bytes",audio.length);
+        java.nio.file.Files.write(index,new JSONObject().put("entries",new JSONArray().put(cacheEntry)).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        OfflineCache cache=new OfflineCache(directory.toFile(),(t,q,a)->{throw new AssertionError("file validation does not use the network");},()->true,new OfflineCache.Listener(){public void changed(){}public void lyrics(String id,JSONObject row){}});
+        try {
+            Method usable=OfflineCache.class.getDeclaredMethod("usableTrackIds");
+            expect(java.util.Collections.singleton("netease:101"),usable.invoke(cache),"offline library discovers a valid song independently of quality");
+            cache.pin(key,false);cache.action("remove",key);
+            require(java.nio.file.Files.exists(cached),"active cache deletion keeps the file until playback releases it");
+            expect(java.util.Collections.emptySet(),usable.invoke(cache),"pending-deletion cache cannot mark a library track playable");
+            cache.close();
+            java.nio.file.Files.write(index,new JSONObject().put("entries",new JSONArray().put(cacheEntry)).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            cache=new OfflineCache(directory.toFile(),(t,q,a)->{throw new AssertionError("file validation does not use the network");},()->true,new OfflineCache.Listener(){public void changed(){}public void lyrics(String id,JSONObject row){}});
+            java.nio.file.Files.write(cached,new byte[audio.length]);
+            expect(java.util.Collections.emptySet(),usable.invoke(cache),"offline library rechecks the actual cached file");
+            Method localPlayable=PlaybackService.class.getDeclaredMethod("hasPlayableLocalFile",String.class);
+            require(!(Boolean)localPlayable.invoke(null,local.toString()),"a missing import is unavailable");
+            java.nio.file.Files.write(local,audio);
+            require((Boolean)localPlayable.invoke(null,local.toString()),"an available local audio file qualifies");
+            java.nio.file.Files.write(local,new byte[audio.length]);
+            require(!(Boolean)localPlayable.invoke(null,local.toString()),"a corrupt local file is unavailable");
+        } finally {
+            cache.close();
+            java.nio.file.Files.deleteIfExists(cached);
+            java.nio.file.Files.deleteIfExists(local);
+            java.nio.file.Files.deleteIfExists(index);
+            java.nio.file.Files.deleteIfExists(directory.resolve("index.part"));
+            java.nio.file.Files.delete(directory);
+        }
+        System.out.println("PASS offline library verifies cached files and local audio headers");
+    }
+    private static void playlistFilterPositions() throws Exception {
+        JSONArray tracks=new JSONArray()
+            .put(entry("a","netease:101").put("name","Blue Hour").put("artist","Ada"))
+            .put(entry("b","tencent:101").put("name","Blue Hour").put("artist","Ada"))
+            .put(new JSONObject().put("id","local:fixture.wav").put("source","local").put("name","蓝调").put("artist","Ada"))
+            .put(entry("d","netease:102").put("name","Night").put("artist","Lin"));
+        java.util.Set<String> offline=new java.util.HashSet<>(java.util.Arrays.asList("tencent:101","local:fixture.wav"));
+        Class<?>[] signature={JSONArray.class,String.class,boolean.class,java.util.Set.class};
+        expect(java.util.Arrays.asList(0,1),call("playlistIndices",signature,tracks," HOUR   ada ",false,offline),"every term can match the title or artist");
+        expect(java.util.Arrays.asList(1),call("playlistIndices",signature,tracks,"hour",true,offline),"offline filtering keeps the original position and platform identity");
+        expect(java.util.Arrays.asList(1,2),call("playlistIndices",signature,tracks," ",true,offline),"an empty query shows all playable offline rows");
+        expect(java.util.Arrays.asList(2),call("playlistIndices",signature,tracks,"蓝调",false,offline),"playlist searches preserve Unicode text");
+        System.out.println("PASS playlist filters retain source positions and platform identities");
+    }
+    private static void repeatedQueueJumpPosition() throws Exception {
+        JSONArray queue=new JSONArray();
+        for(int i=0;i<=80;i++)queue.put(entry("entry-"+i,"netease:101"));
+        Class<?>[] signature={JSONArray.class,String.class,String.class};
+        expect(80,call("currentSongIndex",signature,queue,"queue","entry-80"),"queue jump finds the later occurrence across pages");
+        expect(-1,call("currentSongIndex",signature,queue,"queue","netease:101"),"a song ID cannot identify a queue occurrence");
+        expect(0,call("currentSongIndex",signature,queue,"tracks","netease:101"),"ordinary song lists locate tracks by song identity");
+        System.out.println("PASS queue jump targets the loaded occurrence across page boundaries");
     }
     private static void allLyricsCopyContent() throws Exception {
         JSONObject playback=new JSONObject().put("currentTrack","fixture");

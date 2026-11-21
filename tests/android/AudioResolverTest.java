@@ -62,6 +62,7 @@ public final class AudioResolverTest {
         volatile byte[] netAudio=mp3(128),backupAudio=mp3(128),kwAudio=flac(44100,16,200);
         volatile int gdStatus=200,legacyStatus=200,qqStatus=200,kwStatus=200,qqCode=0,netDelay=0,qqDelay=0;
         volatile boolean qqEmpty=false,qqBadAudio=false,originBad=false,qqMismatch=false,qqMissingMid=false,qqStringCode=false,kwStringOk=false;
+        volatile boolean qqCopyrightDenied=false;
         volatile String kwRid="9001",kwType="0",kwDuration="200",kwMode="wrapped";
         volatile long mediaTotal=5000000;volatile CountDownLatch qqStarted=new CountDownLatch(0);
         final Map<String,byte[]> qqAudio=new ConcurrentHashMap<>();
@@ -87,6 +88,7 @@ public final class AudioResolverTest {
                         body="{\"code\":"+(qqStringCode?"\"0\"":qqCode)+",\"message\":\"secret signed-token\",\"data\":{"
                             +(qqMissingMid?"":"\"songMID\":\""+(qqMismatch?"DifferentMID":mid)+"\",")
                             +"\"url\":\""+base+(qqBadAudio?"/html":"/qq/audio/"+level+"?sig=signed%2Bvalue")+"\",\"kbps\":\"9999kbps\"}}";
+                        if(qqCopyrightDenied)body="{\"code\":403,\"message\":\"由于版权限制，无法播放该歌曲。\"}";
                     }else if(path.equals("/mobi")){
                         status=kwStatus;body="{\"code\":200,\"data\":{\"rid\":\""+kwRid+"\",\"type\":"+kwType+",\"duration\":\""+kwDuration+"\",\"url\":\""+base+"/kw/audio?sig=keep%2Bthis\"}}";
                     }else if(path.equals("/api")){
@@ -105,7 +107,9 @@ public final class AudioResolverTest {
                         probes.incrementAndGet();check("bytes=0-16383".equals(exchange.getRequestHeaders().getFirst("Range")),"probe must be bounded to 16 KiB");
                         exchange.getResponseHeaders().set("Content-Range","bytes 0-"+(binary.length-1)+"/"+mediaTotal);
                     }
-                    byte[] bytes=binary==null?body.getBytes(StandardCharsets.UTF_8):binary;if(status>=400)bytes="unavailable".getBytes(StandardCharsets.UTF_8);
+                    byte[] bytes=binary==null?body.getBytes(StandardCharsets.UTF_8):binary;
+                    if(status>=400&&!(path.equals("/music/tencent/song/link")&&qqCopyrightDenied))
+                        bytes="unavailable".getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().set("Content-Type",type);exchange.sendResponseHeaders(status,bytes.length==0?-1:bytes.length);
                     if(bytes.length>0)exchange.getResponseBody().write(bytes);
                 }finally{exchange.close();}
@@ -123,6 +127,25 @@ public final class AudioResolverTest {
         return r.resolve(source,id,quality,"",Collections.emptySet(),()->true,duration);
     }
     public static void main(String[] args) throws Exception {
+        try(Fixture f=new Fixture()){
+            f.qqCopyrightDenied=true;f.qqEmpty=true;
+            try{resolve(f.resolver(),"tencent","002SongMID9","standard");throw new AssertionError("rights denial should fail");}
+            catch(AudioResolver.CopyrightRestriction expected){}
+            f.qqStatus=403;
+            try{resolve(f.resolver(),"tencent","002SongMID9","standard");throw new AssertionError("HTTP rights denial should fail");}
+            catch(AudioResolver.CopyrightRestriction expected){}
+            f.qqCopyrightDenied=false;
+            check(!failure(()->resolve(f.resolver(),"tencent","002SongMID9","standard")).contains("因版权限制"),
+                "bare HTTP 403 is not a copyright denial");
+            f.qqCopyrightDenied=true;
+            f.qqStatus=503;
+            check(!failure(()->resolve(f.resolver(),"tencent","002SongMID9","standard")).contains("因版权限制"),
+                "HTTP failure is not a copyright denial");
+            f.qqStatus=200;f.qqEmpty=false;
+            check(resolve(f.resolver(),"tencent","002SongMID9","standard").sourceId.equals("qq-injahow"),
+                "a valid alternate route still plays after an explicit denial");
+            System.out.println("PASS explicit rights denial, service failure and successful fallback are distinct");
+        }
         try(Fixture f=new Fixture()){
             AudioResolver.Result result=resolve(f.resolver(),"tencent","002SongMID9","exhigh");
             check(f.requests.contains("/music/tencent/song/link?mid=002SongMID9&quality=8&type=0")&&result.sourceId.equals("qq-vkeys-exhigh"),"QQ high-bitrate preference must request q8 for the same MID");

@@ -13,6 +13,7 @@
 
 namespace {
 constexpr int pageSize = 100, trackLimit = 2000, maxPages = 40;
+constexpr int artistWorkPageSize = 50, qqArtistPageSize = 30;
 QString sourceName(const QString &s) {
     return s == "tencent" ? QStringLiteral("QQ 音乐")
            : s == "kuwo"  ? QStringLiteral("酷我音乐")
@@ -30,6 +31,12 @@ QString numericId(const QJsonValue &v) {
     static const QRegularExpression re("^[1-9][0-9]{0,18}$");
     const auto id = numberText(v);
     return re.match(id).hasMatch() ? id : QString();
+}
+QString artistId(const QString &source, const QJsonValue &value) {
+    if (source == "netease" || source == "kuwo") return numericId(value);
+    static const QRegularExpression mid("^[A-Za-z0-9]{1,64}$");
+    const auto id = value.toString();
+    return source == "tencent" && mid.match(id).hasMatch() ? id : QString();
 }
 QStringList selectedSources(const QStringList &sources) {
     QStringList result;
@@ -118,14 +125,17 @@ QVariantMap track(const QString &s, const QJsonObject &song) {
     if (id.isEmpty() || name.isEmpty())
         return {};
     const auto album = song.value("album");
+    const auto duration = count(song.value(s == "tencent" ? "interval" : "duration"), 0);
+    const auto artists = song.value(s == "tencent" ? "singer" : s == "netease" ? "artists" : "artist");
     QVariantMap result{{"id", s + ':' + id},
             {"songId", id},
             {"source", s},
             {"sourceName", sourceName(s)},
             {"name", name},
-            {"artist", names(song.value(s == "tencent" ? "singer" : "artist"))},
+            {"artist", names(artists)},
             {"album", album.isObject() ? album.toObject().value("name").toString() : album.toString()},
-            {"duration", count(song.value(s == "tencent" ? "interval" : "duration"), 0)}};
+            {"duration", duration}};
+    if (s == "netease") result["duration"] = duration / 1000.0;
     QString cover=song.value("pic").toString();
     if(s=="tencent"){
         const auto mid=album.toObject().value("mid").toString();
@@ -133,6 +143,7 @@ QVariantMap track(const QString &s, const QJsonObject &song) {
     }
     cover=ArtworkPolicy::fromSong(s,song.toVariantMap());
     if(!cover.isEmpty())result["coverUrl"]=cover;
+    if (CatalogCodec::trackRestricted(s, song)) result["unavailable"] = true;
     return result;
 }
 QString firstText(const QJsonObject &o, const QStringList &keys) {
@@ -190,6 +201,241 @@ QNetworkReply *MusicApi::qqRequest(const QString &module, const QString &method,
                                             {"platform", "yqq.json"}});
     return request(QUrl(m_endpoints.qqMusicu), QJsonDocument(envelope).toJson(QJsonDocument::Compact), true,
                    QStringLiteral("读取 QQ 音乐目录"), std::move(done));
+}
+
+QList<QPointer<QNetworkReply>> MusicApi::searchArtists(const QString &query, const QStringList &sources, int limit,
+                                                     std::function<void(QVariantList, QString)> done) {
+    const auto keywords = query.trimmed().left(200);
+    const auto selected = selectedSources(sources);
+    limit = qBound(1, limit, 100);
+    if (keywords.isEmpty() || selected.isEmpty()) {
+        done({}, {});
+        return {};
+    }
+    struct Search {
+        qsizetype remaining;
+        QHash<QString, QMap<int, QVariantList>> pages;
+        QSet<QString> failed;
+    };
+    const auto batch = std::make_shared<Search>();
+    // The public QQ artist endpoint returns empty lists for larger single-page requests.
+    const int qqPages = (limit + qqArtistPageSize - 1) / qqArtistPageSize;
+    batch->remaining = selected.size() + (selected.contains("tencent") ? qqPages - 1 : 0);
+    QList<QPointer<QNetworkReply>> replies;
+    for (const auto &source : selected) {
+        const bool qq = source == "tencent";
+        for (int page = 1; page <= (qq ? qqPages : 1); ++page) {
+            replies.append(searchArtistSource(source, keywords, qq ? qMin(limit, qqArtistPageSize) : limit, page,
+                [source, page, selected, limit, batch, done](QVariantList rows, QString error) {
+                    if (error.isEmpty()) batch->pages[source].insert(page, std::move(rows));
+                    else batch->failed.insert(source);
+                    if (--batch->remaining) return;
+
+                    QHash<QString, QVariantList> lists;
+                    QStringList messages;
+                    for (const auto &s : selected) {
+                        const auto pages = batch->pages.value(s);
+                        QSet<QString> seen;
+                        for (const auto &items : pages) {
+                            for (const auto &item : items) {
+                                const auto id = item.toMap().value("id").toString();
+                                if (seen.contains(id)) continue;
+                                seen.insert(id);
+                                lists[s].append(item);
+                            }
+                        }
+                        if (batch->failed.contains(s))
+                            messages.append(QStringLiteral("%1 歌手搜索暂不可用。").arg(sourceName(s)));
+                    }
+                    done(merge(selected, lists, limit), messages.join('\n'));
+                }));
+        }
+    }
+    return replies;
+}
+
+QNetworkReply *MusicApi::searchArtistSource(const QString &source, const QString &keywords, int limit, int page,
+                                           std::function<void(QVariantList, QString)> done) {
+    const auto callback = [source, limit, done](QByteArray bytes, QString error) {
+        QJsonValue rows;
+        bool empty = false;
+        if (error.isEmpty()) {
+            if (source == "netease") {
+                const auto result = parseJson(bytes, error).value("result").toObject();
+                rows = result.value("artists");
+                empty = count(result.value("artistCount")) == 0;
+            } else if (source == "tencent") {
+                const auto result = qqData(bytes, "music.search.SearchCgiService", error).value("body").toObject();
+                rows = result.value("singer").toObject().value("list");
+            } else {
+                const auto result = CatalogCodec::parseLiteral(bytes, error).object();
+                rows = result.value("abslist");
+                empty = count(result.value("TOTAL")) == 0;
+            }
+            if (error.isEmpty() && !rows.isArray() && !empty)
+                error = QStringLiteral("搜索响应缺少歌手列表。");
+        }
+        if (!error.isEmpty()) {
+            done({}, error);
+            return;
+        }
+
+        QVariantList artists;
+        QSet<QString> seen;
+        for (const auto &row : rows.toArray()) {
+            const auto item = row.toObject();
+            const auto id = artistId(source, item.value(source == "tencent" ? "singerMID" : source == "kuwo" ? "ARTISTID" : "id"));
+            const auto rawName = item.value(source == "tencent" ? "singerName" : source == "kuwo" ? "ARTIST" : "name").toString();
+            const auto name = CatalogCodec::descriptionText(rawName).left(200);
+            if (id.isEmpty() || name.isEmpty() || seen.contains(id)) continue;
+            seen.insert(id);
+            artists.append(QVariantMap{{"id", id}, {"source", source}, {"sourceName", sourceName(source)},
+                {"name", name}, {"description", CatalogCodec::descriptionText(item.value("desc").toString())}});
+            if (artists.size() >= limit) break;
+        }
+        done(artists, {});
+    };
+    if (source == "tencent") {
+        return qqRequest("music.search.SearchCgiService", "DoSearchForQQMusicDesktop",
+            {{"query", keywords}, {"search_type", 1}, {"num_per_page", limit}, {"page_num", page}}, callback);
+    }
+    const QUrl url = source == "netease"
+        ? queryUrl(m_endpoints.metadata + "/api/search/get", {{"s", keywords}, {"type", "100"},
+                   {"offset", "0"}, {"limit", QString::number(limit)}})
+        : queryUrl(m_endpoints.kuwoPlaylistSearch, {{"all", keywords}, {"ft", "artist"},
+                   {"itemset", "web_2013"}, {"client", "kt"}, {"pn", "0"}, {"rn", QString::number(limit)},
+                   {"rformat", "json"}, {"encoding", "utf8"}});
+    return get(url, QStringLiteral("搜索歌手"), callback);
+}
+
+QNetworkReply *MusicApi::fetchArtistProfile(const QString &source, const QString &id,
+                                           std::function<void(QString, QString)> done) {
+    if (artistId(source, id).isEmpty()) {
+        done({}, QStringLiteral("歌手资料请求无效。"));
+        return nullptr;
+    }
+    const auto callback = [source, id, done](QByteArray bytes, QString error) {
+        QString description;
+        if (error.isEmpty()) {
+            if (source == "netease") {
+                const auto result = parseJson(bytes, error);
+                description = result.value("briefDesc").toString();
+                if (description.trimmed().isEmpty()) {
+                    for (const auto &value : result.value("introduction").toArray()) {
+                        const auto section = value.toObject();
+                        if (!description.isEmpty()) description += "\n";
+                        description += section.value("ti").toString() + '\n' + section.value("txt").toString();
+                        if (description.size() >= 4000) break;
+                    }
+                }
+            } else if (source == "tencent") {
+                const auto singers = qqData(bytes, "req_0", error).value("singer_list").toArray();
+                bool matched = false;
+                for (const auto &value : singers) {
+                    const auto item = value.toObject();
+                    if (item.value("basic_info").toObject().value("singer_mid").toString() != id) continue;
+                    description = item.value("ex_info").toObject().value("desc").toString();
+                    matched = true;
+                    break;
+                }
+                if (!matched && error.isEmpty()) error = QStringLiteral("歌手资料与请求不一致。");
+            } else {
+                const auto result = CatalogCodec::parseLiteral(bytes, error).object();
+                if (error.isEmpty() && numericId(result.value("id")) != id)
+                    error = QStringLiteral("歌手资料与请求不一致。");
+                description = result.value("desc").toString();
+            }
+        }
+        done(error.isEmpty() ? CatalogCodec::descriptionText(description) : QString(), error);
+    };
+    if (source == "tencent") {
+        return qqRequest("music.musichallSinger.SingerInfoInter", "GetSingerDetail",
+            {{"singer_mids", QJsonArray{id}}, {"ex_singer", 1}}, callback);
+    }
+    const QUrl url = source == "netease"
+        ? queryUrl(m_endpoints.metadata + "/api/artist/introduction", {{"id", id}})
+        : queryUrl(m_endpoints.kuwoPlaylistSearch, {{"stype", "artistinfo"}, {"artistid", id},
+                   {"rformat", "json"}, {"encoding", "utf8"}});
+    return get(url, QStringLiteral("读取歌手简介"), callback);
+}
+
+QNetworkReply *MusicApi::fetchArtistWorks(const QString &source, const QString &id, qint64 cursor,
+                                         std::function<void(ArtistWorksPage, QString)> done) {
+    if (artistId(source, id).isEmpty()) {
+        done({}, QStringLiteral("歌手作品请求无效。"));
+        return nullptr;
+    }
+    const auto callback = [source, id, cursor, done](QByteArray bytes, QString error) {
+        QJsonValue rows;
+        qint64 total = -1;
+        QJsonValue more;
+        if (error.isEmpty()) {
+            if (source == "netease") {
+                const auto result = parseJson(bytes, error);
+                rows = result.value("songs");
+                total = count(result.value("total"));
+                more = result.value("more");
+            } else if (source == "tencent") {
+                const auto result = qqData(bytes, "req_0", error);
+                if (error.isEmpty() && result.value("singerMid").toString() != id)
+                    error = QStringLiteral("歌手作品与请求不一致。");
+                rows = result.value("songList");
+                total = count(result.value("totalNum"));
+            } else {
+                const auto result = CatalogCodec::parseLiteral(bytes, error).object();
+                rows = result.value("musiclist");
+                total = count(result.value("total"));
+            }
+            if (error.isEmpty() && !rows.isArray() && total != 0) error = QStringLiteral("响应缺少歌手作品列表。");
+        }
+        if (!error.isEmpty()) {
+            done({}, error);
+            return;
+        }
+
+        const auto works = rows.toArray();
+        const auto consumed = (source == "kuwo" ? cursor * artistWorkPageSize : cursor) + works.size();
+        ArtistWorksPage page;
+        page.nextCursor = source == "kuwo" ? cursor + 1 : consumed;
+        page.hasMore = more.isBool() ? more.toBool() : total >= 0 ? total > consumed : works.size() >= artistWorkPageSize;
+        if (page.hasMore && works.isEmpty()) {
+            done({}, QStringLiteral("歌手作品分页未能继续。"));
+            return;
+        }
+        QStringList ids;
+        for (const auto &row : works) {
+            auto song = row.toObject();
+            if (source == "tencent") song = song.value("songInfo").toObject();
+            if (source == "kuwo") {
+                song["id"] = song.value("musicrid");
+                for (const auto &field : {"name", "artist", "album"})
+                    song[field] = CatalogCodec::descriptionText(song.value(field).toString());
+            }
+            const auto item = track(source, song);
+            if (!item.isEmpty()) {
+                page.tracks.append(item);
+                ids.append(item.value("id").toString());
+            }
+        }
+        if (!works.isEmpty()) {
+            ids.removeDuplicates();
+            std::sort(ids.begin(), ids.end());
+            page.signature = QCryptographicHash::hash(ids.join('\n').toUtf8(), QCryptographicHash::Sha256);
+        }
+        done(std::move(page), {});
+    };
+    if (source == "tencent") {
+        return qqRequest("musichall.song_list_server", "GetSingerSongList",
+            {{"singerMid", id}, {"begin", cursor}, {"num", artistWorkPageSize}, {"order", 1}}, callback);
+    }
+    const auto position = QString::number(cursor);
+    const auto limit = QString::number(artistWorkPageSize);
+    const QUrl url = source == "netease"
+        ? queryUrl(m_endpoints.metadata + "/api/v1/artist/songs", {{"id", id}, {"offset", position},
+                   {"limit", limit}, {"order", "hot"}, {"work_type", "1"}})
+        : queryUrl(m_endpoints.kuwoPlaylistSearch, {{"stype", "artist2music"}, {"artistid", id}, {"pn", position},
+                   {"rn", limit}, {"rformat", "json"}, {"encoding", "utf8"}});
+    return get(url, QStringLiteral("读取歌手作品"), callback);
 }
 struct MusicApi::TencentPlaylistSearch {
     QString query;

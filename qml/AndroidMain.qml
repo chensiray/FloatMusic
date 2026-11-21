@@ -74,7 +74,12 @@ ApplicationWindow {
                     Layout.bottomMargin: 24
                     Label { text: welcomeWindow.t("浮音"); font.pixelSize: 20; font.bold: true; color: welcomeWindow.ink }
                     Item { Layout.fillWidth: true }
-                    Label { text: "FloatMusic 1.5"; font.pixelSize: 12; color: welcomeWindow.muted }
+                    Label {
+                        objectName: "androidVersionLabel"
+                        text: ("FloatMusic " + Qt.application.version).trim()
+                        font.pixelSize: 12
+                        color: welcomeWindow.muted
+                    }
                 }
 
                 Item {

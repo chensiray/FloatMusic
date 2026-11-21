@@ -114,16 +114,16 @@ try {
     $text = $result -join "`n"
     # Android prefixes the first stream line with INSTRUMENTATION_RESULT: stream=.
     $streamText = [regex]::Replace($text, '(?m)^INSTRUMENTATION_RESULT:\s*stream=', '')
-    $cases = @('successful-selection-history', 'failed-selection-retains-current', 'first-start-after-failed-replacement', 'first-start-after-cancelled-replacement', 'queue-clear-cancels-pending-snapshot', 'queue-clear-cancels-pending-import', 'quality-keeps-occurrence', 'timer-late-prepare', 'end-of-track-stops-single', 'restart-cleared-queue')
+    $cases = @('successful-selection-history', 'failed-selection-retains-current', 'first-start-after-failed-replacement', 'first-start-after-cancelled-replacement', 'queue-clear-cancels-pending-snapshot', 'queue-clear-cancels-pending-import', 'batch-import-retains-valid-files', 'quality-keeps-occurrence', 'timer-late-prepare', 'end-of-track-stops-single', 'restart-cleared-queue')
     $allCasesPassed = $true
     foreach ($scene in $cases) {
         if ([regex]::Matches($streamText, "(?m)^PASS $([regex]::Escape($scene))\s*$").Count -ne 1) { $allCasesPassed = $false }
     }
     if ($instrumentExit -ne 0 -or $streamText -cmatch '(?m)^FAIL\b' -or $text -match 'Process crashed|INSTRUMENTATION_ABORTED' -or
         -not $allCasesPassed -or
-        ([regex]::Matches($streamText, '(?m)^PASS [^\r\n]+\s*$')).Count -ne 10 -or
+        ([regex]::Matches($streamText, '(?m)^PASS [^\r\n]+\s*$')).Count -ne $cases.Count -or
         $text -notmatch '(?m)^INSTRUMENTATION_RESULT:\s*servicePassed=true\s*$' -or
-        $text -notmatch '(?m)^INSTRUMENTATION_RESULT:\s*passed=10\s*$' -or
+        $text -notmatch "(?m)^INSTRUMENTATION_RESULT:\s*passed=$($cases.Count)\s*$" -or
         $text -notmatch '(?m)^INSTRUMENTATION_CODE:\s*-1\s*$') {
         throw "Overlay 1.2 playback service regression failed. See $resultsFile"
     }

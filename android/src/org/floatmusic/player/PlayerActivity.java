@@ -129,6 +129,9 @@ public class PlayerActivity extends QtActivity {
     }
     void send(String command, String value) {
         Intent intent = new Intent(this, PlaybackService.class).setAction(command).putExtra("value", value);
+        send(intent);
+    }
+    private void send(Intent intent) {
         boolean starting=PlaybackService.instance==null;
         if(starting)PlayerBridge.serviceStarting=true;
         try { startForegroundService(intent); }
@@ -160,7 +163,8 @@ public class PlayerActivity extends QtActivity {
         if (request == 7103) completeOverlayRequest();
     }
     private void openPicker() {
-        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*");
+        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("audio/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try { picking = true; startActivityForResult(picker, PICK_AUDIO); }
         catch (Exception e) { picking = false; PlayerBridge.picking = false; Toast.makeText(this, UiStrings.text("无法打开文件选择器：") + e.getMessage(), Toast.LENGTH_LONG).show(); }
@@ -172,8 +176,11 @@ public class PlayerActivity extends QtActivity {
             picking = false;
             PlayerBridge.picking = false;
             if (PlaybackService.instance != null) PlaybackService.instance.syncOverlay();
-            if (result == RESULT_OK && data != null && data.getData() != null) {
-                try { send("import", data.getData().toString()); }
+            if (result == RESULT_OK && data != null && (data.getData() != null || data.getClipData() != null)) {
+                Intent imports = new Intent(this, PlaybackService.class).setAction("importFiles").setData(data.getData());
+                imports.setClipData(data.getClipData());
+                imports.addFlags(data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try { send(imports); }
                 catch (Exception e) { Toast.makeText(this, UiStrings.text("无法启动播放服务：") + e.getMessage(), Toast.LENGTH_LONG).show(); }
             }
             if (returnToOverlay) { returnToOverlay = false; moveTaskToBack(true); }

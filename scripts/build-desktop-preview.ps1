@@ -99,11 +99,14 @@ function Invoke-LoggedCommand {
     if ($stepExitCode -ne 0) { throw "$Name failed with exit code $stepExitCode. See $logDir" }
 }
 
-$environmentNames = @('PATH', 'QT_PLUGIN_PATH', 'QML_IMPORT_PATH', 'QML2_IMPORT_PATH', 'QT_QPA_PLATFORM', 'QT_QUICK_BACKEND', 'FLOATMUSIC_TEST_ARTIFACTS', 'FLOATMUSIC_LIVE_TESTS', 'FLOATMUSIC_LIVE_CATALOGS', 'FLOATMUSIC_LIVE_MULTISOURCE', 'FLOATMUSIC_LIVE_QUALITY')
+$liveTestFlags = @('FLOATMUSIC_LIVE_TESTS', 'FLOATMUSIC_LIVE_CATALOGS', 'FLOATMUSIC_LIVE_MULTISOURCE', 'FLOATMUSIC_LIVE_QUALITY', 'FLOATMUSIC_LIVE_ARTISTS', 'FLOATMUSIC_LIVE_DETAILS')
+$environmentNames = @('PATH', 'QT_PLUGIN_PATH', 'QML_IMPORT_PATH', 'QML2_IMPORT_PATH', 'QT_QPA_PLATFORM', 'QT_QUICK_BACKEND', 'FLOATMUSIC_TEST_ARTIFACTS') + $liveTestFlags
 $savedEnvironment = @{}
 foreach ($name in $environmentNames) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $locationPushed = $false
+$stageLock = $null
 try {
+    $stageLock = [IO.File]::Open((Join-Path $StageRoot '.build.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     $copiedFiles = 0
     foreach ($entry in @('CMakeLists.txt', 'src', 'qml', 'assets', 'resources', 'tests')) {
         $entryPath = Join-Path $sourceRoot $entry
@@ -135,8 +138,8 @@ try {
     $env:QT_QUICK_BACKEND = 'software'
     $env:FLOATMUSIC_TEST_ARTIFACTS = $testArtifactDir
     # Live tests check whether these variables exist, so remove rather than set 0.
-    foreach ($name in @('FLOATMUSIC_LIVE_TESTS', 'FLOATMUSIC_LIVE_CATALOGS', 'FLOATMUSIC_LIVE_MULTISOURCE', 'FLOATMUSIC_LIVE_QUALITY')) {
-        [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+    foreach ($name in $liveTestFlags) {
+        Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
     }
     Push-Location -LiteralPath $StageRoot
     $locationPushed = $true
@@ -187,8 +190,15 @@ try {
     $runInfo['error'] = $_.Exception.Message
     throw
 } finally {
+    if ($stageLock) { $stageLock.Dispose() }
     $runInfo['finishedAt'] = Get-Date -Format o
     $runInfo | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $logDir 'run.json') -Encoding utf8
     if ($locationPushed) { Pop-Location }
-    foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
+    foreach ($name in $environmentNames) {
+        if ($null -eq $savedEnvironment[$name]) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+        }
+    }
 }

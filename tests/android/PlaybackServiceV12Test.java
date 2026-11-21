@@ -1,11 +1,14 @@
 package org.floatmusic.player;
 
 import android.app.Instrumentation;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.ContextWrapper;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
 import java.io.File;
@@ -32,7 +35,7 @@ public final class PlaybackServiceV12Test extends Instrumentation {
         if(error[0]!=null)throw new AssertionError(error[0]);
     }
     @Override public void onStart(){
-        String[] cases={"successful-selection-history","failed-selection-retains-current","first-start-after-failed-replacement","first-start-after-cancelled-replacement","queue-clear-cancels-pending-snapshot","queue-clear-cancels-pending-import","quality-keeps-occurrence","timer-late-prepare","end-of-track-stops-single","restart-cleared-queue"};int passed=0;
+        String[] cases={"successful-selection-history","failed-selection-retains-current","first-start-after-failed-replacement","first-start-after-cancelled-replacement","queue-clear-cancels-pending-snapshot","queue-clear-cancels-pending-import","batch-import-retains-valid-files","quality-keeps-occurrence","timer-late-prepare","end-of-track-stops-single","restart-cleared-queue"};int passed=0;
         for(String name:cases){try{
             runOnMainSync(()->setup(name));
             if(name.equals("successful-selection-history"))history();
@@ -41,6 +44,7 @@ public final class PlaybackServiceV12Test extends Instrumentation {
             else if(name.equals("first-start-after-cancelled-replacement"))firstStart(true);
             else if(name.equals("queue-clear-cancels-pending-snapshot"))clearPending();
             else if(name.equals("queue-clear-cancels-pending-import"))clearImport();
+            else if(name.equals("batch-import-retains-valid-files"))batchImport();
             else if(name.equals("quality-keeps-occurrence"))qualityOccurrence();
             else if(name.equals("timer-late-prepare"))latePrepare();
             else if(name.equals("end-of-track-stops-single"))endMode();
@@ -131,6 +135,33 @@ public final class PlaybackServiceV12Test extends Instrumentation {
         readyA();startPlayback();runOnMainSync(()->{
             set("importingAudio",true);set("busy",true);set("requestedQueueEntry","");int before=(Integer)field("generation");
             service.dispatch("clearPlaybackQueue","");check(!(Boolean)field("importingAudio")&&(Integer)field("generation")>before,"clear invalidates pending import callback");check(snapshot().optBoolean("playing")&&store().entries().length()==0,"clear keeps old audio and empty queue");
+        });
+    }
+    private void batchImport(){
+        File first=new File(a.optString("path")), secondOriginal=new File(b.optString("path"));
+        File other=new File(directory,"other");check(other.mkdir(),"second input directory");
+        File second=new File(other,first.getName());check(secondOriginal.renameTo(second),"second input with same name");
+        Uri firstUri=Uri.fromFile(first),secondUri=Uri.fromFile(second);
+        ClipData clip=ClipData.newRawUri("audio",Uri.fromFile(new File(directory,"missing.wav")));
+        clip.addItem(new ClipData.Item(firstUri));clip.addItem(new ClipData.Item(firstUri));clip.addItem(new ClipData.Item(secondUri));
+        Intent intent=new Intent("importFiles").setData(firstUri);intent.setClipData(clip);
+        runOnMainSync(()->service.onStartCommand(intent,0,1));
+        waitUntil("partial import ready",()->snapshot().optBoolean("ready")&&!snapshot().optBoolean("busy"));
+        runOnMainSync(()->{
+            JSONArray tracks=snapshot().optJSONArray("importedTracks");
+            check(tracks!=null&&tracks.length()==2,"valid selections retained once each");
+            check("已复制 2 首到浮音，跳过 2 个文件。".equals(snapshot().optString("importMessage")),"aggregate counts include rejected and repeated entries");
+            JSONObject one=tracks.optJSONObject(0),two=tracks.optJSONObject(1);
+            check(first.getName().equals(one.optString("name"))&&first.getName().equals(two.optString("name")),"both display names preserved");
+            File firstCopy=new File(one.optString("path")),secondCopy=new File(two.optString("path"));
+            check(!firstCopy.equals(secondCopy)&&firstCopy.length()==first.length()&&secondCopy.length()==second.length(),"independent complete copies");
+            check(one.optString("id").equals(snapshot().optString("currentTrack"))&&!snapshot().optBoolean("playing"),"first successful import loaded paused");
+            check(first.delete()&&second.delete()&&firstCopy.isFile()&&secondCopy.isFile(),"private copies survive source deletion");
+            release();newService();call("restorePendingImports");
+            check(tracks.toString().equals(snapshot().optJSONArray("importedTracks").toString()),"all unacknowledged tracks restored");
+            service.dispatch("ackImport",new JSONArray().put(one.optString("id")).toString());
+            JSONArray remaining=snapshot().optJSONArray("importedTracks");
+            check(remaining.length()==1&&two.optString("id").equals(remaining.optJSONObject(0).optString("id")),"ack leaves other tracks pending");
         });
     }
     private void qualityOccurrence(){

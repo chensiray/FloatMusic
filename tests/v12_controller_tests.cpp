@@ -175,6 +175,43 @@ private slots:
         QVERIFY(!player.error().isEmpty());
         QCOMPARE(player.property("historyEntries").toList().size(), 0);
     }
+    void batchImportRetainsValidSelections() {
+        QTemporaryDir dir; QVERIFY(dir.isValid());
+        QVERIFY(QDir(dir.path()).mkdir("other"));
+        const auto first = QUrl::fromLocalFile(dir.filePath("same.wav"));
+        const auto second = QUrl::fromLocalFile(dir.filePath("other/same.wav"));
+        const auto missing = QUrl::fromLocalFile(dir.filePath("missing.wav"));
+        const auto invalid = QUrl::fromLocalFile(dir.filePath("header-only.mp3"));
+        const auto video = QUrl::fromLocalFile(dir.filePath("audio-and-video.m4a"));
+        const auto videoFixture = QFINDTESTDATA("fixtures/audio-and-video.mp4");
+        QVERIFY(!videoFixture.isEmpty());
+        QVERIFY(QFile::copy(videoFixture, video.toLocalFile()));
+        const auto firstBytes = wave(2), secondBytes = wave(3);
+        QFile firstFile(first.toLocalFile()), secondFile(second.toLocalFile());
+        QVERIFY(firstFile.open(QIODevice::WriteOnly)); QCOMPARE(firstFile.write(firstBytes), firstBytes.size()); firstFile.close();
+        QVERIFY(secondFile.open(QIODevice::WriteOnly)); QCOMPARE(secondFile.write(secondBytes), secondBytes.size()); secondFile.close();
+        QFile damaged(invalid.toLocalFile()); QVERIFY(damaged.open(QIODevice::WriteOnly));
+        QCOMPARE(damaged.write("ID3", 3), 3); damaged.close();
+        QVariantList imported;
+        {
+            PlayerController player;
+            const QList<QUrl> urls{missing, first, invalid, video, first, second};
+            QVERIFY(QMetaObject::invokeMethod(&player, "importFiles", Q_ARG(QList<QUrl>, urls)));
+            QTRY_VERIFY(player.ready() && !player.busy());
+            imported = player.tracks();
+            QCOMPARE(imported.size(), 2);
+            QCOMPARE(player.property("importMessage").toString(), QStringLiteral("已导入 2 首，跳过 4 个文件。"));
+            QVERIFY(!player.playing());
+            QCOMPARE(player.currentTrack(), imported.first().toMap().value("id").toString());
+        }
+        QVERIFY(firstFile.remove()); QVERIFY(secondFile.remove());
+        PlayerController restored;
+        QCOMPARE(restored.tracks(), imported);
+        QFile firstCopy(imported[0].toMap().value("path").toString()), secondCopy(imported[1].toMap().value("path").toString());
+        QVERIFY(firstCopy.fileName() != secondCopy.fileName());
+        QVERIFY(firstCopy.open(QIODevice::ReadOnly)); QCOMPARE(firstCopy.readAll(), firstBytes);
+        QVERIFY(secondCopy.open(QIODevice::ReadOnly)); QCOMPARE(secondCopy.readAll(), secondBytes);
+    }
     void removedCurrentContinuesAtGapAcrossRestart() {
         QTemporaryDir dir; QVERIFY(dir.isValid());
         QFile audio(dir.filePath("queue.wav")); QVERIFY(audio.open(QIODevice::WriteOnly)); audio.write(wave(20)); audio.close();

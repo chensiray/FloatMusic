@@ -260,7 +260,9 @@ private slots:
         controller.search("sample");
         QTRY_VERIFY(!controller.searching());
         QCOMPARE(controller.searchResults().size(), 50);
-        QCOMPARE(QUrlQuery(service.requests.last()).queryItemValue("limit"), QString("50"));
+        QVERIFY(!service.requests.isEmpty());
+        QCOMPARE(service.requests.first().path(), QString("/api/search/get"));
+        QCOMPARE(QUrlQuery(service.requests.first()).queryItemValue("limit"), QString("50"));
         controller.libraryAction("searchPlaylists", {{"query", "sample"}});
         QTRY_VERIFY(!controller.playlistSearching());
         QCOMPARE(controller.playlistResults().size(), 50);

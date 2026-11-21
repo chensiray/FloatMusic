@@ -8,9 +8,13 @@ import java.util.function.BooleanSupplier;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONObject;
 import org.json.JSONArray;
+import org.json.JSONTokener;
 
 final class AudioResolver {
     private static final int PROBE_LIMIT=16*1024;
+    static final class CopyrightRestriction extends IOException {
+        CopyrightRestriction(){super("当前来源因版权限制无法播放。");}
+    }
     static final class Result {
         final String address,sourceId,sourceName,requestedQuality,quality,format,notice;
         final int bitrate,sampleRate,bitsPerSample;
@@ -286,7 +290,11 @@ final class AudioResolver {
                 if(sample)current.setRequestProperty("Range","bytes=0-16383");
                 int code=current.getResponseCode();check(active,deadline);
                 if(code==301||code==302||code==303||code==307||code==308){address=redirectAddress(address,current.getHeaderField("Location"),sample&&platformAudio);continue;}
-                if(code<200||code>=300)throw new IOException("HTTP "+code);
+                if(code<200||code>=300){
+                    if(!sample&&(code==403||code==451)&&hasCopyrightError(current,deadline,active))
+                        throw new CopyrightRestriction();
+                    throw new IOException("HTTP "+code);
+                }
                 long size=sample?totalBytes(current):0;
                 try(InputStream input=current.getInputStream();ByteArrayOutputStream output=new ByteArrayOutputStream()) {
                     int limit=sample?PROBE_LIMIT:64*1024;byte[] buffer=new byte[4096];
@@ -301,6 +309,21 @@ final class AudioResolver {
             } finally{current.disconnect();if(connection==current)connection=null;}
         }
         throw new IOException("重定向次数过多");
+    }
+    private static boolean hasCopyrightError(HttpURLConnection connection,long deadline,BooleanSupplier active){
+        try(InputStream input=connection.getErrorStream();ByteArrayOutputStream output=new ByteArrayOutputStream()){
+            if(input==null)return false;
+            final int limit=64*1024;
+            byte[] buffer=new byte[4096];
+            while(output.size()<=limit){
+                check(active,deadline);
+                connection.setReadTimeout((int)Math.max(1,deadline-now()));
+                int read=input.read(buffer,0,Math.min(buffer.length,limit+1-output.size()));
+                if(read<0)return reportsCopyrightDenial(new String(output.toByteArray(),StandardCharsets.UTF_8).trim());
+                output.write(buffer,0,read);
+            }
+        }catch(IOException ignored){}
+        return false;
     }
     private static String reason(Exception error) {
         if(error instanceof SocketTimeoutException)return "连接超时";
@@ -318,6 +341,32 @@ final class AudioResolver {
         String text=error.getMessage();
         if(text!=null&&text.matches("HTTP [0-9]{3}")){int code=Integer.parseInt(text.substring(5));return code==429||code>=500;}
         return false;
+    }
+    private static boolean copyrightDenial(String message) {
+        String text=message.toLowerCase(Locale.ROOT);
+        if(text.contains("不受版权限制")||text.contains("无版权问题"))return false;
+        for(String phrase:new String[]{"无版权","没有版权","版权限制","版权原因","版权受限","copyright restriction","no copyright"})
+            if(text.contains(phrase))return true;
+        return false;
+    }
+    private static boolean copyrightMessage(JSONObject object) {
+        if(object==null)return false;
+        for(String key:new String[]{"msg","message","error","reason"})
+            if(copyrightDenial(object.optString(key)))return true;
+        return false;
+    }
+    private static boolean reportsCopyrightDenial(String body) {
+        try {
+            Object parsed=new JSONTokener(body).nextValue();
+            if(parsed instanceof JSONObject){
+                JSONObject root=(JSONObject)parsed;
+                JSONArray data=root.optJSONArray("data");
+                return copyrightMessage(root)||copyrightMessage(root.optJSONObject("data"))
+                    ||data!=null&&copyrightMessage(data.optJSONObject(0));
+            }
+            if(parsed instanceof JSONArray)return copyrightMessage(((JSONArray)parsed).optJSONObject(0));
+        }catch(org.json.JSONException ignored){}
+        return body.length()<=512&&!body.contains("<")&&copyrightDenial(body);
     }
     Result resolve(String song,String quality,String api,Set<String> excluded,BooleanSupplier active) throws IOException {
         return resolve("netease",song,quality,api,excluded,active,0);
@@ -397,7 +446,7 @@ final class AudioResolver {
             if(!legacy.isEmpty())sources.add(new Source("byfuns","原接口","plain",legacy+"?id="+song+"&level="+quality,quality));
             if(!meting.isEmpty())sources.add(new Source("injahow","INJAHOW","meting",meting+"?server=netease&type=song&id="+song,"standard"));
         }
-        List<String> failures=new ArrayList<>();
+        List<String> failures=new ArrayList<>();boolean restricted=false;
         for(Source source:sources) {
             check(current,deadline);if(excluded.contains(source.id))continue;
             if(cooldown.getOrDefault(source.id,0L)>now()){failures.add(source.name+"：暂不可用，稍后重试");continue;}
@@ -409,10 +458,11 @@ final class AudioResolver {
             }
             Response response;
             try{response=request(source.request,false,deadline,current,false);}
+            catch(CopyrightRestriction e){restricted=true;failures.add(source.name+"："+e.getMessage());continue;}
             catch(IOException e){check(current,deadline);if(serviceFailure(e))cooldown.put(source.id,now()+30000);failures.add(source.name+"："+reason(e));continue;}
             String address="";double providerDuration=0;boolean badIdentity=false,badDuration=false,shortUnknown=false;
+            String body=new String(response.bytes,StandardCharsets.UTF_8).trim();
             try {
-                String body=new String(response.bytes,StandardCharsets.UTF_8).trim();
                 if(source.format.equals("plain"))address=body;
                 else if(source.format.equals("gd"))address=new JSONObject(body).optString("url","");
                 else if(source.format.equals("meting")) {
@@ -452,7 +502,10 @@ final class AudioResolver {
             if(badDuration)throw new IOException("酷我返回无有效时长或时长与目标歌曲不符，已拒绝该音频；请重试或尝试其他歌曲。");
             if(shortUnknown)throw new IOException("酷我返回短音频但缺少目标时长，无法确认是否为完整歌曲，已拒绝该音频。");
             if("tencent".equals(platform)||"kuwo".equals(platform))address=secureCdnAddress(address);
-            if(!valid(address)){failures.add(source.name+"：该歌曲或音质未返回有效地址");continue;}
+            if(!valid(address)){
+                restricted|=reportsCopyrightDenial(body);
+                failures.add(source.name+"：该歌曲或音质未返回有效地址");continue;
+            }
             Response sample;
             try{sample=request(address,true,deadline,current,"tencent".equals(platform)||"kuwo".equals(platform));check(current,deadline);}
             catch(IOException e){check(current,deadline);if(serviceFailure(e))cooldown.put(source.id,now()+30000);failures.add(source.name+"："+reason(e));continue;}
@@ -472,6 +525,7 @@ final class AudioResolver {
             return new Result(sample.address,source,quality,obtained,info,notice,verifiedTarget);
         }
         check(current,deadline);
+        if(restricted)throw new CopyrightRestriction();
         throw new IOException("暂未取得可播放音频。"+(failures.isEmpty()?"没有更多可用来源":String.join("；",failures))+"。请检查网络后重试、更换音质或尝试其他歌曲。");
     }
     void clearFailures(){cooldown.clear();}

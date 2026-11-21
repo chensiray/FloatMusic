@@ -23,6 +23,8 @@ $classes = Join-Path $runDirectory 'classes'
 New-Item -ItemType Directory -Path $classes -Force | Out-Null
 $sources = @(
     (Join-Path $repoRoot 'android/src/org/floatmusic/player/PlaybackNotifications.java'),
+    (Join-Path $repoRoot 'android/src/org/floatmusic/player/UiStrings.java'),
+    (Join-Path $repoRoot 'android/src/org/floatmusic/player/UiCatalog.java'),
     (Join-Path $PSScriptRoot 'PlaybackNotificationsTest.java')
 )
 $classpath = "$JsonJar;$androidJar"

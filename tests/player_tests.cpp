@@ -517,7 +517,7 @@ QtObject {
         QCOMPARE(window->property("languageCode").toString(), QString("zh_CN"));
         QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "en")));
         QTRY_COMPARE(window->property("languageCode").toString(), QString("en"));
-        QVERIFY(window->title().contains("FloatMusic 1.7"));
+        QVERIFY(window->title().contains("FloatMusic 1.8"));
         auto *language = window->findChild<QObject *>("languageSelector"); QVERIFY(language);
         QCOMPARE(language->property("currentIndex").toInt(), 1);
         auto *shortcuts = qobject_cast<GlobalShortcuts *>(controller.shortcuts()); QVERIFY(shortcuts);
@@ -542,7 +542,7 @@ QtObject {
             QTRY_COMPARE(lyrics->property("lineCount").toInt(), count);
         }
         QVERIFY(QMetaObject::invokeMethod(window, "setUiLanguage", Q_ARG(QVariant, "zh_CN")));
-        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.7")));
+        QTRY_VERIFY(window->title().contains(QStringLiteral("浮音 1.8")));
         QVERIFY(QMetaObject::invokeMethod(rows, "activated", Q_ARG(int, 1)));
         QCOMPARE(warnings.size(), 0);
     }
@@ -1474,6 +1474,9 @@ QtObject {
     }
     void androidWelcomeLayout() {
         // Android now has a dedicated QML welcome page; the overlay is native Java.
+        const auto previousVersion = QCoreApplication::applicationVersion();
+        const auto restoreVersion = qScopeGuard([previousVersion] { QCoreApplication::setApplicationVersion(previousVersion); });
+        QCoreApplication::setApplicationVersion("1.8.0-preview.3");
         PlayerController controller;
         controller.uiLanguage()->setProperty("code", "zh_CN");
         QQmlApplicationEngine engine;
@@ -1483,6 +1486,8 @@ QtObject {
         engine.load(QUrl::fromLocalFile(page));
         QCOMPARE(engine.rootObjects().size(), 1);
         auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first()); QVERIFY(window);
+        auto *version = window->findChild<QObject *>("androidVersionLabel"); QVERIFY(version);
+        QCOMPARE(version->property("text").toString(), QString("FloatMusic 1.8.0-preview.3"));
         QQuickItem *flickable = nullptr, *exit = nullptr;
         for (auto *item : window->findChildren<QQuickItem *>()) {
             if (item->property("contentY").isValid() && item->property("contentHeight").isValid()) flickable = item;

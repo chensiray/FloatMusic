@@ -266,6 +266,44 @@ class LiteralReader {
 };
 } // namespace
 namespace CatalogCodec {
+static bool copyrightDenial(const QString &text) {
+    if (text.contains(QStringLiteral("不受版权限制")) || text.contains(QStringLiteral("无版权问题"))) return false;
+    return text.contains(QStringLiteral("无版权")) || text.contains(QStringLiteral("没有版权"))
+        || text.contains(QStringLiteral("版权限制")) || text.contains(QStringLiteral("版权原因"))
+        || text.contains(QStringLiteral("版权受限")) || text.contains("copyright restriction", Qt::CaseInsensitive)
+        || text.contains("no copyright", Qt::CaseInsensitive);
+}
+
+bool trackRestricted(const QString &source, const QJsonObject &song) {
+    const auto playable = song.value("playable");
+    if (playable.isBool() && !playable.toBool()) return true;
+    if (source == "netease") {
+        return song.value("privilege").toObject().value("st").toInt() < 0
+            || song.value("st").toInt() < 0 || song.value("status").toInt() < 0
+            || !song.value("noCopyrightRcmd").toObject().isEmpty();
+    }
+    if (source == "kuwo") {
+        const auto blocked = song.value("payInfo").toObject().value("cannotOnlinePlay");
+        return blocked.toBool() || blocked.toInt() == 1 || blocked.toString() == "1";
+    }
+    return source == "tencent" && copyrightDenial(song.value("pay").toString());
+}
+
+bool reportsCopyrightDenial(const QByteArray &body) {
+    const auto json = QJsonDocument::fromJson(body);
+    const auto root = json.object();
+    const auto data = root.value("data");
+    const auto message = [](const QJsonObject &object) {
+        for (const auto *field : {"msg", "message", "error", "reason"}) {
+            if (copyrightDenial(object.value(field).toString())) return true;
+        }
+        return false;
+    };
+    if (json.isObject()) return message(root) || message(data.toObject()) || message(data.toArray().at(0).toObject());
+    if (json.isArray() && !json.array().isEmpty()) return message(json.array().first().toObject());
+    return body.size() <= 512 && !body.contains('<') && copyrightDenial(QString::fromUtf8(body));
+}
+
 QString descriptionText(const QString &text) {
     // Convert metadata to inert text, without rendering HTML or fetching embedded resources.
     QString plain = text.left(16000);

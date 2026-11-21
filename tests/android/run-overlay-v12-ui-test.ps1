@@ -114,15 +114,16 @@ try {
     $text = $result -join "`n"
     $streamText = [regex]::Replace($text, '(?m)^INSTRUMENTATION_RESULT:\s*stream=', '')
     $cases = @('more-navigation', 'queue-occurrences', 'queue-sort', 'queue-drag-refresh', 'history-actions',
-        'song-placement', 'sleep-presets', 'sleep-draft', 'notification-volume', 'small-scaled-scroll')
+        'song-placement', 'sleep-presets', 'sleep-draft', 'notification-volume', 'small-scaled-scroll',
+        'playlist-filter', 'queue-jump', 'artist-browser')
     $allCasesPassed = $true
     foreach ($scene in $cases) {
         if ([regex]::Matches($streamText, "(?m)^PASS $([regex]::Escape($scene))\s*$").Count -ne 1) { $allCasesPassed = $false }
     }
     if ($instrumentExit -ne 0 -or $text -match 'FAIL|Process crashed|INSTRUMENTATION_ABORTED' -or -not $allCasesPassed -or
-        ([regex]::Matches($streamText, '(?m)^PASS [^\r\n]+\s*$')).Count -ne 10 -or
+        ([regex]::Matches($streamText, '(?m)^PASS [^\r\n]+\s*$')).Count -ne $cases.Count -or
         $text -notmatch '(?m)^INSTRUMENTATION_RESULT:\s*uiPassed=true\s*$' -or
-        $text -notmatch '(?m)^INSTRUMENTATION_RESULT:\s*passed=10\s*$' -or
+        $text -notmatch "(?m)^INSTRUMENTATION_RESULT:\s*passed=$($cases.Count)\s*$" -or
         $text -notmatch '(?m)^INSTRUMENTATION_CODE:\s*-1\s*$') {
         throw "Overlay 1.2 UI regression failed. See $resultsFile"
     }

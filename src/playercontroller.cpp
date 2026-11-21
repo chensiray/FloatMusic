@@ -6,10 +6,12 @@
 #include <QRegularExpression>
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
+#include <QEventLoop>
 #include <QStandardPaths>
 #include <QSaveFile>
 #include <QUuid>
@@ -19,6 +21,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSettings>
+#include <QSet>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QWindow>
@@ -69,7 +72,37 @@ bool normalizeTrackIdentity(QVariantMap &track) {
     return true;
 }
 struct ImportResult { QString path, name, error; };
-ImportResult copyAudio(const QUrl &url) {
+struct ImportBatch {
+    QVariantList tracks;
+    QString firstError;
+    bool saved = false;
+
+    ~ImportBatch() {
+        if (saved) return;
+        for (const auto &track : tracks) QFile::remove(track.toMap().value("path").toString());
+    }
+};
+#ifndef Q_OS_ANDROID
+bool hasReadableAudio(const QString &path) {
+    QMediaPlayer probe;
+    QEventLoop wait;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &wait, &QEventLoop::quit);
+    QObject::connect(&probe, &QMediaPlayer::errorOccurred, &wait, &QEventLoop::quit);
+    QObject::connect(&probe, &QMediaPlayer::mediaStatusChanged, &wait, [&](QMediaPlayer::MediaStatus status) {
+        if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::InvalidMedia) wait.quit();
+    });
+    probe.setSource(QUrl::fromLocalFile(path));
+    if (probe.mediaStatus() == QMediaPlayer::LoadingMedia && probe.error() == QMediaPlayer::NoError) {
+        timeout.start(5000);
+        wait.exec();
+    }
+    return probe.mediaStatus() == QMediaPlayer::LoadedMedia && probe.error() == QMediaPlayer::NoError
+        && probe.hasAudio() && !probe.hasVideo();
+}
+#endif
+ImportResult copyAudio(const QUrl &url, const std::atomic_bool &cancelled) {
     if (!url.isLocalFile()) return {{}, {}, QStringLiteral("请拖入本地音频文件，不支持网页链接。")} ;
     QFile source(url.toLocalFile());
     if (!source.open(QIODevice::ReadOnly)) return {{}, {}, QStringLiteral("无法读取这个文件。")} ;
@@ -83,6 +116,7 @@ ImportResult copyAudio(const QUrl &url) {
     if (!target.open(QIODevice::WriteOnly)) return {{}, {}, QStringLiteral("无法写入音乐缓存。")} ;
     qint64 count = 0;
     while (!source.atEnd()) {
+        if (cancelled.load()) return {};
         const QByteArray chunk = source.read(64 * 1024);
         if (chunk.isEmpty() && source.error() != QFileDevice::NoError) return {{}, {}, QStringLiteral("读取文件时发生错误。")} ;
         count += chunk.size();
@@ -90,13 +124,19 @@ ImportResult copyAudio(const QUrl &url) {
         if (target.write(chunk) != chunk.size()) return {{}, {}, QStringLiteral("写入失败，请检查磁盘空间。")} ;
     }
     if (count == 0 || !target.commit()) return {{}, {}, QStringLiteral("音乐导入失败。")} ;
+#ifndef Q_OS_ANDROID
+    if (cancelled.load() || !hasReadableAudio(path) || cancelled.load()) {
+        QFile::remove(path);
+        return {{}, {}, QStringLiteral("文件内容与音频扩展名不匹配，或文件已损坏。")};
+    }
+#endif
     return {path, name, {}};
 }
 }
 
 PlayerController::PlayerController(QObject *parent) : PlayerController(MusicApi::builtinEndpoints(), parent) {}
 PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent)
-    : QObject(parent), m_api(endpoints), m_artwork(endpoints), m_offlineCache(endpoints), m_cacheLyricsApi(endpoints), m_shortcuts(!QStandardPaths::isTestModeEnabled() && !android()), m_sleepTimer(this) {
+    : QObject(parent), m_api(endpoints), m_musicArtists(endpoints), m_artwork(endpoints), m_offlineCache(endpoints), m_cacheLyricsApi(endpoints), m_shortcuts(!QStandardPaths::isTestModeEnabled() && !android()), m_sleepTimer(this) {
     initializePlaybackTools();
     connect(&m_offlineCache, &OfflineCache::changed, this, [this] {
         emit cacheChanged();
@@ -124,6 +164,7 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
     m_searchSources = orderedSources(QSettings().value("search/sources", QStringList{"netease", "tencent", "kuwo"}).toStringList());
     const int savedLimit = QSettings().value("search/resultLimit", 30).toInt();
     if (supportedResultLimit(savedLimit)) m_searchResultLimit = savedLimit;
+    m_musicArtists.setSearchOptions(m_searchSources, m_searchResultLimit);
     const QString savedRankingSource = QSettings().value("rankings/source", "netease").toString();
     if (onlineSource(savedRankingSource)) m_rankingSource = savedRankingSource;
     connect(&m_library, &PlaylistStore::changed, this, [this] {
@@ -149,6 +190,7 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
     m_sessionTimer.start();
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
         saveSession(); m_shuttingDown = true;
+        if (m_importCancelled) m_importCancelled->store(true);
     });
     QTimer::singleShot(0, this, &PlayerController::restoreSession);
     m_mediaTimeout.setSingleShot(true); m_mediaTimeout.setInterval(20000);
@@ -181,6 +223,7 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
             if (m_ready && m_loadedTrack.value("source").toString() == "kuwo" && m_player.duration() <= 0) {
                 m_busy = true; m_mediaTimeout.start(); sync(); return;
             }
+            if (m_ready && m_online && m_currentCacheKey.isEmpty()) setTrackUnavailable(m_currentTrack, false);
             if (m_ready && m_pendingPosition >= 0 && m_player.isSeekable() && m_player.duration() > 0) {
                 const auto resume = m_pendingPosition; m_pendingPosition = -1;
                 m_player.setPosition(qBound<qint64>(0, resume, qMax<qint64>(0, m_player.duration() - 1)));
@@ -213,8 +256,14 @@ PlayerController::PlayerController(const MusicApi::Endpoints &endpoints, QObject
 }
 void PlayerController::setApiBase(const QString &url) {
     if (m_busy) { m_searchMessage = QStringLiteral("请等待当前加载完成后切换服务。"); emit searchChanged(); return; }
+    const auto previousBase = m_api.baseUrl();
     if (!m_api.setBaseUrl(url)) m_searchMessage = QStringLiteral("请输入 http(s) 服务地址，不要包含账号、密码或查询参数。");
     else { m_offlineCache.setBaseUrl(url); m_cacheLyricsApi.setBaseUrl(url); ++m_playlistGeneration; m_onlinePlaylistLoading = false; m_onlinePlaylist.clear();
+        if (m_api.baseUrl() != previousBase) {
+            const auto netease = [](const QString &id) { return id.startsWith("netease:"); };
+            const auto removed = m_unavailableTrackIds.removeIf(netease) + m_verifiedOnlineTrackIds.removeIf(netease);
+            if (removed) emit trackAvailabilityChanged();
+        }
         ++m_rankingsRequest; m_rankingsLoading = false; m_rankings.clear(); m_rankingsMessage.clear(); emit rankingsChanged();
         m_playlistSearching = false; m_playlistResults.clear(); m_playlistSearchMessage.clear();
         emit playlistSearchChanged(); emit onlinePlaylistChanged();
@@ -232,6 +281,7 @@ void PlayerController::setSearchSources(const QStringList &sources) {
     if (selected == m_searchSources) return;
     m_searchSources = selected;
     QSettings().setValue("search/sources", selected);
+    m_musicArtists.setSearchOptions(selected, m_searchResultLimit);
     if (m_searching) m_api.search(QString(), selected);
     if (m_playlistSearching) m_api.searchPlaylists(QString(), selected, m_searchResultLimit);
     m_searching = false; m_searchResults.clear();
@@ -244,6 +294,7 @@ void PlayerController::setSearchResultLimit(int limit) {
     if (!supportedResultLimit(limit) || limit == m_searchResultLimit) return;
     m_searchResultLimit = limit;
     QSettings().setValue("search/resultLimit", limit);
+    m_musicArtists.setSearchOptions(m_searchSources, limit);
     emit searchSettingsChanged();
 }
 QString PlayerController::currentSourceName() const {
@@ -648,6 +699,7 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
         if (ticket != m_loadGeneration) return;
         m_resolving = false;
         if (!error.isEmpty()) {
+            if (audio.copyrightRestricted) setTrackUnavailable(track.value("id").toString(), true);
             m_busy = false; m_error = error; m_historyPending = false;
             m_playIntent = m_player.playbackState() == QMediaPlayer::PlayingState;
             m_autoplay = false; sync(); return;
@@ -733,6 +785,16 @@ void PlayerController::loadTrack(const QVariantMap &inputTrack, bool autoplay, b
     }
 #endif
 }
+void PlayerController::setTrackUnavailable(const QString &id, bool unavailable) {
+    if (id.isEmpty()) return;
+    auto &current = unavailable ? m_unavailableTrackIds : m_verifiedOnlineTrackIds;
+    auto &previous = unavailable ? m_verifiedOnlineTrackIds : m_unavailableTrackIds;
+    if (current.contains(id)) return;
+    previous.removeAll(id);
+    if (current.size() >= 500) current.removeFirst();
+    current.append(id);
+    emit trackAvailabilityChanged();
+}
 void PlayerController::setVolume(int volume) {
     volume = qBound(0, volume, 100);
 #ifdef Q_OS_ANDROID
@@ -784,6 +846,7 @@ void PlayerController::refreshOutputs() {
 }
 PlayerController::~PlayerController() {
 #ifndef Q_OS_ANDROID
+    if (m_importCancelled) m_importCancelled->store(true);
     saveSession(); m_shuttingDown = true;
     m_player.stop(); m_player.setSource({});
 #endif
@@ -806,24 +869,39 @@ void PlayerController::androidCommand(const QString &command, const QString &val
 #endif
 }
 void PlayerController::importFile(const QUrl &url) {
+    importFiles({url});
+}
+void PlayerController::importFiles(const QList<QUrl> &urls) {
+    if (urls.isEmpty()) return;
 #ifdef Q_OS_ANDROID
-    androidCommand("import", url.toString());
+    QJsonArray files;
+    for (const auto &url : urls) files.append(url.toString(QUrl::FullyEncoded));
+    androidCommand("import", QString::fromUtf8(QJsonDocument(files).toJson(QJsonDocument::Compact)));
 #else
     if (m_busy) { m_error = QStringLiteral("正在导入，请稍候。"); emit changed(); return; }
+    const QString destination = m_library.activeId();
     const int ticket = ++m_loadGeneration;
-    m_busy = true; m_importing = true; m_error.clear(); emit changed();
-    auto *watcher = new QFutureWatcher<ImportResult>(this);
-    connect(watcher, &QFutureWatcher<ImportResult>::finished, this, [this, watcher, ticket] {
-        const auto result = watcher->result(); watcher->deleteLater();
-        if (ticket != m_loadGeneration) {
-            if (!result.path.isEmpty()) QFile::remove(result.path);
+    const auto cancelled = std::make_shared<std::atomic_bool>(false);
+    m_importCancelled = cancelled;
+    m_busy = true; m_importing = true; m_error.clear(); m_importMessage.clear(); emit changed();
+    auto *watcher = new QFutureWatcher<std::shared_ptr<ImportBatch>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, ticket, destination, total = urls.size()] {
+        const auto batch = watcher->result(); watcher->deleteLater();
+        if (ticket != m_loadGeneration) return;
+        m_importCancelled.reset();
+        m_importing = false;
+        const int added = batch->tracks.isEmpty() ? 0 : m_library.addTracks(destination, batch->tracks);
+        const int imported = qMax(0, added);
+        m_importMessage = QStringLiteral("已导入 %1 首，跳过 %2 个文件。").arg(imported).arg(total - imported);
+        if (imported == 0) {
+            m_busy = false;
+            m_error = added < 0 ? m_library.error() : batch->firstError;
+            emit changed();
             return;
         }
-        m_importing = false;
-        if (!result.error.isEmpty()) { m_busy = false; m_error = result.error; emit changed(); return; }
-        const QVariantMap track{{"id", "local:" + QFileInfo(result.path).baseName()}, {"source", "local"}, {"name", result.name}, {"artist", QStringLiteral("本地文件")}, {"path", result.path}};
-        if (!m_library.add(track)) { m_busy = false; m_error = m_library.error(); emit changed(); return; }
-        const auto list = tracks();
+        batch->saved = true;
+        const auto track = batch->tracks.first().toMap();
+        const auto list = m_library.tracks(destination);
         int importedIndex = -1;
         for (int i = 0; i < list.size(); ++i) if (list[i].toMap().value("id") == track.value("id")) { importedIndex = i; break; }
         if (!m_playbackStore.replaceQueue(list, importedIndex)) {
@@ -833,7 +911,26 @@ void PlayerController::importFile(const QUrl &url) {
         m_requestedQueueEntry = m_playbackStore.currentEntryId(); m_historyPending = true;
         loadTrack(track, false);
     });
-    watcher->setFuture(QtConcurrent::run(copyAudio, url));
+    watcher->setFuture(QtConcurrent::run([urls, cancelled] {
+        auto batch = std::make_shared<ImportBatch>();
+        QSet<QUrl> seen;
+        for (const auto &url : urls) {
+            if (cancelled->load()) break;
+            const QString path = url.isLocalFile() ? QFileInfo(url.toLocalFile()).canonicalFilePath() : QString();
+            const QUrl identity = path.isEmpty() ? url : QUrl::fromLocalFile(path);
+            if (seen.contains(identity)) continue;
+            seen.insert(identity);
+            const auto result = copyAudio(url, *cancelled);
+            if (result.path.isEmpty() && cancelled->load()) break;
+            if (!result.error.isEmpty()) {
+                if (batch->firstError.isEmpty()) batch->firstError = result.error;
+                continue;
+            }
+            batch->tracks.append(QVariantMap{{"id", "local:" + QFileInfo(result.path).baseName()}, {"source", "local"},
+                {"name", result.name}, {"artist", QStringLiteral("本地文件")}, {"path", result.path}});
+        }
+        return batch;
+    }));
 #endif
 }
 void PlayerController::chooseAndroidFile() { androidCommand("pick"); }
@@ -879,6 +976,7 @@ void PlayerController::quit() {
 #ifdef Q_OS_ANDROID
     QJniObject::callStaticMethod<void>("org/floatmusic/player/PlayerBridge", "prepareExit", "()V");
 #else
+    if (m_importCancelled) m_importCancelled->store(true);
     saveSession(); m_shuttingDown = true; ++m_loadGeneration; ++m_lyricsGeneration; m_mediaTimeout.stop(); androidCommand("stop"); m_player.stop(); QCoreApplication::quit();
 #endif
 }
@@ -922,8 +1020,31 @@ void PlayerController::sync() {
         }
         if (oldQualities != sourceQualities()) emit sourceQualitiesChanged();
     }
-    const auto imported = o.value("importedTrack").toObject().toVariantMap();
-    if (!imported.isEmpty() && m_library.add(imported)) androidCommand("ackImport");
+    const auto imported = o.value("importedTracks").toArray().toVariantList();
+    if (imported.isEmpty()) m_pendingImportAttempt.invalidate();
+    else if (!m_pendingImportAttempt.isValid() || m_pendingImportAttempt.hasExpired(5000)) {
+        m_pendingImportAttempt.start();
+        QMap<QString, QVariantList> destinations;
+        for (const auto &item : imported) {
+            auto track = item.toMap();
+            const QString destination = track.take("importPlaylist").toString();
+            const QString target = destination.isEmpty() ? m_library.activeId() :
+                m_library.playlist(destination).isEmpty() ? QStringLiteral("favorites") : destination;
+            destinations[target].append(track);
+        }
+        QJsonArray ids;
+        QString importError;
+        for (auto it = destinations.cbegin(); it != destinations.cend(); ++it) {
+            if (m_library.addTracks(it.key(), it.value()) < 0) {
+                importError = m_library.error();
+                continue;
+            }
+            for (const auto &track : it.value()) ids.append(track.toMap().value("id").toString());
+        }
+        if (!ids.isEmpty()) androidCommand("ackImport", QString::fromUtf8(QJsonDocument(ids).toJson(QJsonDocument::Compact)));
+        if (!importError.isEmpty()) setLibraryMessage(importError);
+        else if (!ids.isEmpty()) setLibraryMessage(QStringLiteral("已加入当前歌单"));
+    }
     m_currentTrack = o.value("currentTrack").toString();
     const auto loaded = o.value("loadedTrack").toObject().toVariantMap();
     m_loadedQuality = o.value("loadedQuality").toString();
@@ -962,6 +1083,7 @@ void PlayerController::sync() {
         emit audioSettingsChanged();
     }
     m_title = o.value("title").toString(); m_status = o.value("status").toString(); m_error = o.value("error").toString();
+    m_importMessage = o.value("importMessage").toString();
     m_position = o.value("position").toInteger(); m_duration = o.value("duration").toInteger();
     m_playing = o.value("playing").toBool(); m_ready = o.value("ready").toBool(); m_busy = o.value("busy").toBool();
     m_seekable = m_ready && m_duration > 0; m_overlayAllowed = o.value("overlayAllowed").toBool();
@@ -1006,6 +1128,10 @@ void PlayerController::processOverlayEvents() {
     for (const auto &entry : events) {
         const auto event = entry.toObject();
         const auto action = event.value("action").toString(), value = event.value("value").toString();
+        if (action == "playbackRestricted" || action == "playbackVerified") {
+            setTrackUnavailable(value, action == "playbackRestricted");
+            continue;
+        }
         m_overlayMessage.clear();
         if (action == "songArtwork") {
             m_artwork.request(QJsonDocument::fromJson(value.toUtf8()).object().toVariantMap());
@@ -1070,6 +1196,8 @@ void PlayerController::processOverlayEvents() {
 }
 void PlayerController::publishOverlayUi() {
     const QVariantMap data{{"songCoversEnabled",m_artwork.enabled()},{"artworkUrls",m_artwork.urls()},{"musicDetails",m_musicDetails.state()},{"results",m_searchResults},{"searching",m_searching},{"searchMessage",m_searchMessage},
+        {"musicArtists",m_musicArtists.state()},{"unavailableTrackIds",m_unavailableTrackIds},
+        {"verifiedOnlineTrackIds",m_verifiedOnlineTrackIds},
         {"searchSources",m_searchSources},{"searchResultLimit",m_searchResultLimit},
         {"currentSourceName",currentSourceName()},{"qualitySelectable",qualitySelectable()},
         {"playlists",playlists()},{"tracks",tracks()},{"activePlaylist",activePlaylist()},

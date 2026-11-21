@@ -55,6 +55,26 @@ void PlayerController::importPlaylistText(const QString &text, const QString &ta
     } else mergePlaylist(parsed.playlist, target, parsed.skipped);
 }
 void PlayerController::libraryAction(const QString &action, const QVariantMap &args) {
+    if (action == "artist") {
+        const auto command = args.value("action").toString();
+        const auto payload = args.value("args").toMap();
+        if (command == "play") {
+            const auto track = m_musicArtists.work(payload.value("id").toString());
+            if (!m_busy && !track.isEmpty()) playNowTrack(track);
+        } else if (command == "import") {
+            const auto collection = m_musicArtists.workCollection(payload.value("source").toString(),
+                payload.value("id").toString(), payload.value("query").toString(), payload.value("trackId").toString());
+            if (collection.isEmpty()) {
+                setLibraryMessage(QStringLiteral("没有可导入的作品，请检查作品列表。"));
+                return;
+            }
+            mergePlaylist(collection, payload.value("target", activePlaylist()).toString());
+        } else {
+            if (command == "open") setLibraryMessage({});
+            m_musicArtists.action(command, payload);
+        }
+        return;
+    }
     const auto ids = args.value("ids").toStringList();
     const QString target = args.value("target", activePlaylist()).toString();
     if (action == "loadRankings") {

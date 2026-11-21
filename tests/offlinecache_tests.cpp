@@ -24,7 +24,51 @@ class CacheTests:public QObject{
 private slots:
  void initTestCase(){QStandardPaths::setTestModeEnabled(true);QCoreApplication::setOrganizationName("FloatMusicCacheTests");QCoreApplication::setApplicationName("OfflineCacheTests");QSettings().clear();}
  void cleanup(){QSettings().clear();}
+ void offlineStatusRequiresUsableAudio() {
+  QTemporaryDir directory; QVERIFY(directory.isValid());
+  Fixture fixture;
+  OfflineCache cache(fixture.endpoints(), directory.path());
+  const auto first = cache.enqueue(track("123"), "lossless", true, fixture.audio());
+  const auto second = cache.enqueue(track("124"), "standard", true, fixture.audio());
+  QTRY_COMPARE(cache.entry(first).value("state").toString(), QString("complete"));
+  QTRY_COMPARE(cache.entry(second).value("state").toString(), QString("complete"));
+  const QSet<QString> saved{"netease:123", "netease:124"};
+  QCOMPARE(cache.usableSongIds(), saved);
+  cache.setInUse(first);
+  cache.remove(first);
+  QVERIFY(cache.entry(first).value("pendingDelete").toBool());
+  QCOMPARE(cache.usableSongIds(), QSet<QString>{"netease:124"});
+  QVERIFY(QFile::remove(cache.entry(second).value("path").toString()));
+  QVERIFY(cache.usableSongIds().isEmpty());
+ }
  void downloadAndRestart(){QTemporaryDir dir;Fixture f;QString key;{OfflineCache c(f.endpoints(),dir.path());key=c.enqueue(track(),"lossless",true,f.audio());QTRY_COMPARE(c.entry(key).value("state").toString(),QString("complete"));QTRY_COMPARE(c.entry(key).value("lyricState").toString(),QString("available"));QCOMPARE(c.lookup(track(),"lossless").value("quality").toString(),QString("standard"));}int before=f.requests;f.close();OfflineCache c(f.endpoints(),dir.path());auto hit=c.lookup(track(),"lossless");QVERIFY(!hit.isEmpty());QCOMPARE(hit.value("translation").toString(),QString("[00:00.00]Translation"));QTest::qWait(50);QCOMPARE(f.requests,before);c.setInUse(key);c.remove(key);QVERIFY(c.entry(key).value("pendingDelete").toBool());QVERIFY(c.lookup(track(),"lossless").isEmpty());c.setInUse({});QVERIFY(c.entry(key).isEmpty());}
+ void changingServiceRestartsActiveCacheResolution() {
+  QTemporaryDir directory;
+  Fixture oldService, newService;
+  oldService.hold = true;
+  OfflineCache cache(oldService.endpoints(), directory.path());
+  const auto key = cache.enqueue(track(), "standard", true);
+  QTRY_COMPARE(cache.entry(key).value("state").toString(), QString("resolving"));
+  cache.setBaseUrl(newService.base());
+  QTRY_COMPARE(cache.entry(key).value("state").toString(), QString("complete"));
+  QCOMPARE(newService.audioDownloads, 1);
+ }
+ void batchQueuePublishesOnceAndSkipsDuplicates() {
+  QTemporaryDir directory;
+  Fixture fixture;
+  OfflineCache cache(fixture.endpoints(), directory.path());
+  QSignalSpy changes(&cache, &OfflineCache::changed);
+  QVariantList tracks;
+  for (int id = 1; id <= 100; ++id) tracks.append(track(QString::number(id)));
+  tracks.append(tracks.first());
+  QCOMPARE(cache.enqueueBatch(tracks, {{"netease", "standard"}}), 100);
+  QCOMPARE(changes.size(), 1);
+  QCOMPARE(cache.entries().size(), 100);
+  QCOMPARE(fixture.requests, 0);
+  QFile index(directory.filePath("index.json"));
+  QVERIFY(index.open(QIODevice::ReadOnly));
+  QCOMPARE(QJsonDocument::fromJson(index.readAll()).object().value("entries").toArray().size(), 100);
+ }
  void failures_data(){QTest::addColumn<QString>("mode");QTest::newRow("html")<<"html";QTest::newRow("http")<<"http";QTest::newRow("truncated")<<"truncated";QTest::newRow("partial")<<"partial";}
  void failures(){QFETCH(QString,mode);QTemporaryDir d;Fixture f;f.mode=mode;OfflineCache c(f.endpoints(),d.path());auto k=c.enqueue(track(),"standard",true,f.audio());QTRY_COMPARE(c.entry(k).value("state").toString(),QString("failed"));QVERIFY(c.lookup(track(),"standard").isEmpty());QVERIFY(QDir(d.path()).entryList({"*.part","*.audio"},QDir::Files).isEmpty());}
  void cancellation(){QTemporaryDir d;Fixture f;f.hold=true;OfflineCache c(f.endpoints(),d.path());auto k=c.enqueue(track(),"standard",false,f.audio());QTRY_COMPARE(c.entry(k).value("state").toString(),QString("downloading"));c.setSettings({{"automaticEnabled",false}});QCOMPARE(c.entry(k).value("state").toString(),QString("cancelled"));QVERIFY(QDir(d.path()).entryList({"*.part"},QDir::Files).isEmpty());c.remove(k);QTest::qWait(50);QVERIFY(c.entries().isEmpty());}

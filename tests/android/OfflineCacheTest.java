@@ -52,6 +52,27 @@ public final class OfflineCacheTest {
     static JSONObject await(OfflineCache c,String key,String state)throws Exception{long end=System.currentTimeMillis()+12000;while(System.currentTimeMillis()<end){JSONObject e=c.entry(key);if(e!=null&&state.equals(e.optString("status")))return e;Thread.sleep(15);}throw new AssertionError("Expected "+state+" : "+c.entries());}
     public static void main(String[] args)throws Exception{
         File base=Files.createTempDirectory("floatmusic-offline-test-").toFile();
+        AtomicInteger batchUpdates=new AtomicInteger();
+        File batchRoot=new File(base,"batch");
+        OfflineCache.Listener batchListener=new OfflineCache.Listener(){
+            public void changed(){batchUpdates.incrementAndGet();}
+            public void lyrics(String key,JSONObject track){}
+        };
+        try{
+            OfflineCache batch=new OfflineCache(batchRoot,(t,q,alive)->{throw new IOException("Fixture stops before download");},()->true,batchListener);
+            try{
+                JSONArray batchTracks=new JSONArray();
+                for(int id=1;id<=100;id++)batchTracks.put(track(Integer.toString(id)));
+                batchTracks.put(track("1"));
+                synchronized(batch){
+                    check(batch.enqueueBatch(batchTracks,new JSONObject())==100,"the batch reports the number queued");
+                    check(batchUpdates.get()==1,"a batch emits one update before the worker starts");
+                    check(batch.entries().length()==100,"duplicate tracks are queued once");
+                    JSONObject saved=new JSONObject(new String(Files.readAllBytes(new File(batchRoot,"index.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
+                    check(saved.getJSONArray("entries").length()==100,"all queued tracks are persisted together");
+                }
+            }finally{batch.close();}
+        }finally{for(File file:batchRoot.listFiles())file.delete();batchRoot.delete();}
         HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);byte[] audio=wav();AtomicInteger requests=new AtomicInteger();AtomicBoolean wifi=new AtomicBoolean(true);AtomicBoolean slow=new AtomicBoolean(false);CountDownLatch streaming=new CountDownLatch(1);
         ExecutorService http=Executors.newCachedThreadPool(r->{Thread t=new Thread(r);t.setDaemon(true);return t;});server.setExecutor(http);
         server.createContext("/audio",ex->{requests.incrementAndGet();ex.getResponseHeaders().set("Content-Type","audio/wav");ex.sendResponseHeaders(200,audio.length);try(OutputStream out=ex.getResponseBody()){if(slow.get()){out.write(audio,0,1024);out.flush();streaming.countDown();try{Thread.sleep(500);}catch(InterruptedException ignored){}out.write(audio,1024,audio.length-1024);}else out.write(audio);}catch(IOException ignored){}});

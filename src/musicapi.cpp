@@ -88,9 +88,11 @@ QVariantMap songTrack(const QJsonObject &song) {
         if (!artistName.isEmpty()) artists.append(artistName);
     }
     const auto album=song.value(song.contains("al")?"al":"album").toObject();
-    return {{"id", "netease:" + id}, {"songId", id}, {"source", "netease"},
+    QVariantMap track{{"id", "netease:" + id}, {"songId", id}, {"source", "netease"},
             {"name", name}, {"artist", artists.join(" / ")}, {"sourceName", platformName("netease")},
             {"album",album.value("name").toString()},{"coverUrl",album.value("picUrl").toString()}};
+    if (CatalogCodec::trackRestricted("netease", song)) track["unavailable"] = true;
+    return track;
 }
 QUrl withQuery(QUrl url, const QList<QPair<QString, QString>> &query) {
     QUrlQuery params;
@@ -542,7 +544,8 @@ void MusicApi::search(const QString &keywords, const QStringList &sources, int l
         else if (source == "kuwo" && !m_endpoints.ourcraft.isEmpty())
             url = withQuery(QUrl(m_endpoints.ourcraft), {{"server", "kuwo"}, {"type", "search"}, {"id", keywords.trimmed()}, {"limit", QString::number(limit)}});
         if (!validHttpUrl(url)) { complete(source, {}, QStringLiteral("该曲库未配置搜索服务。")); continue; }
-        auto *reply = get(url, QStringLiteral("搜索"), [this, source, complete, limit](QByteArray bytes, QString error) {
+        auto *reply = get(url, QStringLiteral("搜索"), [this, source, complete, limit, ticket](QByteArray bytes, QString error) {
+            if (ticket != m_searchGeneration) return;
             QJsonObject json;
             if (error.isEmpty()) json = source == "netease" ? parseJson(bytes, error) : providerObject(bytes, source, error);
             QJsonArray songs;
@@ -570,15 +573,56 @@ void MusicApi::search(const QString &keywords, const QStringList &sources, int l
                     if (duration > 0) track["duration"] = duration;
                     track["coverUrl"]=ArtworkPolicy::fromSong(source,song.toVariantMap());
                     track["album"]=song.value(source=="tencent"?"albumName":"album").toString();
+                    if (CatalogCodec::trackRestricted(source, song)) track["unavailable"] = true;
                 }
                 const QString id = track.value("id").toString();
                 if (id.isEmpty() || seen.contains(id)) continue;
                 seen.insert(id); tracks.append(track);
                 if (tracks.size() >= limit) break;
             }
-            complete(source, tracks, error);
+            if (source == "netease" && error.isEmpty() && !tracks.isEmpty()) {
+                checkNeteaseSearchRights(std::move(tracks), ticket, [complete, source](QVariantList checked) {
+                    complete(source, std::move(checked), {});
+                });
+            } else complete(source, std::move(tracks), error);
         });
         m_searchReplies.append(reply); if (source == "netease") m_searchReply = reply;
+    }
+}
+void MusicApi::checkNeteaseSearchRights(QVariantList tracks, int generation, std::function<void(QVariantList)> done) {
+    QJsonArray songs;
+    QStringList ids;
+    for (const auto &entry : tracks) {
+        const auto id = entry.toMap().value("songId").toString();
+        ids.append(id);
+        songs.append(QJsonObject{{"id", id.toLongLong()}});
+    }
+    const auto url = m_base.isEmpty()
+        ? endpoint("/api/v3/song/detail", {{"c", QString::fromUtf8(QJsonDocument(songs).toJson(QJsonDocument::Compact))}})
+        : endpoint("/song/detail", {{"ids", ids.join(',')}});
+    auto *reply = get(url, QStringLiteral("核对歌曲可用性"),
+        [this, generation, tracks = std::move(tracks), done = std::move(done)](QByteArray body, QString error) mutable {
+            if (generation != m_searchGeneration) return;
+            const auto details = error.isEmpty() ? parseJson(body, error) : QJsonObject{};
+            if (error.isEmpty()) {
+                QSet<QString> restricted;
+                for (const auto &entry : details.value("privileges").toArray()) {
+                    const auto privilege = entry.toObject();
+                    if (privilege.value("st").toInt() < 0) restricted.insert(jsonId(privilege.value("id")));
+                }
+                for (auto &entry : tracks) {
+                    auto track = entry.toMap();
+                    if (!restricted.contains(track.value("songId").toString())) continue;
+                    track["unavailable"] = true;
+                    entry = track;
+                }
+            }
+            done(std::move(tracks));
+        });
+    if (reply) {
+        m_searchReplies.append(reply);
+        // Missing metadata must not hold up otherwise usable search results.
+        QTimer::singleShot(2500, reply, [reply] { if (!reply->isFinished()) reply->abort(); });
     }
 }
 void MusicApi::fetchTencentSongSearchPage(const std::shared_ptr<TencentSongSearch> &state) {
@@ -612,6 +656,7 @@ void MusicApi::fetchTencentSongSearchPage(const std::shared_ptr<TencentSongSearc
             if (duration > 0) track["duration"] = duration;
             const auto albumMid=song.value("albumMID").toString();
             track["album"]=song.value("albumName").toString();
+            if (CatalogCodec::trackRestricted("tencent", song)) track["unavailable"] = true;
             if(QRegularExpression("^[A-Za-z0-9]{1,64}$").match(albumMid).hasMatch())track["coverUrl"]="https://y.gtimg.cn/music/photo_new/T002R300x300M000"+albumMid+".jpg";
             state->tracks.append(track);
             if (state->tracks.size() >= 100) break;
@@ -844,7 +889,7 @@ struct MusicApi::AudioFetch {
     struct Source { QString id, name, format; QUrl request; QString quality; };
     QList<Source> sources;
     int index = 0, generation = 0;
-    bool qualitySelectable = true;
+    bool qualitySelectable = true, copyrightRestricted = false;
     QString platform, songId, requestedQuality;
     double expectedDuration = 0;
     QElapsedTimer elapsed;
@@ -982,6 +1027,12 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
         state->errors.append(state->sources[state->index].name + QStringLiteral("：暂不可用，稍后重试")); ++state->index;
     }
     if (state->index >= state->sources.size() || state->elapsed.elapsed() >= 24000) {
+        if (state->copyrightRestricted) {
+            Audio audio;
+            audio.copyrightRestricted = true;
+            state->done(audio, QStringLiteral("当前来源因版权限制无法播放。"));
+            return;
+        }
         const QString recovery = state->qualitySelectable
             ? QStringLiteral("请检查网络后重试或更换音质。") : QStringLiteral("请检查网络后重试或尝试其他歌曲。");
         state->done({}, QStringLiteral("暂未取得可播放音频。%1。%2")
@@ -999,6 +1050,8 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
     audioRequest(source.request, false, timeout, [this, state, source](QByteArray bytes, QUrl, QString error, qint64) {
         if (state->generation != m_audioGeneration) { state->done({}, QStringLiteral("音源请求已取消。")); return; }
         if (!error.isEmpty()) {
+            if ((error == "HTTP 403" || error == "HTTP 451") && bytes.size() <= 64 * 1024)
+                state->copyrightRestricted |= CatalogCodec::reportsCopyrightDenial(bytes);
             // Missing song/quality responses are local to this request, not service outages.
             if (serviceFailure(error))
                 m_audioCooldown[source.id] = QDateTime::currentMSecsSinceEpoch() + 30000;
@@ -1057,6 +1110,7 @@ void MusicApi::tryAudioSource(const std::shared_ptr<AudioFetch> &state) {
         }
         const QUrl media = secureCdnUrl(QUrl(address, QUrl::StrictMode));
         if (address.size() > 8192 || !validHttpUrl(media)) {
+            state->copyrightRestricted |= CatalogCodec::reportsCopyrightDenial(bytes);
             state->errors.append(source.name + QStringLiteral("：该歌曲或音质未返回有效地址")); tryAudioSource(state); return;
         }
         const int remaining = int(24000 - state->elapsed.elapsed());

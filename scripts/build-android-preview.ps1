@@ -177,8 +177,8 @@ try {
     $runInfo['versionName'] = $deployment.'android-version-name'
     $runInfo['versionCode'] = [int]$deployment.'android-version-code'
     if (-not $ConfigureOnly) {
-        if ($Package -and $deployment.'android-version-name' -notmatch '^1\.7\.') { throw 'Android version metadata must be updated to 1.7 before packaging.' }
-        if ($Package -and $runInfo.versionCode -le 30) { throw 'Android versionCode must exceed the preceding 1.6 preview code 30.' }
+        if ($Package -and $deployment.'android-version-name' -notmatch '^1\.8\.') { throw 'Android version metadata must be updated to 1.8 before packaging.' }
+        if ($Package -and $runInfo.versionCode -le 33) { throw 'Android versionCode must exceed the preceding 1.7 preview code 33.' }
         $target = if ($Package) { 'apk' } else { 'FloatMusic' }
         Invoke-LoggedCommand -Name 'build' -Executable $cmake -Arguments @('--build', $buildDir, '--target', $target, '--parallel', "$Parallel")
         if ($Package) {

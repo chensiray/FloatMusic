@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
-project(FloatMusic VERSION 1.7.0 LANGUAGES CXX)
+project(FloatMusic VERSION 1.8.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Concurrent Network)
 qt_standard_project_setup(REQUIRES 6.8)
-set(CATALOG_SOURCES src/musicapi.cpp src/musicapi.h src/musiccatalog.cpp src/musicdetailsapi.cpp src/musicdetails.cpp src/musicdetails.h src/catalogcodec.cpp src/catalogcodec.h)
+set(CATALOG_SOURCES src/musicapi.cpp src/musicapi.h src/musiccatalog.cpp src/musicdetailsapi.cpp src/musicdetails.cpp src/musicdetails.h src/musicartists.cpp src/musicartists.h src/catalogcodec.cpp src/catalogcodec.h)
 set(PLAYER_SOURCES src/songartwork.cpp src/songartwork.h src/artworkpolicy.h src/offlinecache.cpp src/offlinecache.h src/playercache.cpp src/uilanguage.cpp src/uilanguage.h src/playerlibrary.cpp src/playerplayback.cpp src/playlistdocument.cpp src/playlistdocument.h src/playercontroller.cpp src/playercontroller.h src/audiofilepolicy.cpp src/audiofilepolicy.h src/playliststore.cpp src/playliststore.h ${CATALOG_SOURCES} src/lyrictimeline.cpp src/lyrictimeline.h src/playbackstore.cpp src/playbackstore.h src/globalshortcuts.cpp src/globalshortcuts.h src/sleeptimer.cpp src/sleeptimer.h)
 qt_add_executable(FloatMusic src/main.cpp src/singleinstance.cpp src/singleinstance.h ${PLAYER_SOURCES})
 qt_add_qml_module(FloatMusic URI FloatMusic QML_FILES qml/Main.qml qml/SongArtworkView.qml qml/MusicDetailsPage.qml qml/CachePage.qml qml/AndroidMain.qml qml/PrismaticSurface.qml qml/SmoothLyricList.qml qml/DesktopLyrics.qml qml/LyricProgressClock.qml qml/ProgressLyricText.qml)
@@ -31,8 +31,8 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
         QT_ANDROID_MIN_SDK_VERSION 28
         QT_ANDROID_TARGET_SDK_VERSION 36
-        QT_ANDROID_VERSION_CODE 33
-        QT_ANDROID_VERSION_NAME "1.7.0-preview.3"
+        QT_ANDROID_VERSION_CODE 36
+        QT_ANDROID_VERSION_NAME "1.8.0-preview.3"
         QT_ANDROID_APP_NAME "浮音 · 功能验证")
 endif()
 option(FLOATMUSIC_TESTS "Build desktop tests" OFF)
@@ -47,6 +47,11 @@ if(FLOATMUSIC_TESTS AND NOT ANDROID)
     target_include_directories(musicdetails_tests PRIVATE src)
     target_link_libraries(musicdetails_tests PRIVATE Qt6::Test Qt6::Network)
     add_test(NAME music_details COMMAND musicdetails_tests -o music-details-tests.txt,txt)
+    qt_add_executable(musicartists_tests tests/musicartists_tests.cpp ${CATALOG_SOURCES})
+    target_include_directories(musicartists_tests PRIVATE src)
+    target_link_libraries(musicartists_tests PRIVATE Qt6::Test Qt6::Network)
+    set_target_properties(musicartists_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    add_test(NAME music_artists COMMAND musicartists_tests -o music-artists-tests.txt,txt)
     qt_add_executable(musicdetails_ui_tests tests/musicdetails_ui_tests.cpp ${PLAYER_SOURCES})
     target_include_directories(musicdetails_ui_tests PRIVATE src)
     target_compile_definitions(musicdetails_ui_tests PRIVATE FLOATMUSIC_QML_FILE="${CMAKE_CURRENT_SOURCE_DIR}/qml/Main.qml")

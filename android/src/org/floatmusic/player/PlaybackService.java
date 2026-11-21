@@ -17,9 +17,14 @@ import android.view.*;
 import android.widget.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
+import org.json.JSONTokener;
 import java.io.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
+import java.util.Set;
 import java.util.concurrent.*;
 
 public class PlaybackService extends Service {
@@ -57,7 +62,6 @@ public class PlaybackService extends Service {
     private String loadedSource = "", loadedSourceId = "";
     private int loadedBitrate = 0, lastPosition = 0;
     private String title = "还没有导入音乐", error = "";
-    private File pendingFile;
     private OverlayWindow overlay;
     private FloatingLyricsWindow floatingLyrics;
     private JSONObject libraryUi=new JSONObject();
@@ -69,7 +73,9 @@ public class PlaybackService extends Service {
     private int pendingQueueIndex = -1;
     private String loadedQueueEntry = "", requestedQueueEntry = "", playbackMessage = "", notificationStamp = "";
     private boolean historyPending, loadedHistoryPending, notificationVolumePending;
-    private JSONObject importedTrack = null, loadedTrack = null, requestedTrack = null;
+    private JSONArray importedTracks = new JSONArray();
+    private String importMessage = "";
+    private JSONObject loadedTrack = null, requestedTrack = null;
     private JSONObject sourceQualities = TrackState.sourceQualities(null,"standard");
     private String quality = "standard", loadedQuality = "standard", loadedRequestedQuality = "standard", actualFormat = "等待音频信息", qualityNotice = "";
     private String currentTrack = "", apiBase = "";
@@ -101,9 +107,8 @@ public class PlaybackService extends Service {
             JSONObject saved = new JSONObject(getSharedPreferences("queue",MODE_PRIVATE).getString("data","{}"));
             queue = saved.optJSONArray("tracks"); if (queue == null) queue = new JSONArray();
             apiBase = saved.optString("api"); quality = saved.optString("quality","standard");
-            String imported=getSharedPreferences("queue",MODE_PRIVATE).getString("imported","");
-            if(!imported.isEmpty())importedTrack=new JSONObject(imported);
         } catch (Exception ignored) { queue = new JSONArray(); }
+        restorePendingImports();
         JSONObject savedQualities=null;
         try { savedQualities=new JSONObject(getSharedPreferences("audio",MODE_PRIVATE).getString("sourceQualities","")); }
         catch(Exception ignored){}
@@ -161,7 +166,19 @@ public class PlaybackService extends Service {
         PlayerBridge.serviceStarted();
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!destroyed && intent != null) dispatch(intent.getAction(), intent.getStringExtra("value"));
+        if (!destroyed && intent != null) {
+            if ("importFiles".equals(intent.getAction())) {
+                List<Uri> files = new ArrayList<>();
+                ClipData clip = intent.getClipData();
+                if (clip != null) for (int i = 0; i < clip.getItemCount(); i++) {
+                    Uri uri = clip.getItemAt(i).getUri();
+                    if (uri != null) files.add(uri);
+                }
+                Uri single = intent.getData();
+                if (single != null && !files.contains(single)) files.add(single);
+                importAudio(files);
+            } else dispatch(intent.getAction(), intent.getStringExtra("value"));
+        }
         return START_NOT_STICKY;
     }
     @Override public IBinder onBind(Intent intent) { return null; }
@@ -236,9 +253,19 @@ public class PlaybackService extends Service {
             case "theme": if(overlay!=null)overlay.configurationChanged(); break;
             case "previous": step(-1, false); break;
             case "next": step(1, false); break;
-            case "ackImport": importedTrack = null; getSharedPreferences("queue",MODE_PRIVATE).edit().remove("imported").apply(); break;
+            case "ackImport": acknowledgeImports(value); break;
             case "float": showOverlay(); break;
-            case "import": importAudio(Uri.parse(value)); break;
+            case "import":
+                try {
+                    if (!value.startsWith("[")) importAudio(Collections.singletonList(Uri.parse(value)));
+                    else {
+                        JSONArray urls = new JSONArray(value);
+                        List<Uri> files = new ArrayList<>();
+                        for (int i = 0; i < urls.length(); i++) files.add(Uri.parse(urls.getString(i)));
+                        importAudio(files);
+                    }
+                } catch (Exception ignored) { report("音乐导入失败。"); }
+                break;
             case "toggle": if (isPlaying()) pause(true); else play(); break;
             case "seek": try { seek(Long.parseLong(value)); } catch (Exception ignored) {} break;
             case "stop": saveSession(true);PlayerBridge.event("quit", ""); stopSelf(); break;
@@ -248,7 +275,12 @@ public class PlaybackService extends Service {
     private void cacheTrack(JSONObject track,boolean manual){if(track!=null)offlineCache.enqueue(track,TrackState.requestedQuality(track.optString("source"),sourceQualities),manual);}
     private void cacheCommand(String command,String value){if(offlineCache==null)return;try{
         if(command.equals("cacheTrack")){JSONObject p=new JSONObject(value);cacheTrack(p.optJSONObject("track"),p.optBoolean("manual",true));}
-        else if(command.equals("cacheTracks")){JSONArray a=new JSONArray(value);for(int i=0;i<a.length();i++)cacheTrack(a.optJSONObject(i),true);}
+        else if(command.equals("cacheTracks")){
+            JSONArray tracks=new JSONArray(value);
+            int queued=offlineCache.enqueueBatch(tracks,sourceQualities);
+            if(queued>0)Toast.makeText(this,UiStrings.text("已加入缓存任务："+queued+" 首"),Toast.LENGTH_SHORT).show();
+            else if(queued<0)Toast.makeText(this,UiStrings.text("缓存索引保存失败"),Toast.LENGTH_LONG).show();
+        }
         else if(command.equals("cacheSettings"))offlineCache.settings(new JSONObject(value));
         else if(command.equals("cacheLyrics")){offlineCache.lyrics(new JSONObject(value));if(cachedPlayback!=null){JSONObject latest=offlineCache.entry(cachedPlayback.optString("key"));if(latest!=null)cachedPlayback=latest;refreshOverlayData();}}
         else if(command.equals("cachePlay")){JSONObject e=offlineCache.entry(value);if(!busy&&e!=null&&"ready".equals(e.optString("status"))&&!e.optBoolean("deletePending")){selectedCacheKey=value;try{playNowTrack(e.optJSONObject("track"));}finally{selectedCacheKey="";}}}
@@ -418,52 +450,143 @@ public class PlaybackService extends Service {
             default: return false;
         }
     }
-    private void importAudio(Uri uri) { importAudio(uri, null); }
-    private void importAudio(Uri uri, DragAndDropPermissions grant) {
-        if (busy) { if (grant != null) grant.release(); report("正在导入，请稍候。"); return; }
-        if (!("content".equals(uri.getScheme()) || "file".equals(uri.getScheme()))) { if (grant != null) grant.release(); report("仅支持本地文件。"); return; }
-        pendingQueueSnapshot=null;pendingQueueIndex=-1;requestedQueueEntry="";historyPending=true;
-        busy = true; importingAudio = true; playIntent = false; error = ""; int ticket = ++generation; update();
-        importer.execute(() -> {
-            File copied = null;
-            try {
-                String name = getName(uri);
-                if (name == null) throw new IOException("无法获取文件名。");
-                int dot = name.lastIndexOf('.'); String ext = dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
-                if (!java.util.Arrays.asList("mp3","wav","flac","ogg","m4a","aac").contains(ext)) throw new IOException("仅支持 MP3、WAV、FLAC、OGG、M4A、AAC。");
-                if (declaredSize(uri) > MAX_BYTES) throw new IOException("文件超过 30 MiB（31,457,280 字节）。");
-                File folder = new File(getFilesDir(), "imports");
-                if (!folder.exists() && !folder.mkdirs()) throw new IOException("无法创建导入目录。");
-                copied = new File(folder, UUID.randomUUID().toString() + "." + ext);
-                try (InputStream input = getContentResolver().openInputStream(uri); OutputStream output = new FileOutputStream(copied)) {
-                    if (input == null) throw new IOException("无法读取文件。");
-                    byte[] header = new byte[16]; int headerCount = 0;
-                    while (headerCount < header.length) { int n = input.read(header, headerCount, header.length - headerCount); if (n < 0) break; headerCount += n; }
-                    if (!validHeader(ext, header, headerCount)) throw new IOException("文件内容与音频格式不匹配，或文件已损坏。");
-                    output.write(header, 0, headerCount); long total = headerCount;
-                    byte[] buffer = new byte[65536]; int n;
-                    while ((n = input.read(buffer)) != -1) {
-                        if (Thread.currentThread().isInterrupted()) throw new IOException("导入已取消。");
-                        total += n; if (total > MAX_BYTES) throw new IOException("读取时发现文件超过 30 MiB。");
-                        output.write(buffer, 0, n);
-                    }
-                }
-                File complete = copied;
-                handler.post(() -> {
-                    if (destroyed || ticket != generation) { complete.delete(); return; }
-                    try {
-                        JSONObject track = new JSONObject().put("id","local:" + complete.getName()).put("source","local")
-                            .put("name",name).put("artist","本地文件").put("path",complete.getAbsolutePath());
-                        prepare(complete.getAbsolutePath(), track, false, true);
-                    } catch (Exception e) { complete.delete(); loadFailed("导入失败。"); }
-                });
-            } catch (Exception e) {
-                if (copied != null) copied.delete();
-                handler.post(() -> { if (!destroyed && ticket == generation) loadFailed("导入失败：" + e.getMessage()); });
-            } finally {
-                if (grant != null) grant.release();
+    private void restorePendingImports() {
+        try {
+            String saved = getSharedPreferences("queue", MODE_PRIVATE).getString("imported", "");
+            if (saved.isEmpty()) return;
+            Object value = new JSONTokener(saved).nextValue();
+            if (value instanceof JSONArray) importedTracks = (JSONArray) value;
+            else if (value instanceof JSONObject) importedTracks.put(value);
+        } catch (Exception ignored) {}
+    }
+    private boolean savePendingImports(JSONArray tracks) {
+        SharedPreferences prefs = getSharedPreferences("queue", MODE_PRIVATE);
+        SharedPreferences.Editor edit = prefs.edit();
+        if (tracks.length() == 0) edit.remove("imported");
+        else edit.putString("imported", tracks.toString());
+        if (!edit.commit()) {
+            if (importedTracks.length() == 0) prefs.edit().remove("imported").apply();
+            else prefs.edit().putString("imported", importedTracks.toString()).apply();
+            return false;
+        }
+        importedTracks = tracks;
+        return true;
+    }
+    private void acknowledgeImports(String value) {
+        try {
+            JSONArray ids = new JSONArray(value);
+            Set<String> acknowledged = new HashSet<>();
+            for (int i = 0; i < ids.length(); i++) acknowledged.add(ids.getString(i));
+            JSONArray remaining = new JSONArray();
+            for (int i = 0; i < importedTracks.length(); i++) {
+                JSONObject track = importedTracks.optJSONObject(i);
+                if (track != null && !acknowledged.contains(track.optString("id"))) remaining.put(track);
             }
+            if (remaining.length() != importedTracks.length() && savePendingImports(remaining)) update();
+        } catch (Exception ignored) {}
+    }
+    private JSONObject copyAudio(Uri uri, String destination) throws Exception {
+        if (!("content".equals(uri.getScheme()) || "file".equals(uri.getScheme()))) throw new IOException("仅支持本地文件。");
+        String name = getName(uri);
+        if (name == null) throw new IOException("无法获取文件名。");
+        int dot = name.lastIndexOf('.');
+        String ext = dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
+        if (!java.util.Arrays.asList("mp3", "wav", "flac", "ogg", "m4a", "aac").contains(ext)) throw new IOException("仅支持 MP3、WAV、FLAC、OGG、M4A、AAC。");
+        if (declaredSize(uri) > MAX_BYTES) throw new IOException("文件超过 30 MiB（31,457,280 字节）。");
+        File folder = new File(getFilesDir(), "imports");
+        if (!folder.isDirectory() && !folder.mkdirs()) throw new IOException("无法创建导入目录。");
+        File copied = File.createTempFile("audio-", "." + ext, folder);
+        boolean keep = false;
+        try {
+            try (InputStream input = getContentResolver().openInputStream(uri); OutputStream output = new FileOutputStream(copied)) {
+                if (input == null) throw new IOException("无法读取文件。");
+                byte[] header = new byte[16];
+                int headerCount = 0;
+                while (headerCount < header.length) {
+                    int n = input.read(header, headerCount, header.length - headerCount);
+                    if (n < 0) break;
+                    headerCount += n;
+                }
+                if (!validHeader(ext, header, headerCount)) throw new IOException("文件内容与音频格式不匹配，或文件已损坏。");
+                output.write(header, 0, headerCount);
+                long total = headerCount;
+                byte[] buffer = new byte[65536];
+                int n;
+                while ((n = input.read(buffer)) != -1) {
+                    if (Thread.currentThread().isInterrupted()) throw new IOException("导入已取消。");
+                    total += n;
+                    if (total > MAX_BYTES) throw new IOException("读取时发现文件超过 30 MiB。");
+                    output.write(buffer, 0, n);
+                }
+            }
+            // Check every selection, including files that won't be loaded immediately.
+            MediaExtractor extractor = new MediaExtractor();
+            boolean hasAudio = false, hasVideo = false;
+            try {
+                extractor.setDataSource(copied.getAbsolutePath());
+                for (int i = 0; i < extractor.getTrackCount(); i++) {
+                    String mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME);
+                    hasAudio |= mime != null && mime.startsWith("audio/");
+                    hasVideo |= mime != null && mime.startsWith("video/");
+                }
+            } catch (IOException | RuntimeException e) {
+                throw new IOException("文件内容与音频格式不匹配，或文件已损坏。", e);
+            } finally { extractor.release(); }
+            if (!hasAudio || hasVideo) throw new IOException("请选择纯音频文件，不支持视频。");
+            JSONObject track = new JSONObject().put("id", "local:" + copied.getName()).put("source", "local")
+                .put("name", name).put("artist", "本地文件").put("path", copied.getAbsolutePath()).put("importPlaylist", destination);
+            keep = true;
+            return track;
+        } finally { if (!keep) copied.delete(); }
+    }
+    private void importAudio(List<Uri> files) {
+        if (files.isEmpty()) return;
+        if (busy) { report("正在导入，请稍候。"); return; }
+        pendingQueueSnapshot=null;pendingQueueIndex=-1;requestedQueueEntry="";historyPending=true;
+        busy = true; importingAudio = true; playIntent = false; error = ""; importMessage = "";
+        String destination = PlayerBridge.uiData().optString("activePlaylist");
+        int ticket = ++generation; update();
+        importer.execute(() -> {
+            List<JSONObject> copied = new ArrayList<>();
+            Set<Uri> seen = new HashSet<>();
+            String firstError = "";
+            for (Uri uri : files) {
+                if (destroyed || ticket != generation || Thread.currentThread().isInterrupted()) break;
+                if (!seen.add(uri.normalizeScheme())) continue;
+                try { copied.add(copyAudio(uri, destination)); }
+                catch (Exception e) {
+                    if (firstError.isEmpty() && e.getMessage() != null) firstError = e.getMessage();
+                }
+            }
+            final String failure = firstError;
+            handler.post(() -> finishImport(ticket, files.size(), copied, failure));
         });
+    }
+    private void finishImport(int ticket, int total, List<JSONObject> copied, String failure) {
+        if (destroyed || ticket != generation) {
+            for (JSONObject track : copied) new File(track.optString("path")).delete();
+            return;
+        }
+        if (!copied.isEmpty()) {
+            JSONArray pending = new JSONArray();
+            for (int i = 0; i < importedTracks.length(); i++) pending.put(importedTracks.optJSONObject(i));
+            for (JSONObject track : copied) pending.put(track);
+            if (!savePendingImports(pending)) {
+                for (JSONObject track : copied) new File(track.optString("path")).delete();
+                copied.clear();
+                failure = "音乐导入失败。";
+            }
+        }
+        importMessage = "已复制 " + copied.size() + " 首到浮音，跳过 " + (total - copied.size()) + " 个文件。";
+        Toast.makeText(this, UiStrings.text(importMessage), Toast.LENGTH_LONG).show();
+        if (copied.isEmpty()) {
+            loadFailed(failure.isEmpty() ? "音乐导入失败。" : "导入失败：" + failure);
+            return;
+        }
+        for (JSONObject track : copied) queue.put(TrackState.sessionTrack(track));
+        JSONObject first = TrackState.sessionTrack(copied.get(0));
+        update();
+        prepare(first.optString("path"), first, false, true);
     }
     private void playTrack(String id) {
         for(int i=0;i<queue.length();i++) {
@@ -568,15 +691,19 @@ public class PlaybackService extends Service {
         final java.util.Set<String> excluded=new java.util.HashSet<>(attemptedSources);
         handler.postDelayed(() -> {if(!destroyed && ticket==generation && busy && pending==null){generation++;audioResolver.cancel();loadFailed("获取音频地址超时，请检查网络后重试。");}},25000);
         importer.execute(() -> {
-            AudioResolver.Result result=null; String failure="";
+            AudioResolver.Result result=null; String failure="";boolean copyrightRestricted=false;
             try {
                 result=audioResolver.resolve(platform,track.optString("songId"),requestedQuality,endpoint,excluded,()->!destroyed&&ticket==generation,
                     TrackState.durationSeconds(track.opt("duration")));
-            } catch(IOException e){failure=e.getMessage();}
+            } catch(IOException e){failure=e.getMessage();copyrightRestricted=e instanceof AudioResolver.CopyrightRestriction;}
               catch(Exception e){failure="获取音频地址失败，请检查网络后重试。";}
             final AudioResolver.Result resolved=result; final String message=failure;
+            final boolean restricted=copyrightRestricted;
             handler.post(() -> {if(destroyed||ticket!=generation)return;
-                if(!message.isEmpty()){loadFailed(message);}
+                if(!message.isEmpty()){
+                    if(restricted)PlayerBridge.event("playbackRestricted",track.optString("id"));
+                    loadFailed(message);
+                }
                 else if(resolved!=null){attemptedSources.add(resolved.sourceId);prepare(resolved.address,track,autoplay,false,preserve,requestedQuality,resolved,resumePosition);}
                 else loadFailed("获取音频地址失败，请重试。");
             });
@@ -604,7 +731,7 @@ public class PlaybackService extends Service {
         try {
             final int ticket=generation;
             final JSONObject cached=importing?null:pendingCachedPlayback;
-            pending = new MediaPlayer(); pendingFile=importing?new File(source):null;
+            pending = new MediaPlayer();
             pending.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build());
             pending.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
             pending.setDataSource(source);
@@ -633,7 +760,7 @@ public class PlaybackService extends Service {
                 final int resume=TrackState.replacementPosition(preserve,resumePosition,position());
                 seeks.clear();
                 if (player != null) player.release();
-                if(!resumeOnFocus)abandonFocus(); player = mp; pending = null; pendingFile = null;
+                if(!resumeOnFocus)abandonFocus(); player = mp; pending = null;
                 cachedPlayback=cached;pendingCachedPlayback=null;automaticCacheStarted=false;
                 if(offlineCache!=null){offlineCache.playingTrack(track);offlineCache.pin(cached==null?"":cached.optString("key"),false);}
                 currentTrack=track.optString("id"); loadedTrack=track; requestedTrack=track; loadedRequestedQuality=requestedQuality;
@@ -646,9 +773,9 @@ public class PlaybackService extends Service {
                 lyricOffset=getSharedPreferences("lyricOffsets",0).getInt(currentTrack,0);
                 actualFormat=verifiedAudioDescription(mp,resolved);
                 if(cached!=null){loadedQuality=cached.optString("quality","standard");loadedBitrate=cached.optInt("bitrate");loadedSource="本地缓存";qualityNotice="已使用本地缓存";}
-                if(importing) { importedTrack=track; queue.put(track); getSharedPreferences("queue",MODE_PRIVATE).edit().putString("imported",track.toString()).apply(); }
                 importingAudio=false;
                 title = track.optString("name"); ready = true; busy = resume>0; ended = false; error = ""; applyVolume();
+                if(resolved!=null)PlayerBridge.event("playbackVerified",currentTrack);
                 refreshOverlayData();
                 player.setOnCompletionListener(p -> {
                     if(p!=player||destroyed)return;
@@ -709,7 +836,7 @@ public class PlaybackService extends Service {
         return specs.isEmpty()?"规格待系统解码确认":String.join(" · ",specs);
     }
     private void invalidatePendingCache(){if(offlineCache!=null&&pendingCachedPlayback!=null)offlineCache.action("invalidate",pendingCachedPlayback.optString("key"));}
-    private void cancelPending() { if (pending != null) { pending.release(); pending = null; } if (pendingFile != null) { pendingFile.delete(); pendingFile = null; } pendingCachedPlayback=null;if(offlineCache!=null)offlineCache.pin("",true);busy = false; importingAudio=false; }
+    private void cancelPending() { if (pending != null) { pending.release(); pending = null; } pendingCachedPlayback=null;if(offlineCache!=null)offlineCache.pin("",true);busy = false; importingAudio=false; }
     private Notification notification() {
         JSONObject state=playbackSnapshot();
         notifications.updateSession(state);return notifications.build(state);
@@ -726,6 +853,19 @@ public class PlaybackService extends Service {
         if (!selectedOutput.isEmpty() && found == null) selectedOutput = "";
         if (player != null && !player.setPreferredDevice(found)) report("系统未接受该输出，请选择其他设备或系统默认。");
         update();
+    }
+    java.util.Set<String> usableOfflineTrackIds() {
+        return offlineCache==null?java.util.Collections.emptySet():offlineCache.usableTrackIds();
+    }
+    static boolean hasPlayableLocalFile(String path) {
+        File file=new File(path);
+        int dot=file.getName().lastIndexOf('.');
+        if(dot<0||!file.isFile())return false;
+        String extension=file.getName().substring(dot+1).toLowerCase(Locale.ROOT);
+        byte[] header=new byte[16];
+        try(InputStream input=new FileInputStream(file)){
+            return validHeader(extension,header,input.read(header));
+        }catch(IOException|SecurityException error){return false;}
     }
     JSONObject playbackSnapshot() {
         boolean playing = isPlaying(); int pos = position(), length = duration();
@@ -751,7 +891,9 @@ public class PlaybackService extends Service {
                 ?restored?sourceName+" · 偏好："+AudioResolver.qualityName(TrackState.requestedQuality(platform,sourceQualities))+"\n播放后显示实际音质。"
                 :(loadedSource.isEmpty()?sourceName:loadedSource)+" · 请求："+AudioResolver.qualityName(loadedRequestedQuality)+"\n实际："+actualFormat
                     +(qualityNotice.isEmpty()?"":"\n"+qualityNotice)
-                :"音质选项用于在线歌曲；本地文件保持原格式。"); if(importedTrack!=null)o.put("importedTrack",importedTrack);
+                :"音质选项用于在线歌曲；本地文件保持原格式。");
+            if (importedTracks.length() > 0) o.put("importedTracks", importedTracks);
+            o.put("importMessage", importMessage);
             org.json.JSONArray outputs = new org.json.JSONArray();
             outputs.put(new JSONObject().put("id", "").put("name", "跟随系统默认"));
             if(audio!=null)for (AudioDeviceInfo device : audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS))

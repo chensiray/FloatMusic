@@ -7,8 +7,12 @@
 #include <QMediaDevices>
 #include <QVariantList>
 #include <QRect>
+#include <QElapsedTimer>
+#include <atomic>
+#include <memory>
 #include "playliststore.h"
 #include "musicapi.h"
+#include "musicartists.h"
 #include "musicdetails.h"
 #include "songartwork.h"
 #include "offlinecache.h"
@@ -20,6 +24,7 @@
 class PlayerController : public QObject {
     Q_OBJECT
     Q_PROPERTY(MusicDetails* musicDetails READ musicDetails CONSTANT)
+    Q_PROPERTY(MusicArtists* musicArtists READ musicArtists CONSTANT)
     Q_PROPERTY(SongArtwork* artwork READ artwork CONSTANT)
     Q_PROPERTY(QVariantList cacheEntries READ cacheEntries NOTIFY cacheChanged)
     Q_PROPERTY(QVariantMap cacheSummary READ cacheSummary NOTIFY cacheChanged)
@@ -32,6 +37,7 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool playing READ playing NOTIFY changed)
     Q_PROPERTY(bool ready READ ready NOTIFY changed)
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(QString importMessage READ importMessage NOTIFY changed)
     Q_PROPERTY(bool seekable READ seekable NOTIFY changed)
     Q_PROPERTY(bool android READ android CONSTANT)
     Q_PROPERTY(bool overlayAllowed READ overlayAllowed NOTIFY changed)
@@ -54,6 +60,8 @@ class PlayerController : public QObject {
     Q_PROPERTY(QString libraryMessage READ libraryMessage NOTIFY libraryMessageChanged)
     Q_PROPERTY(QString currentTrack READ currentTrack NOTIFY changed)
     Q_PROPERTY(QVariantList searchResults READ searchResults NOTIFY searchChanged)
+    Q_PROPERTY(QStringList unavailableTrackIds READ unavailableTrackIds NOTIFY trackAvailabilityChanged)
+    Q_PROPERTY(QStringList verifiedOnlineTrackIds READ verifiedOnlineTrackIds NOTIFY trackAvailabilityChanged)
     Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
     Q_PROPERTY(QString searchMessage READ searchMessage NOTIFY searchChanged)
     Q_PROPERTY(QStringList searchSources READ searchSources WRITE setSearchSources NOTIFY searchSourcesChanged)
@@ -90,11 +98,14 @@ class PlayerController : public QObject {
 public:
     SongArtwork *artwork() {return &m_artwork;}
     MusicDetails *musicDetails() { return &m_musicDetails; }
+    MusicArtists *musicArtists() { return &m_musicArtists; }
     Q_INVOKABLE void openCurrentMusicDetails() { m_musicDetails.action("open", {{"track",m_loadedTrack}}); }
     explicit PlayerController(QObject *parent = nullptr);
     explicit PlayerController(const MusicApi::Endpoints &endpoints, QObject *parent = nullptr);
     ~PlayerController() override;
     QVariantList cacheEntries() const;
+    Q_INVOKABLE QStringList offlineTrackIds() const;
+    Q_INVOKABLE QStringList cachedOnlineTrackIds() const;
     QVariantMap cacheSummary() const;
     QVariantMap cacheSettings() const;
     Q_INVOKABLE void cacheTrack(const QVariantMap &track, bool manual = true);
@@ -111,6 +122,7 @@ public:
     QString title() const { return m_title; }
     QString status() const { return m_status; }
     QString error() const { return m_error; }
+    QString importMessage() const { return m_importMessage; }
     qint64 position() const { return m_position; }
     qint64 duration() const { return m_duration; }
     bool playing() const { return m_playing; }
@@ -139,6 +151,8 @@ public:
     Q_INVOKABLE void libraryAction(const QString &action, const QVariantMap &args);
     QString currentTrack() const { return m_currentTrack; }
     QVariantList searchResults() const { return m_searchResults; }
+    QStringList unavailableTrackIds() const { return m_unavailableTrackIds; }
+    QStringList verifiedOnlineTrackIds() const { return m_verifiedOnlineTrackIds; }
     bool searching() const { return m_searching; }
     QString searchMessage() const { return m_searchMessage; }
     QStringList searchSources() const { return m_searchSources; }
@@ -214,6 +228,7 @@ public:
     Q_INVOKABLE void selectOutput(const QString &id);
     Q_INVOKABLE void refreshOutputs();
     Q_INVOKABLE void importFile(const QUrl &url);
+    Q_INVOKABLE void importFiles(const QList<QUrl> &urls);
     Q_INVOKABLE void chooseAndroidFile();
     Q_INVOKABLE void toggle();
     Q_INVOKABLE void seek(qint64 milliseconds);
@@ -234,6 +249,7 @@ signals:
     void onlinePlaylistChanged();
     void libraryMessageChanged();
     void searchChanged();
+    void trackAvailabilityChanged();
     void searchSourcesChanged();
     void searchSettingsChanged();
     void sourceQualitiesChanged();
@@ -249,6 +265,7 @@ signals:
     void sleepChanged();
     void toggleWindowRequested();
 private:
+    void setTrackUnavailable(const QString &id, bool unavailable);
     void initializePlaybackTools();
     void setPlaybackMessage(const QString &message);
     void playNowTrack(const QVariantMap &track);
@@ -269,6 +286,7 @@ private:
     QVariantList m_lyricLines;
     int m_currentLyricIndex = -1, m_lyricOffset = 0;
     bool m_sessionDeferred = false, m_shuttingDown = false;
+    std::shared_ptr<std::atomic_bool> m_importCancelled;
     QTimer m_sessionTimer;
     void step(int delta, bool automatic = false);
     void syncQueue();
@@ -296,6 +314,7 @@ private:
     QByteArray m_overlayUi;
     QVariantMap m_overlayUiState;
     QByteArray m_androidCacheLyricStamp;
+    QElapsedTimer m_pendingImportAttempt;
     QString m_overlayMessage;
     QVariantList m_androidQueueEntries, m_androidHistoryEntries;
     QString m_androidQueueEntry, m_androidSleepMode = "off", m_androidSleepText = QStringLiteral("未开启");
@@ -304,6 +323,7 @@ private:
     PlaylistStore m_library;
     MusicApi m_api;
     MusicDetails m_musicDetails;
+    MusicArtists m_musicArtists;
     SongArtwork m_artwork;
     OfflineCache m_offlineCache;
     MusicApi m_cacheLyricsApi;
@@ -317,6 +337,8 @@ private:
     UiLanguage m_uiLanguage;
     SleepTimer m_sleepTimer;
     QVariantList m_searchResults;
+    QStringList m_unavailableTrackIds;
+    QStringList m_verifiedOnlineTrackIds;
     QStringList m_searchSources;
     int m_searchResultLimit = 30;
     QString m_currentTrack, m_searchMessage;
@@ -350,7 +372,7 @@ private:
     QTimer m_timer;
     QString m_title = QStringLiteral("还没有选择音乐");
     QString m_status = QStringLiteral("导入本地音频，或按歌名搜索试听");
-    QString m_error;
+    QString m_error, m_importMessage;
     QString m_cachedFile;
     qint64 m_position = 0, m_duration = 0;
     bool m_playing = false, m_ready = false, m_busy = false, m_seekable = false, m_overlayAllowed = false;

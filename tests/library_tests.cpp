@@ -443,8 +443,10 @@ private slots:
         QSignalSpy results(&api, &MusicApi::results);
         api.search(QStringLiteral("夜曲 & +")); QTRY_COMPARE(results.size(), 1);
         QCOMPARE(results.takeFirst()[0].toList().first().toMap()["name"].toString(), QStringLiteral("夜曲 & +"));
-        QCOMPARE(mock.requests.last().path(), QString("/api/search/get"));
-        QVERIFY(mock.lastTarget.contains("%2B"));
+        QCOMPARE(mock.requests.size(), 2);
+        QCOMPARE(mock.requests.first().path(), QString("/api/search/get"));
+        QVERIFY(mock.requests.first().toEncoded().contains("%2B"));
+        QCOMPARE(mock.requests.last().path(), QString("/api/v3/song/detail"));
         for (const QString level : {"standard","higher","exhigh","lossless","hires"}) {
             bool done=false;
             api.resolve("101",level,[&](QUrl url,QString error) {

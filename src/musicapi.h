@@ -37,6 +37,7 @@ public:
         int sampleRate = 0, bitsPerSample = 0;
         QString notice;
         double expectedDurationSeconds = 0;
+        bool copyrightRestricted = false;
     };
     static Endpoints builtinEndpoints();
     explicit MusicApi(QObject *parent = nullptr);
@@ -49,6 +50,18 @@ public:
     void searchPlaylists(const QString &query);
     void searchPlaylists(const QString &query, const QStringList &sources);
     void searchPlaylists(const QString &query, const QStringList &sources, int limit);
+    QList<QPointer<QNetworkReply>> searchArtists(const QString &query, const QStringList &sources, int limit,
+                                                std::function<void(QVariantList, QString)> done);
+    QNetworkReply *fetchArtistProfile(const QString &source, const QString &id,
+                                     std::function<void(QString, QString)> done);
+    struct ArtistWorksPage {
+        QVariantList tracks;
+        qint64 nextCursor = 0;
+        bool hasMore = false;
+        QByteArray signature;
+    };
+    QNetworkReply *fetchArtistWorks(const QString &source, const QString &id, qint64 cursor,
+                                   std::function<void(ArtistWorksPage, QString)> done);
     void fetchRankings(std::function<void(QVariantList, QString)> done);
     void fetchSongDetails(const QVariantMap &track, std::function<void(QVariantMap, QString)> done);
     void fetchComments(const QVariantMap &track, const QString &order, int page,
@@ -81,6 +94,7 @@ private:
     struct TencentSongSearch;
     struct TencentPlaylistSearch;
     void fetchTencentSongSearchPage(const std::shared_ptr<TencentSongSearch> &state);
+    void checkNeteaseSearchRights(QVariantList tracks, int generation, std::function<void(QVariantList)> done);
     void fetchTencentPlaylistSearchPage(const std::shared_ptr<TencentPlaylistSearch> &state);
     void fetchCatalogPage(const std::shared_ptr<CatalogFetch> &state);
     void fetchCatalogPlaylist(const QString &source, const QString &kind, const QString &id,
@@ -97,6 +111,8 @@ private:
                            std::function<void(QByteArray, QString)> done);
     QNetworkReply *qqRequest(const QString &module, const QString &method, const QJsonObject &params,
                              std::function<void(QByteArray, QString)> done);
+    QNetworkReply *searchArtistSource(const QString &source, const QString &query, int limit, int page,
+                                      std::function<void(QVariantList, QString)> done);
     static QJsonObject parseJson(const QByteArray &bytes, QString &error);
     QUrl endpoint(const QString &path, const QList<QPair<QString, QString>> &query) const;
     Endpoints m_endpoints;

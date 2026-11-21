@@ -11,11 +11,9 @@ int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
     app.setOrganizationName("FloatMusic"); app.setApplicationName("FloatMusic");
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/floatmusic-app.png")));
+    app.setApplicationVersion("1.8.0-preview.3");
 #ifdef Q_OS_ANDROID
-    app.setApplicationVersion("1.7.0-preview.3");
     app.setQuitOnLastWindowClosed(false);
-#else
-    app.setApplicationVersion("1.7.0-preview.3");
 #endif
 #ifndef Q_OS_ANDROID
     SingleInstance instance(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));
